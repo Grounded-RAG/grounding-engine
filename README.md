@@ -97,7 +97,7 @@ The API should start on `http://localhost:8000`.
 From the repository root:
 
 ```bash
-python -m pytest backend/tests/unit/test_config.py backend/tests/integration/test_health.py
+python -m pytest backend/tests/unit/test_config.py backend/tests/unit/test_database.py backend/tests/unit/test_alembic_config.py backend/tests/unit/test_models.py backend/tests/unit/test_security.py backend/tests/unit/test_storage.py backend/tests/integration/test_health.py backend/tests/integration/test_auth.py backend/tests/integration/test_telemetry.py
 ```
 
 ### Verify the API manually
@@ -149,6 +149,33 @@ Run the compile check:
 ```bash
 python -m compileall backend/app backend/tests
 ```
+
+Run the migration smoke check:
+
+```bash
+cd backend
+python -m alembic upgrade head
+python -m alembic current
+python -m alembic downgrade base
+python -m alembic upgrade head
+python -m alembic heads
+```
+
+Run the full foundation gate used by CI:
+
+```bash
+python -m compileall backend/app backend/tests
+cd backend
+python -m alembic upgrade head
+python -m alembic current
+python -m alembic downgrade base
+python -m alembic upgrade head
+python -m alembic heads
+cd ..
+python -m pytest backend/tests/unit/test_config.py backend/tests/unit/test_database.py backend/tests/unit/test_alembic_config.py backend/tests/unit/test_models.py backend/tests/unit/test_security.py backend/tests/unit/test_storage.py backend/tests/integration/test_health.py backend/tests/integration/test_auth.py backend/tests/integration/test_telemetry.py
+```
+
+If `make` is available on your machine, the same workflow is also exposed through `make compile`, `make migrate-check`, `make test-foundation`, and `make ci`.
 
 ## Local Service Ports
 
