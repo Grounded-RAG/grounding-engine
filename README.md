@@ -153,7 +153,7 @@ python -m compileall backend/app backend/tests
 ## Local Service Ports
 
 - Backend API: `8000`
-- PostgreSQL: `5432`
+- PostgreSQL: `5433`
 - Redis: `6379`
 - Qdrant: `6333`
 - MinIO API: `9000`

@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     app_env: AppEnv = "development"
     log_level: LogLevel = "INFO"
     api_base_url: AnyHttpUrl = "http://localhost:8000"
+    database_url: str = "postgresql+asyncpg://grounded:grounded@localhost:5433/grounded"
+    alembic_database_url: str = (
+        "postgresql+psycopg://grounded:grounded@localhost:5433/grounded"
+    )
 
     model_config = SettingsConfigDict(
         env_file=(REPO_ROOT / ".env", BACKEND_ROOT / ".env"),
@@ -39,6 +43,26 @@ class Settings(BaseSettings):
 
         if isinstance(value, str):
             return value.upper()
+        return value
+
+    @field_validator("database_url")
+    @classmethod
+    def validate_database_url(cls, value: str) -> str:
+        """Ensure the runtime database URL uses the async driver."""
+
+        if not value.startswith("postgresql+asyncpg://"):
+            raise ValueError("DATABASE_URL must use the postgresql+asyncpg driver.")
+        return value
+
+    @field_validator("alembic_database_url")
+    @classmethod
+    def validate_alembic_database_url(cls, value: str) -> str:
+        """Ensure the Alembic URL uses the sync psycopg driver."""
+
+        if not value.startswith("postgresql+psycopg://"):
+            raise ValueError(
+                "ALEMBIC_DATABASE_URL must use the postgresql+psycopg driver."
+            )
         return value
 
 
