@@ -14,7 +14,7 @@ class HealthCheckResponse(BaseModel):
 class ReadinessResponse(BaseModel):
     """Readiness response payload."""
 
-    status: Literal["ready"]
+    status: Literal["ready", "not_ready"]
     service: str
     environment: str
     version: str

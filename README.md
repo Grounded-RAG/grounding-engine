@@ -114,7 +114,7 @@ Expected behavior:
 
 - `/` returns service metadata
 - `/health/live` returns `{"status":"alive"}`
-- `/health/ready` returns readiness information including config status
+- `/health/ready` returns readiness information for config, database, and storage
 
 ## Useful Commands
 
