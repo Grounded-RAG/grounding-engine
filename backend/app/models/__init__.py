@@ -1,5 +1,29 @@
 """Domain models package."""
 
 from app.core.database import Base
+from app.models.api_key import APIKey
+from app.models.document import Document
+from app.models.enums import (
+    DocumentStatus,
+    IngestionJobStatus,
+    PlanTier,
+    SensitivityLevel,
+)
+from app.models.ingestion_job import IngestionJob
+from app.models.namespace import Namespace
+from app.models.query_trace import QueryTrace
+from app.models.tenant import Tenant
 
-__all__ = ["Base"]
+__all__ = [
+    "APIKey",
+    "Base",
+    "Document",
+    "DocumentStatus",
+    "IngestionJob",
+    "IngestionJobStatus",
+    "Namespace",
+    "PlanTier",
+    "QueryTrace",
+    "SensitivityLevel",
+    "Tenant",
+]
