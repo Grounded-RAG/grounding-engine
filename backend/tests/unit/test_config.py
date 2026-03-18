@@ -19,3 +19,22 @@ def test_settings_reject_invalid_environment() -> None:
 
     with pytest.raises(ValidationError):
         Settings(app_env="local")
+
+
+def test_settings_validate_database_drivers() -> None:
+    """Database settings should enforce the expected drivers."""
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://grounded:grounded@localhost:5433/grounded",
+        alembic_database_url="postgresql+psycopg://grounded:grounded@localhost:5433/grounded",
+    )
+
+    assert settings.database_url.startswith("postgresql+asyncpg://")
+    assert settings.alembic_database_url.startswith("postgresql+psycopg://")
+
+
+def test_settings_reject_invalid_database_driver() -> None:
+    """Database URL should reject unsupported drivers."""
+
+    with pytest.raises(ValidationError):
+        Settings(database_url="sqlite:///tmp.db")
