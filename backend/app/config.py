@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     alembic_database_url: str = (
         "postgresql+psycopg://grounded:grounded@localhost:5433/grounded"
     )
+    api_key_salt: str = "replace-in-local-env"
 
     model_config = SettingsConfigDict(
         env_file=(REPO_ROOT / ".env", BACKEND_ROOT / ".env"),
@@ -63,6 +64,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ALEMBIC_DATABASE_URL must use the postgresql+psycopg driver."
             )
+        return value
+
+    @field_validator("api_key_salt")
+    @classmethod
+    def validate_api_key_salt(cls, value: str) -> str:
+        """Ensure the API key salt is not empty."""
+
+        if not value.strip():
+            raise ValueError("API_KEY_SALT must not be empty.")
         return value
 
 
