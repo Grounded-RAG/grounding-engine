@@ -38,3 +38,10 @@ def test_settings_reject_invalid_database_driver() -> None:
 
     with pytest.raises(ValidationError):
         Settings(database_url="sqlite:///tmp.db")
+
+
+def test_settings_require_non_empty_api_key_salt() -> None:
+    """Security settings should reject an empty API key salt."""
+
+    with pytest.raises(ValidationError):
+        Settings(api_key_salt="   ")
