@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 from app.config import get_settings
 from app.core.database import get_db_session
 from app.core.security import hash_api_key
+from app.core.telemetry import bind_tenant_context
 from app.models import APIKey, PlanTier
 
 
@@ -60,6 +61,7 @@ def get_raw_api_key(
 
 
 async def get_tenant_context(
+    request: Request,
     raw_api_key: str = Depends(get_raw_api_key),
     session: AsyncSession = Depends(get_db_session),
 ) -> TenantContext:
@@ -84,6 +86,12 @@ async def get_tenant_context(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="API key tenant binding is invalid.",
         )
+
+    bind_tenant_context(
+        tenant_id=str(api_key_record.tenant.tenant_id),
+        api_key_id=str(api_key_record.key_id),
+    )
+    request.state.tenant_id = str(api_key_record.tenant.tenant_id)
 
     return TenantContext(
         tenant_id=api_key_record.tenant.tenant_id,

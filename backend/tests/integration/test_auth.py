@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.core.database import dispose_database
 from app.core.security import hash_api_key
+from app.core.telemetry import REQUEST_ID_HEADER
 from app.main import create_app
 from app.models import PlanTier
 
@@ -202,3 +203,21 @@ def test_auth_smoke_returns_resolved_tenant_context(
         "api_key_id": str(seeded_auth_data.valid_key_id),
         "api_key_label": "integration-valid",
     }
+
+
+def test_auth_smoke_preserves_request_id_header(
+    auth_client: TestClient,
+    seeded_auth_data: SeededAuthData,
+) -> None:
+    """Authenticated routes should preserve the request ID header."""
+
+    response = auth_client.get(
+        "/v1/auth/smoke",
+        headers={
+            "X-API-Key": seeded_auth_data.valid_raw_api_key,
+            REQUEST_ID_HEADER: "req-auth-123",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers[REQUEST_ID_HEADER] == "req-auth-123"
