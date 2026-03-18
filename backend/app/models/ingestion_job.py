@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
-    Enum,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -23,7 +22,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.enums import IngestionJobStatus
+from app.models.enums import IngestionJobStatus, sqlalchemy_enum
 
 if TYPE_CHECKING:
     from app.models.document import Document
@@ -62,7 +61,7 @@ class IngestionJob(Base):
         nullable=False,
     )
     status: Mapped[IngestionJobStatus] = mapped_column(
-        Enum(IngestionJobStatus, name="ingestion_job_status_enum"),
+        sqlalchemy_enum(IngestionJobStatus, name="ingestion_job_status_enum"),
         nullable=False,
     )
     attempt_count: Mapped[int] = mapped_column(

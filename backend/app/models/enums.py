@@ -2,10 +2,33 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import Enum as PythonEnum
+from typing import TypeVar
+
+from sqlalchemy import Enum as SQLAlchemyEnum
 
 
-class PlanTier(str, Enum):
+EnumType = TypeVar("EnumType", bound=PythonEnum)
+
+
+def enum_values(enum_cls: type[EnumType]) -> list[str]:
+    """Return stable DB values for a Python enum."""
+
+    return [member.value for member in enum_cls]
+
+
+def sqlalchemy_enum(enum_cls: type[EnumType], *, name: str) -> SQLAlchemyEnum:
+    """Build a SQLAlchemy enum that persists enum values, not member names."""
+
+    return SQLAlchemyEnum(
+        enum_cls,
+        name=name,
+        values_callable=enum_values,
+        validate_strings=True,
+    )
+
+
+class PlanTier(str, PythonEnum):
     """Supported tenant and query tiers."""
 
     STANDARD = "standard"
@@ -13,7 +36,7 @@ class PlanTier(str, Enum):
     CRITICAL = "critical"
 
 
-class SensitivityLevel(str, Enum):
+class SensitivityLevel(str, PythonEnum):
     """Supported namespace sensitivity levels."""
 
     PUBLIC = "public"
@@ -22,7 +45,7 @@ class SensitivityLevel(str, Enum):
     RESTRICTED = "restricted"
 
 
-class DocumentStatus(str, Enum):
+class DocumentStatus(str, PythonEnum):
     """Document lifecycle states."""
 
     UPLOADED = "uploaded"
@@ -32,7 +55,7 @@ class DocumentStatus(str, Enum):
     ARCHIVED = "archived"
 
 
-class IngestionJobStatus(str, Enum):
+class IngestionJobStatus(str, PythonEnum):
     """Ingestion job lifecycle states."""
 
     QUEUED = "queued"

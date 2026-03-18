@@ -10,7 +10,6 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     DateTime,
-    Enum,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -23,7 +22,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.enums import DocumentStatus
+from app.models.enums import DocumentStatus, sqlalchemy_enum
 
 if TYPE_CHECKING:
     from app.models.ingestion_job import IngestionJob
@@ -76,7 +75,7 @@ class Document(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[str | None] = mapped_column(String(100))
     status: Mapped[DocumentStatus] = mapped_column(
-        Enum(DocumentStatus, name="document_status_enum"),
+        sqlalchemy_enum(DocumentStatus, name="document_status_enum"),
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(

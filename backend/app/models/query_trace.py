@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
-    Enum,
     Float,
     ForeignKey,
     Index,
@@ -23,7 +22,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.enums import PlanTier
+from app.models.enums import PlanTier, sqlalchemy_enum
 
 if TYPE_CHECKING:
     from app.models.tenant import Tenant
@@ -58,7 +57,7 @@ class QueryTrace(Base):
         nullable=False,
     )
     tier: Mapped[PlanTier] = mapped_column(
-        Enum(PlanTier, name="plan_tier_enum"),
+        sqlalchemy_enum(PlanTier, name="plan_tier_enum"),
         nullable=False,
     )
     query_redacted: Mapped[str] = mapped_column(Text, nullable=False)

@@ -6,12 +6,12 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, Integer, String, func, text
+from sqlalchemy import CheckConstraint, DateTime, Integer, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.enums import PlanTier
+from app.models.enums import PlanTier, sqlalchemy_enum
 
 if TYPE_CHECKING:
     from app.models.api_key import APIKey
@@ -36,7 +36,7 @@ class Tenant(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     plan_tier: Mapped[PlanTier] = mapped_column(
-        Enum(PlanTier, name="plan_tier_enum"),
+        sqlalchemy_enum(PlanTier, name="plan_tier_enum"),
         nullable=False,
     )
     default_policy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)

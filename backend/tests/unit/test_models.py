@@ -101,3 +101,33 @@ def test_api_key_relationship_points_to_tenant() -> None:
     """API keys should resolve back to their owning tenant."""
 
     assert APIKey.__mapper__.relationships["tenant"].mapper.class_ is Tenant
+
+
+def test_enums_persist_design_doc_values() -> None:
+    """Persisted enum values should match the lowercase design-doc contract."""
+
+    assert Tenant.__table__.c.plan_tier.type.enums == [
+        "standard",
+        "enterprise",
+        "critical",
+    ]
+    assert Namespace.__table__.c.sensitivity_level.type.enums == [
+        "public",
+        "internal",
+        "confidential",
+        "restricted",
+    ]
+    assert Document.__table__.c.status.type.enums == [
+        "uploaded",
+        "processing",
+        "indexed",
+        "failed",
+        "archived",
+    ]
+    assert IngestionJob.__table__.c.status.type.enums == [
+        "queued",
+        "running",
+        "indexed",
+        "failed",
+        "dead_letter",
+    ]

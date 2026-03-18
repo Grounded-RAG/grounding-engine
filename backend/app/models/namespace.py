@@ -6,12 +6,12 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.enums import SensitivityLevel
+from app.models.enums import SensitivityLevel, sqlalchemy_enum
 
 if TYPE_CHECKING:
     from app.models.document import Document
@@ -44,7 +44,7 @@ class Namespace(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     sensitivity_level: Mapped[SensitivityLevel] = mapped_column(
-        Enum(SensitivityLevel, name="sensitivity_level_enum"),
+        sqlalchemy_enum(SensitivityLevel, name="sensitivity_level_enum"),
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
