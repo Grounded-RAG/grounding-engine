@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, field_validator
+from pydantic import AnyHttpUrl, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,11 @@ class Settings(BaseSettings):
         "postgresql+psycopg://grounded:grounded@localhost:5433/grounded"
     )
     api_key_salt: str = "replace-in-local-env"
+    s3_endpoint_url: AnyHttpUrl = "http://localhost:9000"
+    s3_bucket: str = "grounded-documents"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_secure: bool = False
 
     model_config = SettingsConfigDict(
         env_file=(REPO_ROOT / ".env", BACKEND_ROOT / ".env"),
@@ -73,6 +78,32 @@ class Settings(BaseSettings):
 
         if not value.strip():
             raise ValueError("API_KEY_SALT must not be empty.")
+        return value
+
+    @field_validator("s3_bucket", "s3_access_key", "s3_secret_key")
+    @classmethod
+    def validate_storage_settings(cls, value: str, info: ValidationInfo) -> str:
+        """Ensure required storage settings are not blank."""
+
+        if not value.strip():
+            field_name = info.field_name.upper()
+            raise ValueError(f"{field_name} must not be empty.")
+        return value
+
+    @field_validator("s3_secure")
+    @classmethod
+    def validate_storage_tls_setting(
+        cls,
+        value: bool,
+        info: ValidationInfo,
+    ) -> bool:
+        """Keep the secure flag aligned with the configured endpoint scheme."""
+
+        endpoint = info.data.get("s3_endpoint_url")
+        if endpoint is not None and value != (endpoint.scheme == "https"):
+            raise ValueError(
+                "S3_SECURE must match the scheme used by S3_ENDPOINT_URL."
+            )
         return value
 
 
