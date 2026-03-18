@@ -2,7 +2,7 @@
 
 Grounded is a managed Retrieval-Augmented Generation platform for user-owned documents. Users upload supported files, receive API and dashboard access, and query their own knowledge base without building chunking, embeddings, retrieval, or verification pipelines themselves.
 
-The product direction is platform-first:
+Grounded is being built as a platform product:
 
 - users provide documents and knowledge sources
 - the system ingests, chunks, indexes, retrieves, reranks, verifies, and answers
@@ -11,7 +11,7 @@ The product direction is platform-first:
 
 ## What Problem It Solves
 
-Basic RAG systems often fail when retrieval quality is weak, queries are ambiguous, or answers are generated without enough trust controls. Grounded is built to address those weaknesses by combining adaptive retrieval, query handling, verification, and traceable evidence into one platform.
+Basic RAG systems often fail when retrieval quality is weak, queries are ambiguous, or answers are generated without enough trust controls. Grounded addresses those weaknesses by combining adaptive retrieval, query handling, verification, and traceable evidence into one platform.
 
 ## What Grounded Provides
 
@@ -24,35 +24,140 @@ Basic RAG systems often fail when retrieval quality is weak, queries are ambiguo
 - API-based access for developers
 - dashboard-based access for end users and operators
 
-## Product Model
-
-Grounded is being built as a platform product, not as a code package that users run themselves.
-
-The intended flow is:
-
-1. users upload documents or connect supported data sources
-2. the platform processes and indexes that data
-3. users query the system through the dashboard or API
-4. the platform returns grounded answers over their uploaded data
-
-In short:
-
-Users bring the data, and Grounded provides the adaptive verified RAG system on top of that data.
-
 ## Repository Scope
 
-This repository currently contains the backend foundation for that platform: service code, infrastructure definitions, migrations, and tests. The product includes API access and a dashboard, but this codebase is focused on the backend side first.
+This repository contains the backend foundation for the platform: service code, infrastructure definitions, migrations, and tests. The full product includes API access and a dashboard, but this codebase is focused on the backend first.
 
-## Architecture Summary
+## Prerequisites
 
-- FastAPI for the API layer
-- PostgreSQL for metadata and v1 sparse retrieval
-- Qdrant for dense vector retrieval
-- Redis for background jobs and queue-backed workflows
-- MinIO or another S3-compatible service for document storage
-- background workers for ingestion, extraction, indexing, and long-running tasks
+Install these before starting:
 
-The backend is designed around a staged pipeline that handles admission, retrieval, fusion, reranking, evidence packaging, generation, and verification.
+- Python 3.11+
+- Docker Desktop
+- Git
+- Git Bash
+
+## Getting Started
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/Grounded-RAG/grounding-engine.git
+cd grounding-engine
+```
+
+### 2. Create a virtual environment
+
+```bash
+python -m venv .venv
+```
+
+### 3. Activate the virtual environment
+
+```bash
+source .venv/Scripts/activate
+```
+
+### 4. Install backend dependencies
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+### 5. Create the local environment file
+
+```bash
+cp .env.example .env
+```
+
+If `.env` already exists, update it instead of overwriting it.
+
+### 6. Start local infrastructure
+
+This starts PostgreSQL, Redis, Qdrant, and MinIO:
+
+```bash
+docker compose up -d postgres redis qdrant minio
+```
+
+### 7. Run the backend
+
+```bash
+cd backend
+python -m uvicorn app.main:app --reload
+```
+
+The API should start on `http://localhost:8000`.
+
+## Testing the Current Backend
+
+### Run the current test suite
+
+From the repository root:
+
+```bash
+python -m pytest backend/tests/unit/test_config.py backend/tests/integration/test_health.py
+```
+
+### Verify the API manually
+
+With the backend running in one Git Bash window, test these endpoints in another:
+
+```bash
+curl http://localhost:8000/
+curl http://localhost:8000/health/live
+curl http://localhost:8000/health/ready
+```
+
+Expected behavior:
+
+- `/` returns service metadata
+- `/health/live` returns `{"status":"alive"}`
+- `/health/ready` returns readiness information including config status
+
+## Useful Commands
+
+Start infrastructure:
+
+```bash
+docker compose up -d postgres redis qdrant minio
+```
+
+Stop infrastructure:
+
+```bash
+docker compose down
+```
+
+Run the backend from the repository root:
+
+```bash
+cd backend
+python -m uvicorn app.main:app --reload
+```
+
+Run all backend tests:
+
+```bash
+cd backend
+pytest
+```
+
+Run the compile check:
+
+```bash
+python -m compileall backend/app backend/tests
+```
+
+## Local Service Ports
+
+- Backend API: `8000`
+- PostgreSQL: `5432`
+- Redis: `6379`
+- Qdrant: `6333`
+- MinIO API: `9000`
+- MinIO Console: `9001`
 
 ## Repository Layout
 
