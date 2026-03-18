@@ -1,20 +1,29 @@
-"""Health route placeholders."""
+"""Health and readiness routes."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
+
+from app.schemas.health import HealthCheckResponse, ReadinessResponse
 
 
 router = APIRouter()
 
 
-@router.get("/health/live")
-async def live() -> dict[str, str]:
-    """Return a simple liveness response."""
+@router.get("/health/live", response_model=HealthCheckResponse)
+async def live() -> HealthCheckResponse:
+    """Report process liveness."""
 
-    return {"status": "alive"}
+    return HealthCheckResponse(status="alive")
 
 
-@router.get("/health/ready")
-async def ready() -> dict[str, str]:
-    """Return a simple readiness response."""
+@router.get("/health/ready", response_model=ReadinessResponse)
+async def ready(request: Request) -> ReadinessResponse:
+    """Report service readiness and loaded configuration state."""
 
-    return {"status": "ready"}
+    settings = request.app.state.settings
+    return ReadinessResponse(
+        status="ready",
+        service=settings.app_name,
+        environment=settings.app_env,
+        version=settings.app_version,
+        checks={"config": "ok"},
+    )
