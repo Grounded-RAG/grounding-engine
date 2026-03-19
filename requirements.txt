@@ -1,0 +1,2 @@
+# The backend package metadata in backend/pyproject.toml
+-e ./backend[dev]
