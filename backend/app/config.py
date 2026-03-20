@@ -73,12 +73,23 @@ class Settings(BaseSettings):
 
     @field_validator("api_key_salt")
     @classmethod
-    def validate_api_key_salt(cls, value: str) -> str:
-        """Ensure the API key salt is not empty."""
+    def validate_api_key_salt(cls, value: str, info: ValidationInfo) -> str:
+        """Ensure the API key salt is not empty or an unsafe placeholder."""
 
-        if not value.strip():
+        normalized = value.strip()
+        if not normalized:
             raise ValueError("API_KEY_SALT must not be empty.")
-        return value
+
+        app_env = (info.data.get("app_env") or "development").lower()
+        if normalized == "replace-in-local-env" and app_env not in {
+            "development",
+            "test",
+        }:
+            raise ValueError(
+                "API_KEY_SALT must be set to a secure non-default value outside "
+                "development and test."
+            )
+        return normalized
 
     @field_validator("s3_bucket", "s3_access_key", "s3_secret_key")
     @classmethod

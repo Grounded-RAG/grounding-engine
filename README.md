@@ -94,6 +94,15 @@ The API should start on `http://localhost:8000`.
 
 ### Run the current test suite
 
+Before running integration tests against a fresh local database, apply the
+Alembic migrations:
+
+```bash
+cd backend
+python -m alembic upgrade head
+cd ..
+```
+
 From the repository root:
 
 ```bash
@@ -214,10 +223,3 @@ grounding-engine/
 |-- docker-compose.dev.yml    # Backend development stack
 `-- Makefile                  # Common development commands
 ```
-
-## Key Documents
-
-- `docs/proposal.md` explains the problem, goal, scope, and product direction
-- `docs/SYSTEM_DESIGN.md` defines the architecture and service boundaries
-- `docs/IMPLEMENTATION_PLAN.md` defines the implementation phases
-- `docs/ENGINEERING_GUARDRAILS.md` defines coding, testing, and release standards

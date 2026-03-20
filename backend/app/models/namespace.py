@@ -59,5 +59,12 @@ class Namespace(Base):
     )
     documents: Mapped[list["Document"]] = relationship(
         back_populates="namespace",
-        foreign_keys="Document.namespace_id",
+        primaryjoin=(
+            "and_("
+            "Namespace.tenant_id == Document.tenant_id, "
+            "Namespace.namespace_id == Document.namespace_id"
+            ")"
+        ),
+        foreign_keys="[Document.tenant_id, Document.namespace_id]",
+        overlaps="tenant,documents",
     )

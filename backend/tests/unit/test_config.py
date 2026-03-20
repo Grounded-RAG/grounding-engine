@@ -45,3 +45,10 @@ def test_settings_require_non_empty_api_key_salt() -> None:
 
     with pytest.raises(ValidationError):
         Settings(api_key_salt="   ")
+
+
+def test_settings_reject_placeholder_api_key_salt_outside_dev() -> None:
+    """Production-like environments should not accept the public placeholder salt."""
+
+    with pytest.raises(ValidationError):
+        Settings(app_env="production", api_key_salt="replace-in-local-env")

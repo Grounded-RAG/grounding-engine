@@ -62,10 +62,12 @@ class Tenant(Base):
     documents: Mapped[list["Document"]] = relationship(
         back_populates="tenant",
         foreign_keys="Document.tenant_id",
+        overlaps="documents,namespace",
     )
     ingestion_jobs: Mapped[list["IngestionJob"]] = relationship(
         back_populates="tenant",
         foreign_keys="IngestionJob.tenant_id",
+        overlaps="document,ingestion_jobs",
     )
     query_traces: Mapped[list["QueryTrace"]] = relationship(
         back_populates="tenant",

@@ -137,7 +137,6 @@ def upgrade() -> None:
     sa.Column('status', document_status_enum, nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint('file_size_bytes >= 0', name='ck_documents_file_size_non_negative'),
-    sa.ForeignKeyConstraint(['namespace_id'], ['namespaces.namespace_id'], ),
     sa.ForeignKeyConstraint(['tenant_id', 'namespace_id'], ['namespaces.tenant_id', 'namespaces.namespace_id'], name='fk_documents_tenant_namespace'),
     sa.ForeignKeyConstraint(['tenant_id'], ['tenants.tenant_id'], ),
     sa.PrimaryKeyConstraint('doc_id'),
@@ -159,7 +158,6 @@ def upgrade() -> None:
     sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint('attempt_count >= 0', name='ck_ingestion_jobs_attempt_count'),
-    sa.ForeignKeyConstraint(['doc_id'], ['documents.doc_id'], ),
     sa.ForeignKeyConstraint(['tenant_id', 'doc_id'], ['documents.tenant_id', 'documents.doc_id'], name='fk_ingestion_jobs_tenant_document'),
     sa.ForeignKeyConstraint(['tenant_id'], ['tenants.tenant_id'], ),
     sa.PrimaryKeyConstraint('job_id')
