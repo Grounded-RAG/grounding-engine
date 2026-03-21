@@ -1,0 +1,414 @@
+# Grounded System Design
+
+## 1. Executive Summary
+
+Grounded is a reliability-first RAG platform for user-owned documents. Users
+upload data into tenant-scoped namespaces, then query that data through a routed
+execution model that balances speed, accuracy, and verification depth.
+
+This design intentionally separates:
+
+- subscription plans
+- execution tiers
+- namespace policy
+- runtime routing
+
+That separation is essential for a trustworthy platform. The same customer can
+own many datasets, and the same dataset can support simple and high-risk queries
+that need different execution depth.
+
+---
+
+## 2. Terminology
+
+### `subscription_plan`
+
+Billing and entitlement concept. Controls quotas, allowed execution tiers, and
+advanced platform access.
+
+### `execution_tier`
+
+Runtime query-processing mode. Grounded uses:
+
+- Standard Tier
+- Enterprise Tier
+- Critical Tier
+
+### `namespace_policy`
+
+Namespace-level rules that affect routing and safety. At minimum this policy
+should cover:
+
+- domain
+- sensitivity
+- freshness profile
+- minimum required tier
+- whether web fallback is allowed
+- whether internal model retrieval is allowed
+
+### `effective_tier`
+
+The final tier selected for a query after the system considers:
+
+- namespace minimum tier
+- router recommendation
+- user requested tier
+- plan entitlement limit
+
+### Important rule
+
+- data belongs to tenant + namespace
+- queries are routed to an effective tier
+
+Data does **not** permanently belong to one execution tier.
+
+---
+
+## 3. Product Model
+
+### 3.1 Subscription plans
+
+Grounded uses these user-facing plans:
+
+- Free Plan
+- Pro Plan
+- Business Plan
+- Enterprise Plan
+
+These are commercial entitlements, not runtime modes.
+
+| Subscription plan | Auto mode | Manual Standard | Manual Enterprise | Manual Critical | Notes |
+|---|---|---|---|---|---|
+| Free Plan | Yes | Yes | No | No | Lowest quotas, baseline path only |
+| Pro Plan | Yes | Yes | Yes | No | Good for advanced individual and small-team use |
+| Business Plan | Yes | Yes | Yes | By policy | Better controls and broader operational access |
+| Enterprise Plan | Yes | Yes | Yes | Yes | Full controls, compliance, sovereign options |
+
+### 3.2 Why plans are not tiers
+
+Plans answer:
+
+- what the tenant is allowed to use
+- how much they can use
+
+Execution tiers answer:
+
+- how deeply a specific query should be processed
+
+The same Pro tenant may run one query in Standard and another in Enterprise.
+The same Enterprise tenant may run many low-risk queries in Standard for speed.
+
+---
+
+## 4. Capability Architecture
+
+Not every capability is a single linear runtime stage. Grounded is better
+understood as a grouped capability architecture.
+
+### 4.1 Ingestion capabilities
+
+- Metadata enrichment
+- Deterministic chunking baseline
+- Semantic chunking upgrade
+
+### 4.2 Cross-cutting guarantees
+
+- Namespace isolation and access-controlled retrieval
+- Trace, audit, and evaluation layer
+
+### 4.3 Retrieval and ranking capabilities
+
+- Query planning and transformation
+- Hybrid retrieval with RRF
+- Temporal and freshness scoring
+- Reranking
+- Internal model retrieval
+- Corrective RAG
+
+### 4.4 Generation and trust capabilities
+
+- Evidence packaging and citation mapping
+- Grounded generation
+- Verification loop
+- FreshPrompt strategy
+- Structured citation schema
+- Degraded response and abstention behavior
+
+---
+
+## 5. Technology Defaults
+
+These defaults remain the reference design until explicitly changed:
+
+- sparse retrieval for v1: PostgreSQL FTS
+- dense retrieval for v1: Qdrant
+- chunking baseline: deterministic token-aware chunking
+- semantic chunking: evaluated upgrade, not default
+- planner: Enterprise and Critical by default
+- web fallback: Critical only
+- internal model retrieval: Critical only
+- trace retention default: redacted traces
+
+---
+
+## 6. Runtime Execution Model
+
+### 6.1 Upload and ingestion flow
+
+```text
+Upload
+  -> authenticate tenant
+  -> resolve namespace and namespace policy
+  -> store canonical file
+  -> extract text
+  -> enrich metadata
+  -> deterministic chunking
+  -> optional semantic chunking upgrade
+  -> write dense and sparse indexes
+  -> mark document ready
+```
+
+### Upload-time decisions
+
+At upload time the system should assign:
+
+- tenant
+- namespace
+- domain
+- sensitivity
+- freshness profile
+- namespace minimum tier
+- whether web fallback is allowed
+- whether internal model retrieval may be allowed later
+
+These decisions define guardrails. They do not permanently force every future
+query into one tier.
+
+### 6.2 Query execution flow
+
+```text
+User query
+  -> authentication
+  -> namespace policy lookup
+  -> router recommendation
+  -> effective tier decision
+  -> sparse retrieval + dense retrieval
+  -> RRF fusion
+  -> optional reranking
+  -> optional temporal scoring
+  -> evidence packaging
+  -> grounded generation
+  -> optional verification or corrective path
+  -> structured cited response
+  -> trace and audit record
+```
+
+### Query-time decisions
+
+At query time the system should:
+
+1. authenticate tenant access
+2. resolve namespace policy
+3. inspect query complexity, ambiguity, and risk
+4. produce a router recommendation
+5. accept a user override if the plan allows it
+6. compute the effective tier
+7. execute the tier path
+8. record `tier_used` and `routing_reason` in the trace
+
+### Routing rule
+
+```text
+effective_tier = highest of:
+  - namespace minimum tier
+  - router recommendation
+  - user requested tier
+
+then enforce plan entitlement
+```
+
+### Safety rule
+
+If the tier required to answer safely is higher than the tenant is allowed to
+use, the request must fail clearly. The system must not silently downgrade below
+the required safety level.
+
+### Trace capture
+
+Every query trace should capture at least:
+
+- tenant_id
+- namespace_id
+- requested_tier
+- router_recommendation
+- effective_tier
+- routing_reason
+- retrieved evidence ids
+- selected evidence ids
+- degraded reasons
+- verifier outcome
+
+---
+
+## 7. Tier Activation Model
+
+### 7.1 Standard Tier
+
+Standard is the production-grade baseline.
+
+Enabled:
+
+- namespace isolation
+- metadata enrichment
+- deterministic chunking
+- sparse + dense retrieval
+- RRF fusion
+- evidence packaging and citation mapping
+- grounded generation
+- structured citation schema
+- degraded response and abstention
+- trace recording
+
+Disabled by default:
+
+- planner/query decomposition
+- semantic chunking
+- reranking
+- full temporal scoring
+- web fallback
+- internal model retrieval
+- critic loop
+
+### 7.2 Enterprise Tier
+
+Enterprise improves retrieval precision.
+
+Everything in Standard, plus:
+
+- planner for eligible queries
+- temporal and freshness scoring
+- reranking
+- stronger evidence selection
+- semantic chunking as a controlled upgrade path
+
+Still disabled by default:
+
+- external web fallback
+- internal model retrieval as the normal path
+- full critic loop
+
+### 7.3 Critical Tier
+
+Critical is the high-assurance mode for legal, medical, compliance, and other
+high-stakes scenarios.
+
+Everything in Enterprise, plus:
+
+- planner available for high-risk or complex queries
+- corrective RAG with allowlisted web fallback
+- internal model retrieval for selected corpora
+- verification loop
+- FreshPrompt conflict-resolution strategy
+- strongest degraded behavior
+- async path for long-running verified queries
+
+### 7.4 Capability-to-tier matrix
+
+| Capability | Standard | Enterprise | Critical |
+|---|---|---|---|
+| Metadata enrichment | Yes | Yes | Yes |
+| Deterministic chunking | Yes | Yes | Yes |
+| Semantic chunking | No default | Feature-flagged | Allowed |
+| Namespace isolation | Yes | Yes | Yes |
+| Query planning and transformation | No default | Yes for eligible queries | Yes |
+| Hybrid retrieval with RRF | Yes | Yes | Yes |
+| Temporal and freshness scoring | Minimal or none | Yes | Yes |
+| Reranking | No | Yes | Yes |
+| Internal model retrieval | No | No default | Yes |
+| Corrective RAG | No | No | Yes |
+| Evidence packaging and citation mapping | Yes | Yes | Yes |
+| Grounded generation | Yes | Yes | Yes |
+| Verification loop | No | Lightweight only if later approved | Yes |
+| FreshPrompt strategy | No | No | Yes |
+| Structured citation schema | Yes | Yes | Yes |
+| Degraded response and abstention | Yes | Yes | Yes |
+| Trace, audit, and evaluation | Yes | Yes | Yes |
+
+---
+
+## 8. Data Ownership and Policy Model
+
+### Tenant
+
+Top-level customer boundary.
+
+Now describes:
+
+- subscription plan
+- maximum execution tier
+- default policy
+- retention
+
+### Namespace
+
+Tenant-scoped dataset boundary.
+
+Now describes:
+
+- domain
+- sensitivity
+- freshness profile
+- minimum required tier
+- web fallback policy
+- internal model retrieval policy
+
+### Document
+
+Uploaded file stored under a namespace.
+
+Documents inherit tenant and namespace ownership. They do not permanently belong
+to Standard, Enterprise, or Critical.
+
+---
+
+## 9. API and Schema Implications
+
+The backend now applies these schema and contract rules:
+
+- `subscription_plan` is the billing and entitlement concept
+- `max_execution_tier` is the routing ceiling for a tenant
+- namespace policy is explicit in schema
+- traces record routing fields directly
+- API responses should distinguish:
+  - requested tier
+  - tier used
+  - why the tier was chosen
+
+---
+
+## 10. Phase 0 Alignment Results
+
+The architecture-driven Phase 0 follow-ups are now in place:
+
+- tenants now store:
+  - `subscription_plan`
+  - `max_execution_tier`
+- namespaces now carry explicit policy fields
+- query traces now support routing-specific metadata
+- README and core docs now match the final architecture vocabulary
+
+The remaining work starts in Phase 1. It no longer depends on resolving these
+schema or terminology issues first.
+
+---
+
+## 11. Design Principles
+
+1. Keep subscription plans and execution tiers separate.
+2. Treat namespace policy as the safety floor.
+3. Use auto-routing by default.
+4. Allow manual override only within entitlement limits.
+5. Never silently downgrade below the required safety level.
+6. Keep Standard strong, narrow, and dependable.
+7. Gate advanced behavior behind evaluation and policy.
+8. Make every important decision traceable.
