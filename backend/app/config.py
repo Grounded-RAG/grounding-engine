@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     alembic_database_url: str = (
         "postgresql+psycopg://grounded:grounded@localhost:5433/grounded"
     )
+    document_upload_max_bytes: int = 25 * 1024 * 1024
     api_key_salt: str = "replace-in-local-env"
     s3_endpoint_url: AnyHttpUrl = "http://localhost:9000"
     s3_bucket: str = "grounded-documents"
@@ -69,6 +70,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ALEMBIC_DATABASE_URL must use the postgresql+psycopg driver."
             )
+        return value
+
+    @field_validator("document_upload_max_bytes")
+    @classmethod
+    def validate_document_upload_max_bytes(cls, value: int) -> int:
+        """Ensure the upload size limit is a positive number of bytes."""
+
+        if value <= 0:
+            raise ValueError("DOCUMENT_UPLOAD_MAX_BYTES must be greater than zero.")
         return value
 
     @field_validator("api_key_salt")

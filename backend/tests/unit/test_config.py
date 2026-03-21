@@ -52,3 +52,10 @@ def test_settings_reject_placeholder_api_key_salt_outside_dev() -> None:
 
     with pytest.raises(ValidationError):
         Settings(app_env="production", api_key_salt="replace-in-local-env")
+
+
+def test_settings_reject_non_positive_upload_limit() -> None:
+    """Upload limits should fail validation when they are not positive."""
+
+    with pytest.raises(ValidationError):
+        Settings(document_upload_max_bytes=0)
