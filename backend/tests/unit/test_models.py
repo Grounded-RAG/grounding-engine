@@ -83,6 +83,34 @@ def test_query_trace_has_guardrail_constraints() -> None:
     assert "ck_query_traces_total_latency_non_negative" in check_constraints
 
 
+def test_namespace_exposes_policy_columns() -> None:
+    """Namespaces should carry explicit routing and policy fields."""
+
+    column_names = set(Namespace.__table__.c.keys())
+
+    assert {
+        "domain",
+        "freshness_profile",
+        "min_execution_tier",
+        "allow_web_fallback",
+        "allow_internal_model_retrieval",
+    } <= column_names
+
+
+def test_query_trace_exposes_routing_columns() -> None:
+    """Query traces should capture routing metadata explicitly."""
+
+    column_names = set(QueryTrace.__table__.c.keys())
+
+    assert {
+        "namespace_id",
+        "requested_tier",
+        "router_recommendation",
+        "effective_tier",
+        "routing_reason",
+    } <= column_names
+
+
 def test_tenant_relationships_cover_all_phase_zero_children() -> None:
     """Tenant should expose the core Phase 0 relationships."""
 
@@ -106,7 +134,13 @@ def test_api_key_relationship_points_to_tenant() -> None:
 def test_enums_persist_design_doc_values() -> None:
     """Persisted enum values should match the lowercase design-doc contract."""
 
-    assert Tenant.__table__.c.plan_tier.type.enums == [
+    assert Tenant.__table__.c.subscription_plan.type.enums == [
+        "free",
+        "pro",
+        "business",
+        "enterprise",
+    ]
+    assert Tenant.__table__.c.max_execution_tier.type.enums == [
         "standard",
         "enterprise",
         "critical",
@@ -116,6 +150,26 @@ def test_enums_persist_design_doc_values() -> None:
         "internal",
         "confidential",
         "restricted",
+    ]
+    assert Namespace.__table__.c.freshness_profile.type.enums == [
+        "stable",
+        "balanced",
+        "aggressive",
+    ]
+    assert Namespace.__table__.c.min_execution_tier.type.enums == [
+        "standard",
+        "enterprise",
+        "critical",
+    ]
+    assert QueryTrace.__table__.c.router_recommendation.type.enums == [
+        "standard",
+        "enterprise",
+        "critical",
+    ]
+    assert QueryTrace.__table__.c.effective_tier.type.enums == [
+        "standard",
+        "enterprise",
+        "critical",
     ]
     assert Document.__table__.c.status.type.enums == [
         "uploaded",

@@ -5,9 +5,11 @@ from app.models.api_key import APIKey
 from app.models.document import Document
 from app.models.enums import (
     DocumentStatus,
+    ExecutionTier,
+    FreshnessProfile,
     IngestionJobStatus,
-    PlanTier,
     SensitivityLevel,
+    SubscriptionPlan,
 )
 from app.models.ingestion_job import IngestionJob
 from app.models.namespace import Namespace
@@ -19,11 +21,13 @@ __all__ = [
     "Base",
     "Document",
     "DocumentStatus",
+    "ExecutionTier",
+    "FreshnessProfile",
     "IngestionJob",
     "IngestionJobStatus",
     "Namespace",
-    "PlanTier",
     "QueryTrace",
     "SensitivityLevel",
+    "SubscriptionPlan",
     "Tenant",
 ]

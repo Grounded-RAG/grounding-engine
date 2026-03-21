@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.enums import PlanTier, sqlalchemy_enum
+from app.models.enums import ExecutionTier, SubscriptionPlan, sqlalchemy_enum
 
 if TYPE_CHECKING:
     from app.models.api_key import APIKey
@@ -35,8 +35,12 @@ class Tenant(Base):
         default=uuid.uuid4,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    plan_tier: Mapped[PlanTier] = mapped_column(
-        sqlalchemy_enum(PlanTier, name="plan_tier_enum"),
+    subscription_plan: Mapped[SubscriptionPlan] = mapped_column(
+        sqlalchemy_enum(SubscriptionPlan, name="subscription_plan_enum"),
+        nullable=False,
+    )
+    max_execution_tier: Mapped[ExecutionTier] = mapped_column(
+        sqlalchemy_enum(ExecutionTier, name="execution_tier_enum"),
         nullable=False,
     )
     default_policy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
@@ -72,4 +76,5 @@ class Tenant(Base):
     query_traces: Mapped[list["QueryTrace"]] = relationship(
         back_populates="tenant",
         foreign_keys="QueryTrace.tenant_id",
+        overlaps="namespace,query_traces",
     )

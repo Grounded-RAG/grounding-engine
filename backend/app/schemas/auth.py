@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from app.models.enums import PlanTier
+from app.models.enums import ExecutionTier, SubscriptionPlan
 
 
 class AuthSmokeResponse(BaseModel):
@@ -15,6 +15,7 @@ class AuthSmokeResponse(BaseModel):
     status: str
     tenant_id: UUID
     tenant_name: str
-    plan_tier: PlanTier
+    subscription_plan: SubscriptionPlan
+    max_execution_tier: ExecutionTier
     api_key_id: UUID
     api_key_label: str

@@ -17,7 +17,7 @@ from app.core.database import dispose_database
 from app.core.security import hash_api_key
 from app.core.telemetry import REQUEST_ID_HEADER
 from app.main import create_app
-from app.models import PlanTier
+from app.models import ExecutionTier, SubscriptionPlan
 
 
 @dataclass(frozen=True)
@@ -76,16 +76,18 @@ def seeded_auth_data(auth_env: str) -> SeededAuthData:
                 insert into tenants (
                     tenant_id,
                     name,
-                    plan_tier,
+                    subscription_plan,
+                    max_execution_tier,
                     default_policy,
                     retention_days
                 )
-                values (%s, %s, %s, %s::jsonb, %s)
+                values (%s, %s, %s, %s, %s::jsonb, %s)
                 """,
                 (
                     tenant_id,
                     tenant_name,
-                    PlanTier.STANDARD.value,
+                    SubscriptionPlan.FREE.value,
+                    ExecutionTier.STANDARD.value,
                     json.dumps({"tier": "standard"}),
                     365,
                 ),
@@ -199,7 +201,8 @@ def test_auth_smoke_returns_resolved_tenant_context(
         "status": "authenticated",
         "tenant_id": str(seeded_auth_data.tenant_id),
         "tenant_name": seeded_auth_data.tenant_name,
-        "plan_tier": "standard",
+        "subscription_plan": "free",
+        "max_execution_tier": "standard",
         "api_key_id": str(seeded_auth_data.valid_key_id),
         "api_key_label": "integration-valid",
     }

@@ -28,8 +28,17 @@ def sqlalchemy_enum(enum_cls: type[EnumType], *, name: str) -> SQLAlchemyEnum:
     )
 
 
-class PlanTier(str, PythonEnum):
-    """Supported tenant and query tiers."""
+class SubscriptionPlan(str, PythonEnum):
+    """Supported product and billing plans."""
+
+    FREE = "free"
+    PRO = "pro"
+    BUSINESS = "business"
+    ENTERPRISE = "enterprise"
+
+
+class ExecutionTier(str, PythonEnum):
+    """Supported runtime execution tiers."""
 
     STANDARD = "standard"
     ENTERPRISE = "enterprise"
@@ -43,6 +52,14 @@ class SensitivityLevel(str, PythonEnum):
     INTERNAL = "internal"
     CONFIDENTIAL = "confidential"
     RESTRICTED = "restricted"
+
+
+class FreshnessProfile(str, PythonEnum):
+    """Supported freshness profiles for namespace policy."""
+
+    STABLE = "stable"
+    BALANCED = "balanced"
+    AGGRESSIVE = "aggressive"
 
 
 class DocumentStatus(str, PythonEnum):

@@ -15,7 +15,7 @@ from app.config import get_settings
 from app.core.database import get_db_session
 from app.core.security import hash_api_key
 from app.core.telemetry import bind_tenant_context
-from app.models import APIKey, PlanTier
+from app.models import APIKey, ExecutionTier, SubscriptionPlan
 
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -28,7 +28,8 @@ class TenantContext:
 
     tenant_id: UUID
     tenant_name: str
-    plan_tier: PlanTier
+    subscription_plan: SubscriptionPlan
+    max_execution_tier: ExecutionTier
     api_key_id: UUID
     api_key_label: str
 
@@ -95,7 +96,8 @@ async def get_tenant_context(
     return TenantContext(
         tenant_id=api_key_record.tenant.tenant_id,
         tenant_name=api_key_record.tenant.name,
-        plan_tier=api_key_record.tenant.plan_tier,
+        subscription_plan=api_key_record.tenant.subscription_plan,
+        max_execution_tier=api_key_record.tenant.max_execution_tier,
         api_key_id=api_key_record.key_id,
         api_key_label=api_key_record.label,
     )

@@ -18,7 +18,8 @@ async def auth_smoke(
         status="authenticated",
         tenant_id=tenant_context.tenant_id,
         tenant_name=tenant_context.tenant_name,
-        plan_tier=tenant_context.plan_tier,
+        subscription_plan=tenant_context.subscription_plan,
+        max_execution_tier=tenant_context.max_execution_tier,
         api_key_id=tenant_context.api_key_id,
         api_key_label=tenant_context.api_key_label,
     )
