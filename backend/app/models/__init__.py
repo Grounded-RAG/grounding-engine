@@ -3,6 +3,7 @@
 from app.core.database import Base
 from app.models.api_key import APIKey
 from app.models.document import Document
+from app.models.document_chunk import DocumentChunkRecord
 from app.models.enums import (
     DocumentStatus,
     ExecutionTier,
@@ -20,6 +21,7 @@ __all__ = [
     "APIKey",
     "Base",
     "Document",
+    "DocumentChunkRecord",
     "DocumentStatus",
     "ExecutionTier",
     "FreshnessProfile",

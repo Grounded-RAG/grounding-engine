@@ -4,7 +4,15 @@ from sqlalchemy import CheckConstraint, ForeignKeyConstraint, UniqueConstraint
 from sqlalchemy.orm import configure_mappers
 
 from app.core.database import Base
-from app.models import APIKey, Document, IngestionJob, Namespace, QueryTrace, Tenant
+from app.models import (
+    APIKey,
+    Document,
+    DocumentChunkRecord,
+    IngestionJob,
+    Namespace,
+    QueryTrace,
+    Tenant,
+)
 
 
 def test_model_metadata_registers_all_phase_zero_tables() -> None:
@@ -15,6 +23,7 @@ def test_model_metadata_registers_all_phase_zero_tables() -> None:
         "namespaces",
         "api_keys",
         "documents",
+        "document_chunks",
         "ingestion_jobs",
         "query_traces",
     }
@@ -81,6 +90,38 @@ def test_query_trace_has_guardrail_constraints() -> None:
 
     assert "ck_query_traces_overall_confidence" in check_constraints
     assert "ck_query_traces_total_latency_non_negative" in check_constraints
+
+
+def test_document_chunk_record_has_sparse_index_constraints() -> None:
+    """Document chunk rows should enforce tenant-safe sparse indexing invariants."""
+
+    unique_constraints = {
+        constraint.name
+        for constraint in DocumentChunkRecord.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    foreign_key_constraints = {
+        constraint.name
+        for constraint in DocumentChunkRecord.__table__.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+    check_constraints = {
+        constraint.name
+        for constraint in DocumentChunkRecord.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    assert "uq_document_chunks_tenant_chunk_id" in unique_constraints
+    assert "uq_document_chunks_tenant_doc_chunk_index" in unique_constraints
+    assert "fk_document_chunks_tenant_namespace" in foreign_key_constraints
+    assert "fk_document_chunks_tenant_document" in foreign_key_constraints
+    assert {
+        "ck_document_chunks_chunk_index",
+        "ck_document_chunks_token_count",
+        "ck_document_chunks_character_count",
+        "ck_document_chunks_start_token",
+        "ck_document_chunks_token_span",
+    } <= check_constraints
 
 
 def test_namespace_exposes_policy_columns() -> None:
