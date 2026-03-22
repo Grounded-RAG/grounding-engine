@@ -91,3 +91,32 @@ class ChunkManifest:
                 if isinstance(chunk_payload, dict)
             ],
         )
+
+
+@dataclass(frozen=True)
+class RetrievedChunk:
+    """Single sparse or dense retrieval hit."""
+
+    chunk_id: str
+    tenant_id: UUID
+    namespace_id: UUID
+    document_id: UUID
+    chunk_index: int
+    text: str
+    score: float
+    rank: int
+    source: str
+
+
+@dataclass(frozen=True)
+class FusedRetrievedChunk:
+    """Merged retrieval hit ranked by reciprocal rank fusion."""
+
+    chunk_id: str
+    tenant_id: UUID
+    namespace_id: UUID
+    document_id: UUID
+    chunk_index: int
+    text: str
+    fused_score: float
+    sources: tuple[str, ...]

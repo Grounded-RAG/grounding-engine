@@ -73,3 +73,13 @@ def test_settings_reject_blank_qdrant_collection() -> None:
 
     with pytest.raises(ValidationError):
         Settings(qdrant_collection="   ")
+
+
+def test_settings_reject_non_positive_retrieval_settings() -> None:
+    """Retrieval limits and fusion constants must be positive."""
+
+    with pytest.raises(ValidationError):
+        Settings(retrieval_candidate_limit=0)
+
+    with pytest.raises(ValidationError):
+        Settings(rrf_smoothing_constant=0)
