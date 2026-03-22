@@ -89,13 +89,14 @@ def search_dense_points(
         ]
     )
     try:
-        return client.search(
+        response = client.query_points(
             collection_name=collection_name,
-            query_vector=query_vector,
+            query=query_vector,
             query_filter=query_filter,
             limit=limit,
             with_payload=True,
             with_vectors=False,
         )
+        return list(response.points)
     except Exception as exc:  # pragma: no cover - defensive wrapper for client errors
         raise VectorStoreError("Failed to search dense points in Qdrant.") from exc

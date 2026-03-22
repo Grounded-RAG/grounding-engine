@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass
 
 from qdrant_client.http import models as qdrant_models
@@ -26,6 +27,12 @@ class DenseIndexingResult:
     manifest_key: str
 
 
+def _dense_point_id(chunk_id: str) -> str:
+    """Derive a deterministic Qdrant-compatible UUID from one chunk id."""
+
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, chunk_id))
+
+
 def _build_dense_point(
     *,
     context: IngestionJobContext,
@@ -37,7 +44,7 @@ def _build_dense_point(
 
     chunk = manifest.chunks[chunk_index]
     return qdrant_models.PointStruct(
-        id=chunk.chunk_id,
+        id=_dense_point_id(chunk.chunk_id),
         vector=embedding.vector,
         payload={
             "tenant_id": str(context.tenant_id),

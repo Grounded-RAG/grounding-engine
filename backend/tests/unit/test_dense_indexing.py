@@ -9,7 +9,7 @@ import pytest
 
 from app.core.embeddings import build_dense_embedding
 from app.pipeline.contracts import ChunkManifest
-from app.services.dense_indexing import dense_index_document
+from app.services.dense_indexing import _dense_point_id, dense_index_document
 from app.services.ingestion import IngestionJobContext, IngestionProcessorError
 
 
@@ -21,6 +21,15 @@ def test_build_dense_embedding_is_deterministic() -> None:
 
     assert vector_one == vector_two
     assert len(vector_one) == 16
+
+
+def test_dense_point_id_is_stable_uuid() -> None:
+    """Dense point ids should be deterministic and Qdrant-compatible."""
+
+    point_id = _dense_point_id("chunk-1")
+
+    assert point_id == _dense_point_id("chunk-1")
+    assert uuid.UUID(point_id)
 
 
 @pytest.mark.asyncio()
@@ -103,7 +112,7 @@ async def test_dense_index_document_reads_manifest_and_upserts_points(
     points = captured["points"]
     assert isinstance(points, list)
     assert len(points) == 2
-    assert points[0].id == "chunk-1"
+    assert points[0].id == _dense_point_id("chunk-1")
     assert points[0].payload["tenant_id"] == str(context.tenant_id)
     assert points[0].payload["text"] == "alpha beta"
 

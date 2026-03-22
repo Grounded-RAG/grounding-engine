@@ -31,39 +31,41 @@ class FakeQdrantClient:
     def upsert(self, *, collection_name: str, points: list[object], wait: bool) -> None:
         self.upserts.append((collection_name, points, wait))
 
-    def search(
+    def query_points(
         self,
         *,
         collection_name: str,
-        query_vector: list[float],
+        query: list[float],
         query_filter: object,
         limit: int,
         with_payload: bool,
         with_vectors: bool,
-    ) -> list[object]:
+    ) -> object:
         self.searches.append(
             (
                 collection_name,
-                query_vector,
+                query,
                 query_filter,
                 limit,
                 with_payload,
                 with_vectors,
             )
         )
-        return [
-            SimpleNamespace(
-                score=0.9,
-                payload={
-                    "chunk_id": "chunk-1",
-                    "tenant_id": str(uuid.uuid4()),
-                    "namespace_id": str(uuid.uuid4()),
-                    "document_id": str(uuid.uuid4()),
-                    "chunk_index": 0,
-                    "text": "alpha beta",
-                },
-            )
-        ]
+        return SimpleNamespace(
+            points=[
+                SimpleNamespace(
+                    score=0.9,
+                    payload={
+                        "chunk_id": "chunk-1",
+                        "tenant_id": str(uuid.uuid4()),
+                        "namespace_id": str(uuid.uuid4()),
+                        "document_id": str(uuid.uuid4()),
+                        "chunk_index": 0,
+                        "text": "alpha beta",
+                    },
+                )
+            ]
+        )
 
 
 def test_ensure_qdrant_collection_creates_missing_collection(monkeypatch) -> None:
