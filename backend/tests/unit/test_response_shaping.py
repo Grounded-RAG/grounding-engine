@@ -7,7 +7,11 @@ import uuid
 import pytest
 
 from app.pipeline.contracts import EvidenceItem, EvidencePackage, GroundedAnswerDraft
-from app.services.response_shaping import ResponseShapingError, shape_grounded_response
+from app.services.response_shaping import (
+    ResponseShapingError,
+    shape_degraded_response,
+    shape_grounded_response,
+)
 
 
 def _evidence_item(
@@ -64,6 +68,7 @@ def test_shape_grounded_response_builds_structured_citations() -> None:
     assert response.answer == draft.answer_text
     assert response.verification_status == "passed"
     assert response.confidence_score == 0.85
+    assert response.degraded_reasons == []
     assert [citation.citation_id for citation in response.citations] == ["E001", "E002"]
     assert response.citations[0].quote == "Grounded supports tenant-safe uploads."
 
@@ -117,3 +122,18 @@ def test_shape_grounded_response_rejects_unknown_evidence_reference() -> None:
 
     with pytest.raises(ResponseShapingError, match="unknown evidence chunk"):
         shape_grounded_response(draft=draft, evidence_package=package)
+
+
+def test_shape_degraded_response_returns_structured_fallback() -> None:
+    """Degraded responses should use the same answer schema with explicit reasons."""
+
+    response = shape_degraded_response(
+        reason="NO_GROUNDED_EVIDENCE",
+        answer_text="I could not find grounded evidence for this query.",
+    )
+
+    assert response.answer == "I could not find grounded evidence for this query."
+    assert response.citations == []
+    assert response.confidence_score == 0.0
+    assert response.verification_status == "degraded"
+    assert response.degraded_reasons == ["NO_GROUNDED_EVIDENCE"]

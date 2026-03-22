@@ -27,3 +27,4 @@ class GroundedAnswerResponse(BaseModel):
     citations: list[CitationResponse]
     confidence_score: float = Field(ge=0.0, le=1.0)
     verification_status: Literal["passed", "degraded"]
+    degraded_reasons: list[str] = Field(default_factory=list)

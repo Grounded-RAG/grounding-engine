@@ -56,4 +56,26 @@ def shape_grounded_response(
         citations=citations,
         confidence_score=min(max(confidence_score, 0.0), 1.0),
         verification_status="passed",
+        degraded_reasons=[],
+    )
+
+
+def shape_degraded_response(
+    *,
+    reason: str,
+    answer_text: str | None = None,
+) -> GroundedAnswerResponse:
+    """Return an honest degraded response when evidence is insufficient or unsafe."""
+
+    normalized_reason = reason.strip()
+    if not normalized_reason:
+        raise ResponseShapingError("Degraded responses require a non-empty reason.")
+
+    return GroundedAnswerResponse(
+        answer=answer_text
+        or "I do not have enough grounded evidence to answer confidently.",
+        citations=[],
+        confidence_score=0.0,
+        verification_status="degraded",
+        degraded_reasons=[normalized_reason],
     )
