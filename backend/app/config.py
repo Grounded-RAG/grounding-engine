@@ -28,6 +28,8 @@ class Settings(BaseSettings):
         "postgresql+psycopg://grounded:grounded@localhost:5433/grounded"
     )
     document_upload_max_bytes: int = 25 * 1024 * 1024
+    chunk_max_tokens: int = 256
+    chunk_overlap_tokens: int = 40
     api_key_salt: str = "replace-in-local-env"
     s3_endpoint_url: AnyHttpUrl = "http://localhost:9000"
     s3_bucket: str = "grounded-documents"
@@ -79,6 +81,29 @@ class Settings(BaseSettings):
 
         if value <= 0:
             raise ValueError("DOCUMENT_UPLOAD_MAX_BYTES must be greater than zero.")
+        return value
+
+    @field_validator("chunk_max_tokens")
+    @classmethod
+    def validate_chunk_max_tokens(cls, value: int) -> int:
+        """Ensure chunk token windows are positive."""
+
+        if value <= 0:
+            raise ValueError("CHUNK_MAX_TOKENS must be greater than zero.")
+        return value
+
+    @field_validator("chunk_overlap_tokens")
+    @classmethod
+    def validate_chunk_overlap_tokens(cls, value: int, info: ValidationInfo) -> int:
+        """Ensure chunk overlap stays non-negative and below the window size."""
+
+        if value < 0:
+            raise ValueError("CHUNK_OVERLAP_TOKENS must not be negative.")
+        max_tokens = info.data.get("chunk_max_tokens")
+        if isinstance(max_tokens, int) and value >= max_tokens:
+            raise ValueError(
+                "CHUNK_OVERLAP_TOKENS must be smaller than CHUNK_MAX_TOKENS."
+            )
         return value
 
     @field_validator("api_key_salt")
