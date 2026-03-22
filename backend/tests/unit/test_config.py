@@ -66,3 +66,10 @@ def test_settings_reject_chunk_overlap_greater_than_window() -> None:
 
     with pytest.raises(ValidationError):
         Settings(chunk_max_tokens=8, chunk_overlap_tokens=8)
+
+
+def test_settings_reject_blank_qdrant_collection() -> None:
+    """Dense index collection names should not be blank."""
+
+    with pytest.raises(ValidationError):
+        Settings(qdrant_collection="   ")
