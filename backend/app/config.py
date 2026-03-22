@@ -28,6 +28,7 @@ class Settings(BaseSettings):
         "postgresql+psycopg://grounded:grounded@localhost:5433/grounded"
     )
     document_upload_max_bytes: int = 25 * 1024 * 1024
+    ingestion_autorun_enabled: bool = True
     chunk_max_tokens: int = 256
     chunk_overlap_tokens: int = 40
     qdrant_url: AnyHttpUrl = "http://localhost:6333"

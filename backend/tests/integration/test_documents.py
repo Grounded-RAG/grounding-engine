@@ -42,13 +42,36 @@ def upload_auth_env(monkeypatch) -> str:
 
 
 @pytest.fixture()
-def upload_client(upload_auth_env: str) -> TestClient:
+def autorun_disabled(monkeypatch) -> None:
+    """Disable background ingestion so upload-only tests stay deterministic."""
+
+    monkeypatch.setenv("INGESTION_AUTORUN_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture()
+def upload_client(upload_auth_env: str, autorun_disabled: None) -> TestClient:
     """Create a test client after upload-related settings are configured."""
 
     app = create_app()
     with TestClient(app) as test_client:
         yield test_client
     asyncio.run(dispose_database())
+
+
+@pytest.fixture()
+def autorun_upload_client(upload_auth_env: str, monkeypatch) -> TestClient:
+    """Create a client with automatic ingestion orchestration enabled."""
+
+    monkeypatch.setenv("INGESTION_AUTORUN_ENABLED", "true")
+    get_settings.cache_clear()
+    app = create_app()
+    with TestClient(app) as test_client:
+        yield test_client
+    asyncio.run(dispose_database())
+    get_settings.cache_clear()
 
 
 def _sync_database_url() -> str:
@@ -208,7 +231,15 @@ def seeded_upload_data(upload_auth_env: str) -> SeededUploadData:
     with psycopg.connect(_sync_database_url()) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
+                "delete from query_traces where tenant_id in (%s, %s)",
+                (tenant_id, foreign_tenant_id),
+            )
+            cursor.execute(
                 "delete from ingestion_jobs where tenant_id in (%s, %s)",
+                (tenant_id, foreign_tenant_id),
+            )
+            cursor.execute(
+                "delete from document_chunks where tenant_id in (%s, %s)",
                 (tenant_id, foreign_tenant_id),
             )
             cursor.execute(
@@ -370,3 +401,95 @@ def test_document_upload_creates_document_job_and_storage_object(
         "completed_at": None,
         "created_at": status_response.json()["created_at"],
     }
+
+
+def test_document_upload_autoruns_pipeline_and_query_returns_grounded_answer(
+    autorun_upload_client: TestClient,
+    seeded_upload_data: SeededUploadData,
+) -> None:
+    """Automatic ingestion should index the upload and enable grounded querying."""
+
+    payload = (
+        b"Maintenance window: Friday at 22:00 UTC. "
+        b"Escalation contact: Platform Team."
+    )
+
+    upload_response = autorun_upload_client.post(
+        "/v1/documents/upload",
+        headers={"X-API-Key": seeded_upload_data.raw_api_key},
+        data={
+            "namespace_id": str(seeded_upload_data.namespace_id),
+            "title": "Operations Manual",
+        },
+        files={"file": ("manual.txt", payload, "text/plain")},
+    )
+
+    assert upload_response.status_code == 201
+    document_id = upload_response.json()["document_id"]
+    job_id = upload_response.json()["job_id"]
+
+    status_response = autorun_upload_client.get(
+        f"/v1/ingestion-jobs/{job_id}",
+        headers={"X-API-Key": seeded_upload_data.raw_api_key},
+    )
+
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "indexed"
+    assert status_response.json()["attempt_count"] == 1
+    assert status_response.json()["error_code"] is None
+
+    with psycopg.connect(_sync_database_url()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select status
+                from documents
+                where tenant_id = %s and doc_id = %s
+                """,
+                (seeded_upload_data.tenant_id, document_id),
+            )
+            document_row = cursor.fetchone()
+            cursor.execute(
+                """
+                select count(*)
+                from document_chunks
+                where tenant_id = %s and doc_id = %s
+                """,
+                (seeded_upload_data.tenant_id, document_id),
+            )
+            chunk_count_row = cursor.fetchone()
+
+    assert document_row == ("indexed",)
+    assert chunk_count_row == (1,)
+
+    query_response = autorun_upload_client.post(
+        "/v1/query",
+        headers={"X-API-Key": seeded_upload_data.raw_api_key},
+        json={
+            "namespace_id": str(seeded_upload_data.namespace_id),
+            "query": "What is the maintenance window?",
+        },
+    )
+
+    assert query_response.status_code == 200
+    assert query_response.headers["X-Trace-Id"]
+    assert query_response.json()["verification_status"] == "passed"
+    assert query_response.json()["degraded_reasons"] == []
+    assert query_response.json()["citations"]
+    assert "Friday" in query_response.json()["answer"]
+
+    with psycopg.connect(_sync_database_url()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select effective_tier, routing_reason
+                from query_traces
+                where tenant_id = %s
+                order by created_at desc
+                limit 1
+                """,
+                (seeded_upload_data.tenant_id,),
+            )
+            trace_row = cursor.fetchone()
+
+    assert trace_row == ("standard", "phase1_standard_query")

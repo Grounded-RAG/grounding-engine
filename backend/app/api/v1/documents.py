@@ -4,10 +4,20 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext, get_tenant_context
+from app.config import get_settings
 from app.core.database import get_db_session
 from app.schemas.documents import DocumentUploadResponse, IngestionJobStatusResponse
 from app.services.documents import (
@@ -15,6 +25,7 @@ from app.services.documents import (
     create_document_upload,
     get_ingestion_job_for_tenant,
 )
+from app.workers import run_standard_ingestion_pipeline_background
 
 router = APIRouter()
 
@@ -25,6 +36,7 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
 )
 async def upload_document(
+    background_tasks: BackgroundTasks,
     namespace_id: UUID = Form(...),
     title: str | None = Form(default=None),
     file: UploadFile = File(...),
@@ -43,6 +55,12 @@ async def upload_document(
         )
     except DocumentServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    if get_settings().ingestion_autorun_enabled:
+        background_tasks.add_task(
+            run_standard_ingestion_pipeline_background,
+            result.ingestion_job.job_id,
+        )
 
     return DocumentUploadResponse(
         document_id=result.document.doc_id,
