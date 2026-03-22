@@ -135,6 +135,29 @@ async def claim_ingestion_job(
     return _build_context(job)
 
 
+async def load_ingestion_job_context(
+    *,
+    session: AsyncSession,
+    job_id: uuid.UUID,
+    allowed_statuses: set[IngestionJobStatus] | None = None,
+) -> IngestionJobContext:
+    """Load worker context for an existing ingestion job without mutating state."""
+
+    job = await _get_ingestion_job_with_document(
+        session=session,
+        job_id=job_id,
+        for_update=False,
+    )
+    if job is None:
+        raise IngestionServiceError("Ingestion job not found.")
+    if job.document is None:
+        raise IngestionServiceError("Ingestion job document binding is invalid.")
+    if allowed_statuses is not None and job.status not in allowed_statuses:
+        raise IngestionServiceError("Ingestion job is not in an allowed state.")
+
+    return _build_context(job)
+
+
 async def mark_ingestion_job_failed(
     *,
     session: AsyncSession,

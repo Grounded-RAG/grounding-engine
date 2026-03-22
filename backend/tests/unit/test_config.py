@@ -59,3 +59,10 @@ def test_settings_reject_non_positive_upload_limit() -> None:
 
     with pytest.raises(ValidationError):
         Settings(document_upload_max_bytes=0)
+
+
+def test_settings_reject_chunk_overlap_greater_than_window() -> None:
+    """Chunk overlap should stay smaller than the chunk window size."""
+
+    with pytest.raises(ValidationError):
+        Settings(chunk_max_tokens=8, chunk_overlap_tokens=8)
