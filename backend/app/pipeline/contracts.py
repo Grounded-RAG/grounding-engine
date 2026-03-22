@@ -120,3 +120,45 @@ class FusedRetrievedChunk:
     text: str
     fused_score: float
     sources: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class EvidenceItem:
+    """Selected evidence chunk prepared for grounding and citation."""
+
+    citation_id: str
+    chunk_id: str
+    tenant_id: UUID
+    namespace_id: UUID
+    document_id: UUID
+    chunk_index: int
+    text: str
+    score: float
+    sources: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class EvidencePackage:
+    """Normalized evidence set ready for generation and tracing."""
+
+    retrieved_chunk_ids: list[str]
+    selected_evidence_ids: list[str]
+    items: list[EvidenceItem]
+
+    def to_prompt_context(self) -> str:
+        """Render the evidence package into a stable prompt context block."""
+
+        sections: list[str] = []
+        for item in self.items:
+            sections.append(
+                "\n".join(
+                    [
+                        f"[{item.citation_id}] chunk_id={item.chunk_id}",
+                        f"document_id={item.document_id}",
+                        f"chunk_index={item.chunk_index}",
+                        f"sources={','.join(item.sources)}",
+                        item.text,
+                    ]
+                )
+            )
+        return "\n\n".join(sections)

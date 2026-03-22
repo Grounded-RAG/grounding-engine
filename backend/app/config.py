@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     dense_embedding_dimensions: int = 128
     retrieval_candidate_limit: int = 8
     rrf_smoothing_constant: int = 60
+    evidence_package_limit: int = 3
     api_key_salt: str = "replace-in-local-env"
     s3_endpoint_url: AnyHttpUrl = "http://localhost:9000"
     s3_bucket: str = "grounded-documents"
@@ -130,7 +131,11 @@ class Settings(BaseSettings):
             raise ValueError("DENSE_EMBEDDING_DIMENSIONS must be greater than zero.")
         return value
 
-    @field_validator("retrieval_candidate_limit", "rrf_smoothing_constant")
+    @field_validator(
+        "retrieval_candidate_limit",
+        "rrf_smoothing_constant",
+        "evidence_package_limit",
+    )
     @classmethod
     def validate_positive_retrieval_settings(cls, value: int, info: ValidationInfo) -> int:
         """Ensure retrieval limits and fusion constants remain positive."""
