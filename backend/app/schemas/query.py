@@ -18,6 +18,13 @@ class CitationResponse(BaseModel):
     quote: str = Field(min_length=1)
 
 
+class QueryRequest(BaseModel):
+    """Structured request contract for Standard grounded queries."""
+
+    namespace_id: UUID
+    query: str = Field(min_length=1)
+
+
 class GroundedAnswerResponse(BaseModel):
     """Structured answer contract for grounded query responses."""
 
