@@ -158,6 +158,38 @@ async def load_ingestion_job_context(
     return _build_context(job)
 
 
+async def mark_ingestion_job_indexed(
+    *,
+    session: AsyncSession,
+    job_id: uuid.UUID,
+) -> IngestionRunResult:
+    """Mark an ingestion job and document as fully indexed."""
+
+    job = await _get_ingestion_job_with_document(
+        session=session,
+        job_id=job_id,
+        for_update=True,
+    )
+    if job is None:
+        raise IngestionServiceError("Ingestion job not found.")
+    if job.document is None:
+        raise IngestionServiceError("Ingestion job document binding is invalid.")
+
+    job.status = IngestionJobStatus.INDEXED
+    job.completed_at = datetime.now(UTC)
+    job.document.status = DocumentStatus.INDEXED
+
+    await session.commit()
+    await session.refresh(job)
+    return IngestionRunResult(
+        job_id=job.job_id,
+        document_id=job.doc_id,
+        status=job.status,
+        document_status=job.document.status,
+        attempt_count=job.attempt_count,
+    )
+
+
 async def mark_ingestion_job_failed(
     *,
     session: AsyncSession,

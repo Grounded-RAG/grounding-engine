@@ -39,6 +39,20 @@ class DocumentChunk:
             "end_token": self.end_token,
         }
 
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "DocumentChunk":
+        """Build a document chunk from a persisted manifest payload."""
+
+        return cls(
+            chunk_id=str(payload["chunk_id"]),
+            chunk_index=int(payload["chunk_index"]),
+            text=str(payload["text"]),
+            token_count=int(payload["token_count"]),
+            character_count=int(payload["character_count"]),
+            start_token=int(payload["start_token"]),
+            end_token=int(payload["end_token"]),
+        )
+
 
 @dataclass(frozen=True)
 class ChunkManifest:
@@ -58,3 +72,22 @@ class ChunkManifest:
             "chunking_strategy": self.chunking_strategy,
             "chunks": [chunk.to_payload() for chunk in self.chunks],
         }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "ChunkManifest":
+        """Build a chunk manifest from its stored JSON representation."""
+
+        chunks_payload = payload.get("chunks", [])
+        if not isinstance(chunks_payload, list):
+            raise ValueError("Chunk manifest payload must contain a chunk list.")
+
+        return cls(
+            document_id=UUID(str(payload["document_id"])),
+            source_artifact_key=str(payload["source_artifact_key"]),
+            chunking_strategy=str(payload["chunking_strategy"]),
+            chunks=[
+                DocumentChunk.from_payload(chunk_payload)
+                for chunk_payload in chunks_payload
+                if isinstance(chunk_payload, dict)
+            ],
+        )

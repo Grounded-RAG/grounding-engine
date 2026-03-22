@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     document_upload_max_bytes: int = 25 * 1024 * 1024
     chunk_max_tokens: int = 256
     chunk_overlap_tokens: int = 40
+    qdrant_url: AnyHttpUrl = "http://localhost:6333"
+    qdrant_collection: str = "grounded_chunks"
+    dense_embedding_dimensions: int = 128
     api_key_salt: str = "replace-in-local-env"
     s3_endpoint_url: AnyHttpUrl = "http://localhost:9000"
     s3_bucket: str = "grounded-documents"
@@ -104,6 +107,25 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CHUNK_OVERLAP_TOKENS must be smaller than CHUNK_MAX_TOKENS."
             )
+        return value
+
+    @field_validator("qdrant_collection")
+    @classmethod
+    def validate_qdrant_collection(cls, value: str) -> str:
+        """Ensure the Qdrant collection name is not blank."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("QDRANT_COLLECTION must not be empty.")
+        return normalized
+
+    @field_validator("dense_embedding_dimensions")
+    @classmethod
+    def validate_dense_embedding_dimensions(cls, value: int) -> int:
+        """Ensure dense embedding vectors have a positive configured size."""
+
+        if value <= 0:
+            raise ValueError("DENSE_EMBEDDING_DIMENSIONS must be greater than zero.")
         return value
 
     @field_validator("api_key_salt")
