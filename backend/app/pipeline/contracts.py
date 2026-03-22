@@ -162,3 +162,12 @@ class EvidencePackage:
                 )
             )
         return "\n\n".join(sections)
+
+
+@dataclass(frozen=True)
+class GroundedAnswerDraft:
+    """Grounded answer draft produced before final response shaping."""
+
+    answer_text: str
+    cited_evidence_ids: list[str]
+    generator_provider: str
