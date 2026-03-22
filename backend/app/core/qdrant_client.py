@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from uuid import UUID
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
@@ -62,3 +63,39 @@ def upsert_dense_points(
     except Exception as exc:  # pragma: no cover - defensive wrapper for client errors
         raise VectorStoreError("Failed to upsert dense points into Qdrant.") from exc
     return len(points)
+
+
+def search_dense_points(
+    *,
+    query_vector: list[float],
+    tenant_id: UUID,
+    namespace_id: UUID,
+    limit: int,
+) -> list[qdrant_models.ScoredPoint]:
+    """Search dense chunk vectors scoped to one tenant namespace."""
+
+    client = get_qdrant_client()
+    collection_name = get_settings().qdrant_collection
+    query_filter = qdrant_models.Filter(
+        must=[
+            qdrant_models.FieldCondition(
+                key="tenant_id",
+                match=qdrant_models.MatchValue(value=str(tenant_id)),
+            ),
+            qdrant_models.FieldCondition(
+                key="namespace_id",
+                match=qdrant_models.MatchValue(value=str(namespace_id)),
+            ),
+        ]
+    )
+    try:
+        return client.search(
+            collection_name=collection_name,
+            query_vector=query_vector,
+            query_filter=query_filter,
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception as exc:  # pragma: no cover - defensive wrapper for client errors
+        raise VectorStoreError("Failed to search dense points in Qdrant.") from exc
