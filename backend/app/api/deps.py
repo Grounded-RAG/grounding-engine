@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -86,6 +88,12 @@ async def get_tenant_context(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="API key tenant binding is invalid.",
         )
+
+    api_key_record.last_used_at = datetime.now(UTC)
+    try:
+        await session.commit()
+    except SQLAlchemyError:
+        await session.rollback()
 
     bind_tenant_context(
         tenant_id=str(api_key_record.tenant.tenant_id),

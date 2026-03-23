@@ -55,3 +55,4 @@ def test_capabilities_endpoint_returns_mode_and_feature_availability() -> None:
     assert features["conversations"]["enabled"] is True
     assert features["run_history"]["enabled"] is True
     assert features["dashboard"]["enabled"] is True
+    assert features["api_key_management"]["enabled"] is True

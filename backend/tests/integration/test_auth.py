@@ -208,6 +208,31 @@ def test_auth_smoke_returns_resolved_tenant_context(
     }
 
 
+def test_auth_smoke_updates_api_key_last_used_at(
+    auth_client: TestClient,
+    seeded_auth_data: SeededAuthData,
+) -> None:
+    """Successful authentication should update the API key last-used timestamp."""
+
+    response = auth_client.get(
+        "/v1/auth/smoke",
+        headers={"X-API-Key": seeded_auth_data.valid_raw_api_key},
+    )
+
+    assert response.status_code == 200
+
+    with psycopg.connect(_sync_database_url()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "select last_used_at from api_keys where key_id = %s",
+                (seeded_auth_data.valid_key_id,),
+            )
+            row = cursor.fetchone()
+
+    assert row is not None
+    assert row[0] is not None
+
+
 def test_auth_smoke_preserves_request_id_header(
     auth_client: TestClient,
     seeded_auth_data: SeededAuthData,

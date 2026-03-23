@@ -120,9 +120,9 @@ _PRODUCT_FEATURES: tuple[tuple[str, bool, str, str | None], ...] = (
     ),
     (
         "api_key_management",
-        False,
+        True,
         "Managed API key creation and revocation endpoints.",
-        "coming_soon",
+        None,
     ),
 )
 

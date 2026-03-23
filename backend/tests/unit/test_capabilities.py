@@ -104,3 +104,5 @@ def test_capabilities_include_current_and_future_product_shell_features() -> Non
     assert features["run_history"].enabled is True
     assert features["dashboard"].enabled is True
     assert features["dashboard"].availability_reason is None
+    assert features["api_key_management"].enabled is True
+    assert features["api_key_management"].availability_reason is None

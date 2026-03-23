@@ -8,6 +8,7 @@ from app.schemas.agents import (
     AgentResponse,
     AgentUpdateRequest,
 )
+from app.schemas.api_keys import APIKeyCreateRequest, APIKeyCreateResponse, APIKeyResponse
 from app.schemas.auth import AuthSmokeResponse
 from app.schemas.capabilities import (
     CapabilitiesResponse,
@@ -47,6 +48,9 @@ __all__ = [
     "AgentDatasetAttachRequest",
     "AgentResponse",
     "AgentUpdateRequest",
+    "APIKeyCreateRequest",
+    "APIKeyCreateResponse",
+    "APIKeyResponse",
     "CapabilitiesResponse",
     "CitationResponse",
     "ConversationCreateRequest",
