@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 if TYPE_CHECKING:
+    from app.models.agent import Agent
     from app.models.namespace import Namespace
     from app.models.tenant import Tenant
 
@@ -82,4 +83,15 @@ class Workspace(Base):
         ),
         foreign_keys="[Namespace.tenant_id, Namespace.workspace_id]",
         overlaps="tenant,namespaces",
+    )
+    agents: Mapped[list["Agent"]] = relationship(
+        back_populates="workspace",
+        primaryjoin=(
+            "and_("
+            "Workspace.tenant_id == Agent.tenant_id, "
+            "Workspace.workspace_id == Agent.workspace_id"
+            ")"
+        ),
+        foreign_keys="[Agent.tenant_id, Agent.workspace_id]",
+        overlaps="tenant,agents",
     )

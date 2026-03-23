@@ -48,5 +48,6 @@ def test_capabilities_endpoint_returns_mode_and_feature_availability() -> None:
 
     features = {item["key"]: item for item in payload["features"]}
     assert features["document_upload"]["enabled"] is True
-    assert features["agents"]["enabled"] is False
-    assert features["agents"]["availability_reason"] == "coming_soon"
+    assert features["workspaces"]["enabled"] is True
+    assert features["datasets"]["enabled"] is True
+    assert features["agents"]["enabled"] is True

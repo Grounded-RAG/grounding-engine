@@ -96,7 +96,8 @@ def test_capabilities_include_current_and_future_product_shell_features() -> Non
     assert features["document_upload"].enabled is True
     assert features["ingestion_jobs"].enabled is True
     assert features["grounded_query"].enabled is True
-    assert features["agents"].enabled is False
-    assert features["agents"].availability_reason == "coming_soon"
+    assert features["workspaces"].enabled is True
+    assert features["datasets"].enabled is True
+    assert features["agents"].enabled is True
     assert features["dashboard"].enabled is False
     assert features["dashboard"].availability_reason == "coming_soon"

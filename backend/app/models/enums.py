@@ -54,6 +54,13 @@ class UserFacingMode(str, PythonEnum):
     VERIFIED = "verified"
 
 
+class AgentStatus(str, PythonEnum):
+    """Supported lifecycle states for product-facing agents."""
+
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
 class SensitivityLevel(str, PythonEnum):
     """Supported namespace sensitivity levels."""
 

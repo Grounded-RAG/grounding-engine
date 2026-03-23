@@ -78,21 +78,21 @@ _PRODUCT_FEATURES: tuple[tuple[str, bool, str, str | None], ...] = (
     ),
     (
         "workspaces",
-        False,
+        True,
         "Workspace APIs for the product shell.",
-        "coming_soon",
+        None,
     ),
     (
         "datasets",
-        False,
+        True,
         "Dataset management APIs built on top of namespaces.",
-        "coming_soon",
+        None,
     ),
     (
         "agents",
-        False,
+        True,
         "Reusable agents attached to one or more datasets.",
-        "coming_soon",
+        None,
     ),
     (
         "conversations",
@@ -119,6 +119,12 @@ _PRODUCT_FEATURES: tuple[tuple[str, bool, str, str | None], ...] = (
         "coming_soon",
     ),
 )
+
+
+def get_current_supported_modes() -> set[UserFacingMode]:
+    """Return the currently implemented product-facing modes."""
+
+    return set(_IMPLEMENTED_MODES)
 
 
 def _supports_tier(

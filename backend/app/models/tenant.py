@@ -15,6 +15,7 @@ from app.models.enums import ExecutionTier, SubscriptionPlan, sqlalchemy_enum
 
 if TYPE_CHECKING:
     from app.models.api_key import APIKey
+    from app.models.agent import Agent
     from app.models.document import Document
     from app.models.ingestion_job import IngestionJob
     from app.models.namespace import Namespace
@@ -82,4 +83,9 @@ class Tenant(Base):
     workspaces: Mapped[list["Workspace"]] = relationship(
         back_populates="tenant",
         foreign_keys="Workspace.tenant_id",
+    )
+    agents: Mapped[list["Agent"]] = relationship(
+        back_populates="tenant",
+        foreign_keys="Agent.tenant_id",
+        overlaps="workspace",
     )

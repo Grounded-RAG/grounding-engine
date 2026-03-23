@@ -2,9 +2,12 @@
 
 from app.core.database import Base
 from app.models.api_key import APIKey
+from app.models.agent import Agent
+from app.models.agent_dataset import AgentDataset
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunkRecord
 from app.models.enums import (
+    AgentStatus,
     DocumentStatus,
     ExecutionTier,
     FreshnessProfile,
@@ -21,6 +24,9 @@ from app.models.workspace import Workspace
 
 __all__ = [
     "APIKey",
+    "Agent",
+    "AgentDataset",
+    "AgentStatus",
     "Base",
     "Document",
     "DocumentChunkRecord",

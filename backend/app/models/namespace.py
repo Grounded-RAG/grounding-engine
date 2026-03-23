@@ -30,6 +30,7 @@ from app.models.enums import (
 )
 
 if TYPE_CHECKING:
+    from app.models.agent_dataset import AgentDataset
     from app.models.document import Document
     from app.models.query_trace import QueryTrace
     from app.models.tenant import Tenant
@@ -140,4 +141,15 @@ class Namespace(Base):
         ),
         foreign_keys="[QueryTrace.tenant_id, QueryTrace.namespace_id]",
         overlaps="tenant,query_traces",
+    )
+    agent_links: Mapped[list["AgentDataset"]] = relationship(
+        back_populates="dataset",
+        primaryjoin=(
+            "and_("
+            "Namespace.tenant_id == AgentDataset.tenant_id, "
+            "Namespace.namespace_id == AgentDataset.dataset_id"
+            ")"
+        ),
+        foreign_keys="[AgentDataset.tenant_id, AgentDataset.dataset_id]",
+        overlaps="tenant,namespaces,agent,dataset_links",
     )

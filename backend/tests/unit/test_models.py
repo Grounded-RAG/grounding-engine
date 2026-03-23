@@ -6,6 +6,8 @@ from sqlalchemy.orm import configure_mappers
 from app.core.database import Base
 from app.models import (
     APIKey,
+    Agent,
+    AgentDataset,
     Document,
     DocumentChunkRecord,
     IngestionJob,
@@ -23,6 +25,8 @@ def test_model_metadata_registers_all_phase_zero_tables() -> None:
         "tenants",
         "namespaces",
         "workspaces",
+        "agents",
+        "agent_datasets",
         "api_keys",
         "documents",
         "document_chunks",
@@ -170,6 +174,38 @@ def test_workspace_enforces_tenant_scoped_uniqueness() -> None:
     assert "ck_workspaces_slug_non_empty" in check_constraints
 
 
+def test_agent_and_attachment_constraints_are_tenant_safe() -> None:
+    """Agents and agent-dataset attachments should enforce scoped uniqueness."""
+
+    agent_unique_constraints = {
+        constraint.name
+        for constraint in Agent.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    agent_foreign_key_constraints = {
+        constraint.name
+        for constraint in Agent.__table__.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+    attachment_unique_constraints = {
+        constraint.name
+        for constraint in AgentDataset.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    attachment_foreign_key_constraints = {
+        constraint.name
+        for constraint in AgentDataset.__table__.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+
+    assert "uq_agents_workspace_name" in agent_unique_constraints
+    assert "uq_agents_tenant_agent_id" in agent_unique_constraints
+    assert "fk_agents_tenant_workspace" in agent_foreign_key_constraints
+    assert "uq_agent_datasets_tenant_agent_dataset" in attachment_unique_constraints
+    assert "fk_agent_datasets_tenant_agent" in attachment_foreign_key_constraints
+    assert "fk_agent_datasets_tenant_dataset" in attachment_foreign_key_constraints
+
+
 def test_query_trace_exposes_routing_columns() -> None:
     """Query traces should capture routing metadata explicitly."""
 
@@ -196,6 +232,7 @@ def test_tenant_relationships_cover_all_phase_zero_children() -> None:
         "ingestion_jobs",
         "query_traces",
         "workspaces",
+        "agents",
     }
 
 
@@ -258,4 +295,14 @@ def test_enums_persist_design_doc_values() -> None:
         "indexed",
         "failed",
         "dead_letter",
+    ]
+    assert Agent.__table__.c.default_mode.type.enums == [
+        "auto",
+        "instant",
+        "thinking",
+        "verified",
+    ]
+    assert Agent.__table__.c.status.type.enums == [
+        "active",
+        "archived",
     ]
