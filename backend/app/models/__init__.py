@@ -11,6 +11,7 @@ from app.models.enums import (
     IngestionJobStatus,
     SensitivityLevel,
     SubscriptionPlan,
+    UserFacingMode,
 )
 from app.models.ingestion_job import IngestionJob
 from app.models.namespace import Namespace
@@ -32,4 +33,5 @@ __all__ = [
     "SensitivityLevel",
     "SubscriptionPlan",
     "Tenant",
+    "UserFacingMode",
 ]

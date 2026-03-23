@@ -1,4 +1,4 @@
-"""Shared SQLAlchemy enums for persisted domain models."""
+"""Shared domain enums for persisted and product-facing concepts."""
 
 from __future__ import annotations
 
@@ -43,6 +43,15 @@ class ExecutionTier(str, PythonEnum):
     STANDARD = "standard"
     ENTERPRISE = "enterprise"
     CRITICAL = "critical"
+
+
+class UserFacingMode(str, PythonEnum):
+    """Supported product-facing runtime modes."""
+
+    AUTO = "auto"
+    INSTANT = "instant"
+    THINKING = "thinking"
+    VERIFIED = "verified"
 
 
 class SensitivityLevel(str, PythonEnum):
