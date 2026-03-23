@@ -23,6 +23,7 @@ from app.core.database import Base
 
 if TYPE_CHECKING:
     from app.models.agent import Agent
+    from app.models.conversation import Conversation
     from app.models.namespace import Namespace
     from app.models.tenant import Tenant
 
@@ -94,4 +95,15 @@ class Workspace(Base):
         ),
         foreign_keys="[Agent.tenant_id, Agent.workspace_id]",
         overlaps="tenant,agents",
+    )
+    conversations: Mapped[list["Conversation"]] = relationship(
+        back_populates="workspace",
+        primaryjoin=(
+            "and_("
+            "Workspace.tenant_id == Conversation.tenant_id, "
+            "Workspace.workspace_id == Conversation.workspace_id"
+            ")"
+        ),
+        foreign_keys="[Conversation.tenant_id, Conversation.workspace_id]",
+        overlaps="tenant,conversations,agent",
     )

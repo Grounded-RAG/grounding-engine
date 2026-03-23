@@ -96,9 +96,9 @@ _PRODUCT_FEATURES: tuple[tuple[str, bool, str, str | None], ...] = (
     ),
     (
         "conversations",
-        False,
-        "Conversation history and message persistence inside agents.",
-        "coming_soon",
+        True,
+        "Conversation threads and chat history containers inside agents.",
+        None,
     ),
     (
         "run_history",

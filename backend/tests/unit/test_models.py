@@ -8,6 +8,7 @@ from app.models import (
     APIKey,
     Agent,
     AgentDataset,
+    Conversation,
     Document,
     DocumentChunkRecord,
     IngestionJob,
@@ -26,6 +27,7 @@ def test_model_metadata_registers_all_phase_zero_tables() -> None:
         "namespaces",
         "workspaces",
         "agents",
+        "conversations",
         "agent_datasets",
         "api_keys",
         "documents",
@@ -206,6 +208,31 @@ def test_agent_and_attachment_constraints_are_tenant_safe() -> None:
     assert "fk_agent_datasets_tenant_dataset" in attachment_foreign_key_constraints
 
 
+def test_conversation_constraints_are_tenant_safe() -> None:
+    """Conversations should remain scoped to tenant, workspace, and agent."""
+
+    unique_constraints = {
+        constraint.name
+        for constraint in Conversation.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    foreign_key_constraints = {
+        constraint.name
+        for constraint in Conversation.__table__.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+    check_constraints = {
+        constraint.name
+        for constraint in Conversation.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    assert "uq_conversations_tenant_conversation_id" in unique_constraints
+    assert "fk_conversations_tenant_workspace" in foreign_key_constraints
+    assert "fk_conversations_tenant_agent" in foreign_key_constraints
+    assert "ck_conversations_title_non_empty" in check_constraints
+
+
 def test_query_trace_exposes_routing_columns() -> None:
     """Query traces should capture routing metadata explicitly."""
 
@@ -233,6 +260,7 @@ def test_tenant_relationships_cover_all_phase_zero_children() -> None:
         "query_traces",
         "workspaces",
         "agents",
+        "conversations",
     }
 
 

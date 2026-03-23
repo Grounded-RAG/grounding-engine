@@ -4,6 +4,7 @@ from app.core.database import Base
 from app.models.api_key import APIKey
 from app.models.agent import Agent
 from app.models.agent_dataset import AgentDataset
+from app.models.conversation import Conversation
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunkRecord
 from app.models.enums import (
@@ -28,6 +29,7 @@ __all__ = [
     "AgentDataset",
     "AgentStatus",
     "Base",
+    "Conversation",
     "Document",
     "DocumentChunkRecord",
     "DocumentStatus",

@@ -25,6 +25,7 @@ from app.models.enums import AgentStatus, UserFacingMode, sqlalchemy_enum
 
 if TYPE_CHECKING:
     from app.models.agent_dataset import AgentDataset
+    from app.models.conversation import Conversation
     from app.models.tenant import Tenant
     from app.models.workspace import Workspace
 
@@ -133,4 +134,16 @@ class Agent(Base):
         foreign_keys="[AgentDataset.tenant_id, AgentDataset.agent_id]",
         cascade="all, delete-orphan",
         overlaps="tenant,agents,dataset,agent_links",
+    )
+    conversations: Mapped[list["Conversation"]] = relationship(
+        back_populates="agent",
+        primaryjoin=(
+            "and_("
+            "Agent.tenant_id == Conversation.tenant_id, "
+            "Agent.agent_id == Conversation.agent_id"
+            ")"
+        ),
+        foreign_keys="[Conversation.tenant_id, Conversation.agent_id]",
+        overlaps="tenant,conversations,workspace",
+        cascade="all, delete-orphan",
     )

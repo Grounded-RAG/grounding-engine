@@ -12,6 +12,11 @@ from app.schemas.capabilities import (
     FeatureCapabilityResponse,
     ModeCapabilityResponse,
 )
+from app.schemas.conversations import (
+    ConversationCreateRequest,
+    ConversationResponse,
+    ConversationUpdateRequest,
+)
 from app.schemas.datasets import (
     DatasetCreateRequest,
     DatasetDocumentResponse,
@@ -37,6 +42,9 @@ __all__ = [
     "AgentUpdateRequest",
     "CapabilitiesResponse",
     "CitationResponse",
+    "ConversationCreateRequest",
+    "ConversationResponse",
+    "ConversationUpdateRequest",
     "DatasetCreateRequest",
     "DatasetDocumentResponse",
     "DatasetIngestionJobResponse",

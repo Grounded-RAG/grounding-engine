@@ -51,3 +51,4 @@ def test_capabilities_endpoint_returns_mode_and_feature_availability() -> None:
     assert features["workspaces"]["enabled"] is True
     assert features["datasets"]["enabled"] is True
     assert features["agents"]["enabled"] is True
+    assert features["conversations"]["enabled"] is True
