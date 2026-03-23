@@ -61,6 +61,14 @@ class AgentStatus(str, PythonEnum):
     ARCHIVED = "archived"
 
 
+class MessageRole(str, PythonEnum):
+    """Supported persisted roles for conversation messages."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+
+
 class SensitivityLevel(str, PythonEnum):
     """Supported namespace sensitivity levels."""
 

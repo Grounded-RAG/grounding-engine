@@ -12,6 +12,7 @@ from app.models import (
     Document,
     DocumentChunkRecord,
     IngestionJob,
+    Message,
     Namespace,
     QueryTrace,
     Tenant,
@@ -33,6 +34,7 @@ def test_model_metadata_registers_all_phase_zero_tables() -> None:
         "documents",
         "document_chunks",
         "ingestion_jobs",
+        "messages",
         "query_traces",
     }
 
@@ -233,6 +235,30 @@ def test_conversation_constraints_are_tenant_safe() -> None:
     assert "ck_conversations_title_non_empty" in check_constraints
 
 
+def test_message_constraints_are_tenant_safe() -> None:
+    """Messages should remain scoped to tenant and conversation."""
+
+    unique_constraints = {
+        constraint.name
+        for constraint in Message.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    foreign_key_constraints = {
+        constraint.name
+        for constraint in Message.__table__.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+    check_constraints = {
+        constraint.name
+        for constraint in Message.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    assert "uq_messages_tenant_message_id" in unique_constraints
+    assert "fk_messages_tenant_conversation" in foreign_key_constraints
+    assert "ck_messages_content_non_empty" in check_constraints
+
+
 def test_query_trace_exposes_routing_columns() -> None:
     """Query traces should capture routing metadata explicitly."""
 
@@ -261,6 +287,7 @@ def test_tenant_relationships_cover_all_phase_zero_children() -> None:
         "workspaces",
         "agents",
         "conversations",
+        "messages",
     }
 
 
@@ -333,4 +360,9 @@ def test_enums_persist_design_doc_values() -> None:
     assert Agent.__table__.c.status.type.enums == [
         "active",
         "archived",
+    ]
+    assert Message.__table__.c.role.type.enums == [
+        "user",
+        "assistant",
+        "system",
     ]

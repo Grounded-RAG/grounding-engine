@@ -13,11 +13,13 @@ from app.models.enums import (
     ExecutionTier,
     FreshnessProfile,
     IngestionJobStatus,
+    MessageRole,
     SensitivityLevel,
     SubscriptionPlan,
     UserFacingMode,
 )
 from app.models.ingestion_job import IngestionJob
+from app.models.message import Message
 from app.models.namespace import Namespace
 from app.models.query_trace import QueryTrace
 from app.models.tenant import Tenant
@@ -37,6 +39,8 @@ __all__ = [
     "FreshnessProfile",
     "IngestionJob",
     "IngestionJobStatus",
+    "Message",
+    "MessageRole",
     "Namespace",
     "QueryTrace",
     "SensitivityLevel",

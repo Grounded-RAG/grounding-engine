@@ -27,6 +27,7 @@ from app.schemas.datasets import (
 )
 from app.schemas.documents import DocumentUploadResponse, IngestionJobStatusResponse
 from app.schemas.health import HealthCheckResponse, ReadinessResponse
+from app.schemas.messages import MessageResponse
 from app.schemas.query import CitationResponse, GroundedAnswerResponse, QueryRequest
 from app.schemas.workspaces import (
     WorkspaceCreateRequest,
@@ -57,6 +58,7 @@ __all__ = [
     "HealthCheckResponse",
     "IngestionJobStatusResponse",
     "ModeCapabilityResponse",
+    "MessageResponse",
     "QueryRequest",
     "ReadinessResponse",
     "WorkspaceCreateRequest",

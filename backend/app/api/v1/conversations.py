@@ -14,6 +14,7 @@ from app.schemas.conversations import (
     ConversationResponse,
     ConversationUpdateRequest,
 )
+from app.schemas.messages import MessageResponse
 from app.services.conversations import (
     ConversationServiceError,
     create_conversation,
@@ -21,6 +22,7 @@ from app.services.conversations import (
     list_agent_conversations,
     update_conversation,
 )
+from app.services.messages import MessageServiceError, list_conversation_messages
 
 
 router = APIRouter()
@@ -125,3 +127,26 @@ async def update_conversation_route(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return ConversationResponse.model_validate(conversation)
+
+
+@router.get(
+    "/conversations/{conversation_id}/messages",
+    response_model=list[MessageResponse],
+)
+async def list_conversation_messages_route(
+    conversation_id: UUID,
+    tenant_context: TenantContext = Depends(get_tenant_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[MessageResponse]:
+    """List messages for one tenant-scoped conversation."""
+
+    try:
+        messages = await list_conversation_messages(
+            session=session,
+            tenant_id=tenant_context.tenant_id,
+            conversation_id=conversation_id,
+        )
+    except MessageServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return [MessageResponse.model_validate(message) for message in messages]
