@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from app.models.ingestion_job import IngestionJob
     from app.models.namespace import Namespace
     from app.models.query_trace import QueryTrace
+    from app.models.workspace import Workspace
 
 
 class Tenant(Base):
@@ -77,4 +78,8 @@ class Tenant(Base):
         back_populates="tenant",
         foreign_keys="QueryTrace.tenant_id",
         overlaps="namespace,query_traces",
+    )
+    workspaces: Mapped[list["Workspace"]] = relationship(
+        back_populates="tenant",
+        foreign_keys="Workspace.tenant_id",
     )

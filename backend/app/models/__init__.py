@@ -17,6 +17,7 @@ from app.models.ingestion_job import IngestionJob
 from app.models.namespace import Namespace
 from app.models.query_trace import QueryTrace
 from app.models.tenant import Tenant
+from app.models.workspace import Workspace
 
 __all__ = [
     "APIKey",
@@ -34,4 +35,5 @@ __all__ = [
     "SubscriptionPlan",
     "Tenant",
     "UserFacingMode",
+    "Workspace",
 ]

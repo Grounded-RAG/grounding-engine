@@ -9,6 +9,11 @@ from app.schemas.capabilities import (
 from app.schemas.documents import DocumentUploadResponse, IngestionJobStatusResponse
 from app.schemas.health import HealthCheckResponse, ReadinessResponse
 from app.schemas.query import CitationResponse, GroundedAnswerResponse, QueryRequest
+from app.schemas.workspaces import (
+    WorkspaceCreateRequest,
+    WorkspaceResponse,
+    WorkspaceUpdateRequest,
+)
 
 __all__ = [
     "AuthSmokeResponse",
@@ -22,4 +27,7 @@ __all__ = [
     "ModeCapabilityResponse",
     "QueryRequest",
     "ReadinessResponse",
+    "WorkspaceCreateRequest",
+    "WorkspaceResponse",
+    "WorkspaceUpdateRequest",
 ]

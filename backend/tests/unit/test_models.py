@@ -12,6 +12,7 @@ from app.models import (
     Namespace,
     QueryTrace,
     Tenant,
+    Workspace,
 )
 
 
@@ -21,6 +22,7 @@ def test_model_metadata_registers_all_phase_zero_tables() -> None:
     assert set(Base.metadata.tables) >= {
         "tenants",
         "namespaces",
+        "workspaces",
         "api_keys",
         "documents",
         "document_chunks",
@@ -138,6 +140,26 @@ def test_namespace_exposes_policy_columns() -> None:
     } <= column_names
 
 
+def test_workspace_enforces_tenant_scoped_uniqueness() -> None:
+    """Workspaces should be unique per tenant by both name and slug."""
+
+    unique_constraints = {
+        constraint.name
+        for constraint in Workspace.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    check_constraints = {
+        constraint.name
+        for constraint in Workspace.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    assert "uq_workspaces_tenant_name" in unique_constraints
+    assert "uq_workspaces_tenant_slug" in unique_constraints
+    assert "ck_workspaces_name_non_empty" in check_constraints
+    assert "ck_workspaces_slug_non_empty" in check_constraints
+
+
 def test_query_trace_exposes_routing_columns() -> None:
     """Query traces should capture routing metadata explicitly."""
 
@@ -163,6 +185,7 @@ def test_tenant_relationships_cover_all_phase_zero_children() -> None:
         "documents",
         "ingestion_jobs",
         "query_traces",
+        "workspaces",
     }
 
 
