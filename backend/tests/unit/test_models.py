@@ -49,6 +49,14 @@ def test_namespace_enforces_tenant_scoped_uniqueness() -> None:
     assert "uq_namespaces_tenant_name" in unique_constraints
     assert "uq_namespaces_tenant_namespace_id" in unique_constraints
 
+    foreign_key_constraints = {
+        constraint.name
+        for constraint in Namespace.__table__.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+
+    assert "fk_namespaces_tenant_workspace" in foreign_key_constraints
+
 
 def test_document_enforces_tenant_safe_constraints() -> None:
     """Documents should enforce checksum uniqueness and tenant-namespace pairing."""
@@ -132,6 +140,7 @@ def test_namespace_exposes_policy_columns() -> None:
     column_names = set(Namespace.__table__.c.keys())
 
     assert {
+        "workspace_id",
         "domain",
         "freshness_profile",
         "min_execution_tier",
@@ -156,6 +165,7 @@ def test_workspace_enforces_tenant_scoped_uniqueness() -> None:
 
     assert "uq_workspaces_tenant_name" in unique_constraints
     assert "uq_workspaces_tenant_slug" in unique_constraints
+    assert "uq_workspaces_tenant_workspace_id" in unique_constraints
     assert "ck_workspaces_name_non_empty" in check_constraints
     assert "ck_workspaces_slug_non_empty" in check_constraints
 

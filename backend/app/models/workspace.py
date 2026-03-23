@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 if TYPE_CHECKING:
+    from app.models.namespace import Namespace
     from app.models.tenant import Tenant
 
 
@@ -34,6 +35,11 @@ class Workspace(Base):
         CheckConstraint("char_length(slug) > 0", name="ck_workspaces_slug_non_empty"),
         UniqueConstraint("tenant_id", "name", name="uq_workspaces_tenant_name"),
         UniqueConstraint("tenant_id", "slug", name="uq_workspaces_tenant_slug"),
+        UniqueConstraint(
+            "tenant_id",
+            "workspace_id",
+            name="uq_workspaces_tenant_workspace_id",
+        ),
         Index("ix_workspaces_tenant_id", "tenant_id"),
     )
 
@@ -65,4 +71,15 @@ class Workspace(Base):
     tenant: Mapped["Tenant"] = relationship(
         back_populates="workspaces",
         foreign_keys=[tenant_id],
+    )
+    namespaces: Mapped[list["Namespace"]] = relationship(
+        back_populates="workspace",
+        primaryjoin=(
+            "and_("
+            "Workspace.tenant_id == Namespace.tenant_id, "
+            "Workspace.workspace_id == Namespace.workspace_id"
+            ")"
+        ),
+        foreign_keys="[Namespace.tenant_id, Namespace.workspace_id]",
+        overlaps="tenant,namespaces",
     )

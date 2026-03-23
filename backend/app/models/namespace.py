@@ -11,6 +11,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     UniqueConstraint,
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from app.models.document import Document
     from app.models.query_trace import QueryTrace
     from app.models.tenant import Tenant
+    from app.models.workspace import Workspace
 
 
 class Namespace(Base):
@@ -46,7 +48,13 @@ class Namespace(Base):
             "namespace_id",
             name="uq_namespaces_tenant_namespace_id",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "workspace_id"],
+            ["workspaces.tenant_id", "workspaces.workspace_id"],
+            name="fk_namespaces_tenant_workspace",
+        ),
         Index("ix_namespaces_tenant_id", "tenant_id"),
+        Index("ix_namespaces_workspace_id", "workspace_id"),
     )
 
     namespace_id: Mapped[uuid.UUID] = mapped_column(
@@ -59,6 +67,7 @@ class Namespace(Base):
         ForeignKey("tenants.tenant_id"),
         nullable=False,
     )
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     domain: Mapped[str] = mapped_column(
         String(100),
@@ -98,6 +107,17 @@ class Namespace(Base):
     tenant: Mapped["Tenant"] = relationship(
         back_populates="namespaces",
         foreign_keys=[tenant_id],
+    )
+    workspace: Mapped["Workspace | None"] = relationship(
+        back_populates="namespaces",
+        primaryjoin=(
+            "and_("
+            "Namespace.tenant_id == Workspace.tenant_id, "
+            "Namespace.workspace_id == Workspace.workspace_id"
+            ")"
+        ),
+        foreign_keys="[Namespace.tenant_id, Namespace.workspace_id]",
+        overlaps="tenant,namespaces",
     )
     documents: Mapped[list["Document"]] = relationship(
         back_populates="namespace",
