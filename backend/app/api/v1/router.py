@@ -10,6 +10,7 @@ from app.api.v1.datasets import router as datasets_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.health import router as health_router
 from app.api.v1.query import router as query_router
+from app.api.v1.runs import router as runs_router
 from app.api.v1.workspaces import router as workspaces_router
 
 
@@ -22,4 +23,5 @@ api_router.include_router(conversations_router, prefix="/v1", tags=["conversatio
 api_router.include_router(datasets_router, prefix="/v1", tags=["datasets"])
 api_router.include_router(documents_router, prefix="/v1", tags=["documents"])
 api_router.include_router(query_router, prefix="/v1", tags=["query"])
+api_router.include_router(runs_router, prefix="/v1", tags=["runs"])
 api_router.include_router(workspaces_router, prefix="/v1", tags=["workspaces"])

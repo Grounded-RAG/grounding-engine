@@ -102,9 +102,9 @@ _PRODUCT_FEATURES: tuple[tuple[str, bool, str, str | None], ...] = (
     ),
     (
         "run_history",
-        False,
+        True,
         "Run inspection and answer history over persisted query traces.",
-        "coming_soon",
+        None,
     ),
     (
         "dashboard",

@@ -29,6 +29,7 @@ from app.schemas.documents import DocumentUploadResponse, IngestionJobStatusResp
 from app.schemas.health import HealthCheckResponse, ReadinessResponse
 from app.schemas.messages import MessageResponse
 from app.schemas.query import CitationResponse, GroundedAnswerResponse, QueryRequest
+from app.schemas.runs import RunResponse
 from app.schemas.workspaces import (
     WorkspaceCreateRequest,
     WorkspaceResponse,
@@ -61,6 +62,7 @@ __all__ = [
     "MessageResponse",
     "QueryRequest",
     "ReadinessResponse",
+    "RunResponse",
     "WorkspaceCreateRequest",
     "WorkspaceResponse",
     "WorkspaceUpdateRequest",

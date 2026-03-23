@@ -253,11 +253,12 @@ def seeded_message_data(message_auth_env: str) -> SeededMessageData:
                     created_by_api_key_id,
                     run_id,
                     role,
-                    content
+                    content,
+                    created_at
                 )
                 values
-                (%s, %s, %s, %s, %s, %s, %s),
-                (%s, %s, %s, %s, %s, %s, %s)
+                (%s, %s, %s, %s, %s, %s, %s, now() - interval '1 minute'),
+                (%s, %s, %s, %s, %s, %s, %s, now())
                 """,
                 (
                     user_message_id,
