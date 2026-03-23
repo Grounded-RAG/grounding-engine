@@ -54,3 +54,4 @@ def test_capabilities_endpoint_returns_mode_and_feature_availability() -> None:
     assert features["agent_chat"]["enabled"] is True
     assert features["conversations"]["enabled"] is True
     assert features["run_history"]["enabled"] is True
+    assert features["dashboard"]["enabled"] is True

@@ -102,5 +102,5 @@ def test_capabilities_include_current_and_future_product_shell_features() -> Non
     assert features["agent_chat"].enabled is True
     assert features["conversations"].enabled is True
     assert features["run_history"].enabled is True
-    assert features["dashboard"].enabled is False
-    assert features["dashboard"].availability_reason == "coming_soon"
+    assert features["dashboard"].enabled is True
+    assert features["dashboard"].availability_reason is None

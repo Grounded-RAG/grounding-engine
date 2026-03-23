@@ -114,9 +114,9 @@ _PRODUCT_FEATURES: tuple[tuple[str, bool, str, str | None], ...] = (
     ),
     (
         "dashboard",
-        False,
+        True,
         "Dashboard summary and recent activity APIs.",
-        "coming_soon",
+        None,
     ),
     (
         "api_key_management",

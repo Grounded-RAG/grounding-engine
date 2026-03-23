@@ -19,6 +19,7 @@ from app.schemas.conversations import (
     ConversationResponse,
     ConversationUpdateRequest,
 )
+from app.schemas.dashboard import DashboardRecentJobResponse, DashboardSummaryResponse
 from app.schemas.datasets import (
     DatasetCreateRequest,
     DatasetDocumentResponse,
@@ -51,6 +52,8 @@ __all__ = [
     "ConversationCreateRequest",
     "ConversationResponse",
     "ConversationUpdateRequest",
+    "DashboardRecentJobResponse",
+    "DashboardSummaryResponse",
     "DatasetCreateRequest",
     "DatasetDocumentResponse",
     "DatasetIngestionJobResponse",
