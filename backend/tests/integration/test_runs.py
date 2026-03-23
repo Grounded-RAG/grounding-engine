@@ -25,6 +25,8 @@ class SeededRunData:
     tenant_id: uuid.UUID
     dataset_id: uuid.UUID
     secondary_dataset_id: uuid.UUID
+    agent_id: uuid.UUID
+    conversation_id: uuid.UUID
     newest_run_id: uuid.UUID
     older_run_id: uuid.UUID
     foreign_run_id: uuid.UUID
@@ -64,9 +66,15 @@ def seeded_run_data(run_auth_env: str) -> SeededRunData:
 
     tenant_id = uuid.uuid4()
     foreign_tenant_id = uuid.uuid4()
+    workspace_id = uuid.uuid4()
+    foreign_workspace_id = uuid.uuid4()
     dataset_id = uuid.uuid4()
     secondary_dataset_id = uuid.uuid4()
     foreign_dataset_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    foreign_agent_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    foreign_conversation_id = uuid.uuid4()
     newest_run_id = uuid.uuid4()
     older_run_id = uuid.uuid4()
     foreign_run_id = uuid.uuid4()
@@ -118,6 +126,32 @@ def seeded_run_data(run_auth_env: str) -> SeededRunData:
             )
             cursor.execute(
                 """
+                insert into workspaces (
+                    workspace_id,
+                    tenant_id,
+                    name,
+                    slug,
+                    description
+                )
+                values
+                (%s, %s, %s, %s, %s),
+                (%s, %s, %s, %s, %s)
+                """,
+                (
+                    workspace_id,
+                    tenant_id,
+                    "Operations",
+                    "operations",
+                    "Primary workspace",
+                    foreign_workspace_id,
+                    foreign_tenant_id,
+                    "Foreign",
+                    "foreign",
+                    "Foreign workspace",
+                ),
+            )
+            cursor.execute(
+                """
                 insert into api_keys (
                     key_id,
                     tenant_id,
@@ -138,6 +172,7 @@ def seeded_run_data(run_auth_env: str) -> SeededRunData:
                 insert into namespaces (
                     namespace_id,
                     tenant_id,
+                    workspace_id,
                     name,
                     domain,
                     sensitivity_level,
@@ -147,13 +182,14 @@ def seeded_run_data(run_auth_env: str) -> SeededRunData:
                     allow_internal_model_retrieval
                 )
                 values
-                (%s, %s, %s, %s, %s, %s, %s, %s, %s),
-                (%s, %s, %s, %s, %s, %s, %s, %s, %s),
-                (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s),
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s),
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     dataset_id,
                     tenant_id,
+                    workspace_id,
                     "operations-dataset",
                     "general",
                     SensitivityLevel.INTERNAL.value,
@@ -163,6 +199,7 @@ def seeded_run_data(run_auth_env: str) -> SeededRunData:
                     False,
                     secondary_dataset_id,
                     tenant_id,
+                    workspace_id,
                     "research-dataset",
                     "research",
                     SensitivityLevel.INTERNAL.value,
@@ -172,6 +209,7 @@ def seeded_run_data(run_auth_env: str) -> SeededRunData:
                     False,
                     foreign_dataset_id,
                     foreign_tenant_id,
+                    foreign_workspace_id,
                     "foreign-dataset",
                     "general",
                     SensitivityLevel.INTERNAL.value,
@@ -183,10 +221,83 @@ def seeded_run_data(run_auth_env: str) -> SeededRunData:
             )
             cursor.execute(
                 """
+                insert into agents (
+                    agent_id,
+                    tenant_id,
+                    workspace_id,
+                    name,
+                    description,
+                    system_instructions,
+                    default_mode,
+                    allowed_modes,
+                    status
+                )
+                values
+                (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s),
+                (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+                """,
+                (
+                    agent_id,
+                    tenant_id,
+                    workspace_id,
+                    "Ops Assistant",
+                    "Grounded ops agent",
+                    "",
+                    "auto",
+                    json.dumps(["auto", "instant"]),
+                    "active",
+                    foreign_agent_id,
+                    foreign_tenant_id,
+                    foreign_workspace_id,
+                    "Foreign Assistant",
+                    "Foreign only",
+                    "",
+                    "auto",
+                    json.dumps(["auto", "instant"]),
+                    "active",
+                ),
+            )
+            cursor.execute(
+                """
+                insert into conversations (
+                    conversation_id,
+                    tenant_id,
+                    workspace_id,
+                    agent_id,
+                    created_by_api_key_id,
+                    title,
+                    last_used_mode
+                )
+                values
+                (%s, %s, %s, %s, %s, %s, %s),
+                (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    conversation_id,
+                    tenant_id,
+                    workspace_id,
+                    agent_id,
+                    None,
+                    "Ops Thread",
+                    "instant",
+                    foreign_conversation_id,
+                    foreign_tenant_id,
+                    foreign_workspace_id,
+                    foreign_agent_id,
+                    None,
+                    "Foreign Thread",
+                    "auto",
+                ),
+            )
+            cursor.execute(
+                """
                 insert into query_traces (
                     trace_id,
                     tenant_id,
                     namespace_id,
+                    agent_id,
+                    conversation_id,
+                    selected_mode,
                     requested_tier,
                     router_recommendation,
                     effective_tier,
@@ -207,14 +318,17 @@ def seeded_run_data(run_auth_env: str) -> SeededRunData:
                     created_at
                 )
                 values
-                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, now()),
-                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, now() - interval '1 minute'),
-                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, now())
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, now()),
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, now() - interval '1 minute'),
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, now())
                 """,
                 (
                     newest_run_id,
                     tenant_id,
                     dataset_id,
+                    agent_id,
+                    conversation_id,
+                    "instant",
                     ExecutionTier.STANDARD.value,
                     ExecutionTier.STANDARD.value,
                     ExecutionTier.STANDARD.value,
@@ -245,6 +359,9 @@ def seeded_run_data(run_auth_env: str) -> SeededRunData:
                     older_run_id,
                     tenant_id,
                     secondary_dataset_id,
+                    None,
+                    None,
+                    None,
                     ExecutionTier.STANDARD.value,
                     ExecutionTier.STANDARD.value,
                     ExecutionTier.STANDARD.value,
@@ -265,6 +382,9 @@ def seeded_run_data(run_auth_env: str) -> SeededRunData:
                     foreign_run_id,
                     foreign_tenant_id,
                     foreign_dataset_id,
+                    foreign_agent_id,
+                    foreign_conversation_id,
+                    "auto",
                     ExecutionTier.STANDARD.value,
                     ExecutionTier.STANDARD.value,
                     ExecutionTier.STANDARD.value,
@@ -289,6 +409,8 @@ def seeded_run_data(run_auth_env: str) -> SeededRunData:
         tenant_id=tenant_id,
         dataset_id=dataset_id,
         secondary_dataset_id=secondary_dataset_id,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
         newest_run_id=newest_run_id,
         older_run_id=older_run_id,
         foreign_run_id=foreign_run_id,
@@ -302,7 +424,19 @@ def seeded_run_data(run_auth_env: str) -> SeededRunData:
                 (tenant_id, foreign_tenant_id),
             )
             cursor.execute(
+                "delete from conversations where tenant_id in (%s, %s)",
+                (tenant_id, foreign_tenant_id),
+            )
+            cursor.execute(
+                "delete from agents where tenant_id in (%s, %s)",
+                (tenant_id, foreign_tenant_id),
+            )
+            cursor.execute(
                 "delete from namespaces where tenant_id in (%s, %s)",
+                (tenant_id, foreign_tenant_id),
+            )
+            cursor.execute(
+                "delete from workspaces where tenant_id in (%s, %s)",
                 (tenant_id, foreign_tenant_id),
             )
             cursor.execute(
@@ -343,9 +477,12 @@ def test_run_list_returns_recent_runs_and_supports_dataset_filter(
         str(seeded_run_data.older_run_id),
     ]
     assert payload[0]["dataset_id"] == str(seeded_run_data.dataset_id)
+    assert payload[0]["agent_id"] == str(seeded_run_data.agent_id)
+    assert payload[0]["conversation_id"] == str(seeded_run_data.conversation_id)
+    assert payload[0]["selected_mode"] == "instant"
     assert payload[0]["verification_status"] == "passed"
-    assert payload[0]["selected_mode"] is None
     assert payload[1]["dataset_id"] == str(seeded_run_data.secondary_dataset_id)
+    assert payload[1]["selected_mode"] is None
     assert payload[1]["verification_status"] == "degraded"
 
     filtered_response = run_client.get(
@@ -390,6 +527,9 @@ def test_run_get_returns_structured_run_details(
     payload = response.json()
     assert payload["run_id"] == str(seeded_run_data.newest_run_id)
     assert payload["dataset_id"] == str(seeded_run_data.dataset_id)
+    assert payload["agent_id"] == str(seeded_run_data.agent_id)
+    assert payload["conversation_id"] == str(seeded_run_data.conversation_id)
+    assert payload["selected_mode"] == "instant"
     assert payload["requested_tier"] == "standard"
     assert payload["effective_tier"] == "standard"
     assert payload["query"] == "What is the maintenance window?"

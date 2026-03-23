@@ -34,14 +34,9 @@ def _verification_status_for_trace(trace: QueryTrace) -> str:
 
 
 def _selected_mode_for_trace(trace: QueryTrace) -> UserFacingMode | None:
-    """Map current trace data to a user-facing mode when possible.
+    """Map the persisted trace mode into the product-facing run contract."""
 
-    Direct dataset queries do not capture a selected product mode yet, so this
-    remains nullable until agent-chat writes start filling it in later steps.
-    """
-
-    del trace
-    return None
+    return trace.selected_mode
 
 
 def _build_run_response(trace: QueryTrace) -> RunResponse:
@@ -50,6 +45,8 @@ def _build_run_response(trace: QueryTrace) -> RunResponse:
     return RunResponse(
         run_id=trace.trace_id,
         dataset_id=trace.namespace_id,
+        agent_id=trace.agent_id,
+        conversation_id=trace.conversation_id,
         requested_tier=trace.requested_tier,
         router_recommendation=trace.router_recommendation,
         effective_tier=trace.effective_tier,

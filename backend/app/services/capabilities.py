@@ -95,6 +95,12 @@ _PRODUCT_FEATURES: tuple[tuple[str, bool, str, str | None], ...] = (
         None,
     ),
     (
+        "agent_chat",
+        True,
+        "Grounded agent chat over one attached dataset through the current Standard path.",
+        None,
+    ),
+    (
         "conversations",
         True,
         "Conversation threads and stored message history inside agents.",

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import pytest
 
 from app.api.deps import TenantContext
-from app.models import ExecutionTier
+from app.models import ExecutionTier, UserFacingMode
 from app.pipeline.contracts import EvidencePackage, FusedRetrievedChunk, RetrievedChunk
 from app.schemas.query import QueryRequest
 from app.services.query import QueryServiceError, execute_standard_query
@@ -141,9 +141,52 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
     assert trace.tenant_id == tenant_context.tenant_id
     assert trace.namespace_id == namespace_id
     assert trace.requested_tier is ExecutionTier.STANDARD
+    assert trace.agent_id is None
+    assert trace.conversation_id is None
+    assert trace.selected_mode is None
     assert trace.generator_provider == "local-grounded-v1"
     assert trace.retrieved_chunk_ids == ["chunk-1"]
     assert trace.selected_evidence_ids == ["chunk-1"]
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_persists_agent_chat_context(monkeypatch) -> None:
+    """Agent chat should persist agent, conversation, and selected mode on the trace."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="How does grounded work?")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        del kwargs
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+        selected_mode=UserFacingMode.INSTANT,
+    )
+
+    trace = session.added[0]
+    assert trace.agent_id == agent_id
+    assert trace.conversation_id == conversation_id
+    assert trace.selected_mode is UserFacingMode.INSTANT
 
 
 @pytest.mark.asyncio()

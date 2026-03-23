@@ -1,6 +1,8 @@
 """API schema package."""
 
 from app.schemas.agents import (
+    AgentChatRequest,
+    AgentChatResponse,
     AgentCreateRequest,
     AgentDatasetAttachRequest,
     AgentResponse,
@@ -38,6 +40,8 @@ from app.schemas.workspaces import (
 
 __all__ = [
     "AuthSmokeResponse",
+    "AgentChatRequest",
+    "AgentChatResponse",
     "AgentCreateRequest",
     "AgentDatasetAttachRequest",
     "AgentResponse",

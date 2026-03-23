@@ -10,11 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import TenantContext, get_tenant_context
 from app.core.database import get_db_session
 from app.schemas.agents import (
+    AgentChatRequest,
+    AgentChatResponse,
     AgentCreateRequest,
     AgentDatasetAttachRequest,
     AgentResponse,
     AgentUpdateRequest,
 )
+from app.services.agent_chat import AgentChatServiceError, execute_agent_chat_turn
 from app.services.agents import (
     AgentServiceError,
     attach_dataset_to_agent,
@@ -174,3 +177,28 @@ async def detach_dataset_from_agent_route(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/agents/{agent_id}/chat", response_model=AgentChatResponse)
+async def chat_with_agent_route(
+    agent_id: UUID,
+    chat_request: AgentChatRequest,
+    response: Response,
+    tenant_context: TenantContext = Depends(get_tenant_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> AgentChatResponse:
+    """Execute one grounded chat turn for an agent conversation."""
+
+    try:
+        chat_response = await execute_agent_chat_turn(
+            session=session,
+            tenant_context=tenant_context,
+            agent_id=agent_id,
+            chat_request=chat_request,
+        )
+    except AgentChatServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    response.headers["X-Run-Id"] = str(chat_response.run_id)
+    response.headers["X-Trace-Id"] = str(chat_response.run_id)
+    return chat_response

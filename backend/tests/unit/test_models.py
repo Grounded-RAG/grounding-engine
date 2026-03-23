@@ -109,6 +109,16 @@ def test_query_trace_has_guardrail_constraints() -> None:
     assert "ck_query_traces_overall_confidence" in check_constraints
     assert "ck_query_traces_total_latency_non_negative" in check_constraints
 
+    foreign_key_constraints = {
+        constraint.name
+        for constraint in QueryTrace.__table__.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+
+    assert "fk_query_traces_tenant_namespace" in foreign_key_constraints
+    assert "fk_query_traces_tenant_agent" in foreign_key_constraints
+    assert "fk_query_traces_tenant_conversation" in foreign_key_constraints
+
 
 def test_document_chunk_record_has_sparse_index_constraints() -> None:
     """Document chunk rows should enforce tenant-safe sparse indexing invariants."""
@@ -266,6 +276,9 @@ def test_query_trace_exposes_routing_columns() -> None:
 
     assert {
         "namespace_id",
+        "agent_id",
+        "conversation_id",
+        "selected_mode",
         "requested_tier",
         "router_recommendation",
         "effective_tier",
@@ -336,6 +349,12 @@ def test_enums_persist_design_doc_values() -> None:
         "standard",
         "enterprise",
         "critical",
+    ]
+    assert QueryTrace.__table__.c.selected_mode.type.enums == [
+        "auto",
+        "instant",
+        "thinking",
+        "verified",
     ]
     assert Document.__table__.c.status.type.enums == [
         "uploaded",

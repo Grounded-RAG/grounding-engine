@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext
 from app.core.llm_client import GroundedGenerationError
-from app.models import ExecutionTier, Namespace, QueryTrace
+from app.models import ExecutionTier, Namespace, QueryTrace, UserFacingMode
 from app.schemas.query import GroundedAnswerResponse, QueryRequest
 from app.services.evidence import package_evidence
 from app.services.generation import generate_answer_from_evidence
@@ -74,12 +74,18 @@ async def _persist_query_trace(
     stage_latencies_ms: dict[str, int],
     total_latency_ms: int,
     generator_provider: str,
+    agent_id: uuid.UUID | None = None,
+    conversation_id: uuid.UUID | None = None,
+    selected_mode: UserFacingMode | None = None,
 ) -> QueryTrace:
     """Persist one Standard query trace for later debugging and evaluation."""
 
     trace = QueryTrace(
         tenant_id=tenant_context.tenant_id,
         namespace_id=query_request.namespace_id,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+        selected_mode=selected_mode,
         requested_tier=ExecutionTier.STANDARD,
         router_recommendation=ExecutionTier.STANDARD,
         effective_tier=ExecutionTier.STANDARD,
@@ -142,6 +148,9 @@ async def execute_standard_query(
     session: AsyncSession,
     tenant_context: TenantContext,
     query_request: QueryRequest,
+    agent_id: uuid.UUID | None = None,
+    conversation_id: uuid.UUID | None = None,
+    selected_mode: UserFacingMode | None = None,
 ) -> QueryExecutionResult:
     """Run the Standard query path and persist a trace for the result."""
 
@@ -222,6 +231,9 @@ async def execute_standard_query(
         stage_latencies_ms=stage_latencies_ms,
         total_latency_ms=int((time.perf_counter() - started_at) * 1000),
         generator_provider=generator_provider,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+        selected_mode=selected_mode,
     )
     trace_ms = int((time.perf_counter() - trace_started) * 1000)
 

@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.models.enums import AgentStatus, UserFacingMode
+from app.schemas.query import GroundedAnswerResponse
 
 
 class AgentCreateRequest(BaseModel):
@@ -52,3 +53,24 @@ class AgentResponse(BaseModel):
     dataset_ids: list[UUID]
     created_at: datetime
     updated_at: datetime
+
+
+class AgentChatRequest(BaseModel):
+    """Request used to send one message through an agent conversation."""
+
+    conversation_id: UUID
+    message: str = Field(min_length=1)
+    mode: UserFacingMode | None = None
+    dataset_id: UUID | None = None
+
+
+class AgentChatResponse(GroundedAnswerResponse):
+    """Grounded chat response returned from one agent conversation turn."""
+
+    agent_id: UUID
+    conversation_id: UUID
+    dataset_id: UUID
+    mode: UserFacingMode
+    run_id: UUID
+    user_message_id: UUID
+    assistant_message_id: UUID
