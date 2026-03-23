@@ -14,6 +14,7 @@ platform that is stronger than a normal demo-style RAG system.
 Grounded separates three things that are easy to confuse:
 
 - **subscription plans**: what the customer pays for
+- **user-facing modes**: how the product explains speed vs depth
 - **execution tiers**: how deeply the system processes a query
 - **namespace policy**: rules attached to a dataset or workspace
 
@@ -52,6 +53,18 @@ They control:
 - whether reranking runs
 - whether verification loops run
 - whether corrective web fallback is allowed
+
+### User-facing modes
+
+These are the labels the product should show in the chat or agent UI:
+
+- `Auto`
+- `Instant`
+- `Thinking`
+- `Verified`
+
+These are not new backend tiers. They are the UX layer that maps onto
+Standard, Enterprise, and Critical execution behavior.
 
 ## What Each Tier Means
 
@@ -138,6 +151,7 @@ This creates the policy guardrails.
 When a query comes in, the system decides the execution tier using:
 
 - namespace minimum tier
+- agent default tier
 - router recommendation
 - user-requested tier, if allowed
 - plan entitlement limits
@@ -146,6 +160,28 @@ So:
 
 - **data belongs to tenant + namespace**
 - **queries are routed to a tier**
+
+## Product Model
+
+The product should grow around these objects:
+
+- organization
+- workspace
+- dataset
+- agent
+- conversation
+- run
+
+Today the backend already supports the foundation through:
+
+- tenant
+- namespace
+- document
+- ingestion job
+- query trace
+
+The next product-layer work is to expose datasets, agents, chats, and runs more
+directly.
 
 ## Why Grounded Is Better Than Normal RAG
 
@@ -206,6 +242,22 @@ Standard Tier:
 - grounded generation
 - structured citations
 - traces
+
+### Phase 1.5
+
+Product Shell:
+
+- organization/workspace shell
+- dataset management
+- agent model
+- conversation history
+- run history and answer inspection
+- user-facing mode selector
+- product flow around Standard tier
+
+Detailed backend delivery order for this phase is documented in:
+
+- `docs/PHASE_1_5_BACKEND_PLAN.md`
 
 ### Phase 2
 

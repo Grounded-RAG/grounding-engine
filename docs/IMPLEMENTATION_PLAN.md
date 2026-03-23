@@ -18,6 +18,11 @@ change them:
 - web fallback: Critical only
 - internal model retrieval: Critical only
 - UX default: Auto (Recommended)
+- user-facing modes:
+  - Auto
+  - Instant
+  - Thinking
+  - Verified
 - user-facing subscription plans:
   - Free Plan
   - Pro Plan
@@ -139,6 +144,67 @@ Why it belongs here:
 - this is the first usable product slice
 - it proves the platform can ingest, retrieve, and answer safely
 
+### Phase 1.5 - Product Shell and Workspace Model
+
+**Goal:** turn the Standard backend into a clear product shell built around
+datasets, agents, chats, and user-facing modes.
+
+Included capabilities:
+
+- product object model:
+  - organization
+  - workspace
+  - dataset
+  - agent
+  - conversation
+  - run
+- dataset management APIs and views
+- document listing and ingestion monitoring for datasets
+- agent creation and update APIs
+- conversation and message persistence
+- run history and answer inspection views
+- user-facing mode selector:
+  - Auto
+  - Instant
+  - Thinking
+  - Verified
+- mapping from user-facing modes to internal execution tiers
+- usage and entitlement display by plan
+
+Explicitly excluded:
+
+- Enterprise retrieval upgrades themselves
+- Critical verification features
+- uncontrolled workflow automation
+
+Exit criteria:
+
+- users can work through:
+  - organization
+  - workspace
+  - dataset
+  - agent
+  - chat
+- agents can have default modes and attached datasets
+- conversations and runs are persisted
+- users can inspect answer citations and run metadata
+
+Evaluation criteria:
+
+- product flow is understandable without backend vocabulary
+- the app clearly communicates datasets, agents, modes, and answer provenance
+
+Why it belongs here:
+
+- the Standard backend exists, but the full product shell still needs to be
+  layered on top of it before the system feels complete to end users
+- this phase should happen before or alongside deeper Enterprise work so the UX
+  does not outrun the product model
+
+Detailed backend build order for this phase:
+
+- `docs/PHASE_1_5_BACKEND_PLAN.md`
+
 ### Phase 2 - Enterprise Tier
 
 **Goal:** improve retrieval precision without destabilizing the Standard path.
@@ -236,7 +302,20 @@ Why it belongs here:
 | Degraded response and abstention | Phase 1 |
 | Trace, audit, and evaluation | Phase 0 and Phase 1 |
 
-## 4. What We Build First
+## 4. Product-Layer Roadmap
+
+| Product capability | Phase |
+|---|---|
+| Organization / workspace shell | Phase 1.5 |
+| Dataset management | Phase 1.5 |
+| Agent model | Phase 1.5 |
+| Conversation history | Phase 1.5 |
+| Run history and answer inspection | Phase 1.5 |
+| User-facing mode selector | Phase 1.5 |
+| Enterprise retrieval upgrades | Phase 2 |
+| Critical verification and corrective behaviors | Phase 3 |
+
+## 5. What We Build First
 
 Use this order now that the Phase 0 alignment fixes are complete:
 
@@ -250,12 +329,19 @@ Use this order now that the Phase 0 alignment fixes are complete:
 8. persist traces and degraded reasons
 9. ship Standard query APIs
 
-Only after Standard is stable:
+Now that Standard is stable:
 
-10. add Enterprise planner, temporal scoring, and reranking
-11. add Critical verification, corrective retrieval, and internal model retrieval
+10. add the product shell:
+    - dataset management
+    - agent model
+    - conversations and runs
+    - user-facing modes
+    - capability and dashboard endpoints
+    - API key management
+11. add Enterprise planner, temporal scoring, and reranking
+12. add Critical verification, corrective retrieval, and internal model retrieval
 
-## 5. Phase 0 Alignment Fixes
+## 6. Phase 0 Alignment Fixes
 
 Completed before Phase 1 coding starts:
 
@@ -266,7 +352,7 @@ Completed before Phase 1 coding starts:
 - traces now expose explicit routing fields
 - docs and setup were aligned to the new model
 
-## 6. Definition of Done for Architecture Alignment
+## 7. Definition of Done for Architecture Alignment
 
 The planning layer is ready when:
 

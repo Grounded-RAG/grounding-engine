@@ -66,13 +66,59 @@ The effective tier is the final tier selected for a specific query after the
 system considers:
 
 - namespace minimum tier
+- agent default tier
 - router recommendation
 - user-requested tier
 - plan entitlement limits
 
 ---
 
-## 3. Product Model
+## 3. Product Object Model
+
+Grounded should be explained through a clear product model, not only through
+backend runtime concepts.
+
+### Organization
+
+Top-level customer boundary for billing, members, API keys, and policy.
+
+### Workspace
+
+A project area inside an organization that groups datasets, agents, and chats.
+
+### Dataset
+
+A collection of uploaded documents plus ingestion and retrieval policy.
+
+### Agent
+
+A reusable assistant configured on top of one or more datasets.
+
+### Conversation
+
+A single chat thread inside an agent.
+
+### Run
+
+The execution record behind one assistant answer, including citations, mode
+used, and trace metadata.
+
+### Current backend mapping
+
+Today the backend foundation maps to these product ideas like this:
+
+- `Tenant` -> future organization
+- `Namespace` -> future dataset
+- `Document` -> uploaded file
+- `IngestionJob` -> ingestion progress
+- `QueryTrace` -> run / audit trail
+
+Workspaces, agents, conversations, and runs as separate product objects are the
+next product-layer additions.
+
+---
+
+## 4. Product Model
 
 ### Subscription plans vs execution tiers
 
@@ -110,9 +156,31 @@ Examples:
 - "Recommended: Enterprise because the query is ambiguous and freshness-sensitive."
 - "Critical required because the namespace minimum tier is Critical."
 
+### User-facing mode system
+
+The product should expose friendly mode labels in the chat and agent UX:
+
+- `Auto`
+- `Instant`
+- `Thinking`
+- `Verified`
+
+These are not new backend tiers. They are product-facing labels that map to the
+internal execution tiers:
+
+| User-facing mode | Typical internal tier | Meaning |
+|---|---|---|
+| Auto | Routed dynamically | Let Grounded choose the best path |
+| Instant | Standard | Fast everyday grounded answers |
+| Thinking | Enterprise | Deeper retrieval for harder questions |
+| Verified | Critical | Highest-assurance mode for sensitive work |
+
+This keeps the backend architecture clear while making the UX feel more natural
+to users.
+
 ---
 
-## 4. Capability Architecture
+## 5. Capability Architecture
 
 Grounded should be described using capability groups, not a single flat list of
 "stages." Some capabilities happen during ingestion, some during query-time
@@ -157,7 +225,7 @@ execution, and some are system-wide guarantees.
 
 ---
 
-## 5. Tier Activation Matrix
+## 6. Tier Activation Matrix
 
 | Capability | Standard Tier | Enterprise Tier | Critical Tier |
 |---|---|---|---|
@@ -207,7 +275,7 @@ execution, and some are system-wide guarantees.
 
 ---
 
-## 6. Basic RAG vs Grounded Standard
+## 7. Basic RAG vs Grounded Standard
 
 | Basic/native RAG | Grounded Standard Tier |
 |---|---|
@@ -224,7 +292,7 @@ build on.
 
 ---
 
-## 7. Routing Decision Flow
+## 8. Routing Decision Flow
 
 ### Upload-time decisions
 
@@ -248,18 +316,20 @@ When a query arrives, the system:
 
 1. authenticates the tenant
 2. resolves the namespace and namespace policy
-3. inspects query complexity and risk
-4. produces a router recommendation
-5. applies any user override that the plan allows
-6. computes the effective tier
-7. runs the query in that tier
-8. records the tier decision and reason in the trace
+3. resolves the agent configuration if the query came through an agent
+4. inspects query complexity and risk
+5. produces a router recommendation
+6. applies any user override or selected mode that the plan allows
+7. computes the effective tier
+8. runs the query in that tier
+9. records the tier decision and reason in the trace
 
 ### Effective tier rule
 
 ```text
 effective_tier = highest of:
   - namespace minimum tier
+  - agent default tier
   - router recommendation
   - user requested tier
 
@@ -274,7 +344,7 @@ the required safety level.
 
 ---
 
-## 8. Query and Ingestion Flows
+## 9. Query and Ingestion Flows
 
 ### Ingestion flow
 
@@ -296,6 +366,7 @@ Upload
 ```text
 User query
   -> authentication
+  -> optional agent resolution
   -> namespace policy lookup
   -> router recommendation
   -> effective tier decision
@@ -312,7 +383,7 @@ User query
 
 ---
 
-## 9. Worked Examples
+## 10. Worked Examples
 
 ### Example 1: Simple internal policy query
 
@@ -338,6 +409,7 @@ precision needed.
 ### Example 3: High-stakes legal query
 
 - Namespace policy: `minimum_tier = critical`
+- Agent default mode: `Verified`
 - Query: "Is clause 8 still enforceable under the latest regulation?"
 - Router recommendation: Critical
 - User mode: Auto
@@ -347,7 +419,26 @@ Reason: high-risk legal question, strong freshness and verification requirements
 
 ---
 
-## 10. Phase 0 Alignment Results
+## 11. Product Experience Summary
+
+The ideal Grounded product flow is:
+
+1. user joins an organization
+2. user opens a workspace
+3. user creates a dataset
+4. user uploads documents
+5. user creates an agent on top of one or more datasets
+6. user starts a new chat inside that agent
+7. user asks a question in `Auto`, `Instant`, `Thinking`, or `Verified`
+8. system computes the effective tier safely
+9. user receives an answer with citations and run details
+
+This is the recommended direction for the full product shell around the current
+backend foundation.
+
+---
+
+## 12. Phase 0 Alignment Results
 
 The backend foundation has now been aligned with this architecture.
 

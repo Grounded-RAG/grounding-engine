@@ -18,6 +18,7 @@ Grounded is designed around one core rule:
 The platform is intentionally built around four separate concepts:
 
 - **subscription plans**: what a customer is allowed to use
+- **user-facing modes**: how the product explains speed vs depth vs assurance
 - **execution tiers**: how deeply a specific query is processed
 - **namespace policy**: dataset-level safety and routing rules
 - **runtime routing**: how the system chooses the final tier for a query
@@ -52,6 +53,15 @@ These are runtime modes:
 
 The default experience should be `Auto (Recommended)`, with manual tier
 selection only when the user's plan allows it.
+
+### User-facing modes
+
+These are product UX labels that can map to the internal execution tiers:
+
+- `Auto`
+- `Instant`
+- `Thinking`
+- `Verified`
 
 ## What Each Execution Tier Includes
 
@@ -110,9 +120,12 @@ precision and higher-assurance verification on top of that baseline.
 
 ## Key Documents
 
+- `docs/PRODUCT_FLOW.md`: product objects, user journey, agents, chats, and user-facing modes
 - `docs/SOLUTION_ARCHITECTURE.md`: canonical product and capability model
 - `docs/SYSTEM_DESIGN.md`: product model, runtime flow, routing, and tier activation
 - `docs/IMPLEMENTATION_PLAN.md`: delivery phases from foundation to Critical tier
+- `docs/PHASE_1_5_BACKEND_PLAN.md`: concrete backend-first plan for workspaces, datasets, agents, chats, runs, and capabilities
+- `docs/STANDARD_TIER_PHASE1.md`: detailed description of the implemented Standard tier and Phase 1 flow
 - `docs/ENGINEERING_GUARDRAILS.md`: rules that keep implementation aligned with the architecture
 - `docs/BRIEF.md`: overview of the solution and roadmap
 - `docs/proposal.md`: project proposal

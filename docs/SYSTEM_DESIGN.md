@@ -9,6 +9,7 @@ execution model that balances speed, accuracy, and verification depth.
 This design intentionally separates:
 
 - subscription plans
+- user-facing modes
 - execution tiers
 - namespace policy
 - runtime routing
@@ -51,9 +52,23 @@ should cover:
 The final tier selected for a query after the system considers:
 
 - namespace minimum tier
+- agent default tier
 - router recommendation
 - user requested tier
 - plan entitlement limit
+
+### `mode`
+
+The product-facing label used in the UI to express depth and assurance. Grounded
+should expose:
+
+- `Auto`
+- `Instant`
+- `Thinking`
+- `Verified`
+
+These labels map to the internal execution tiers but are not the same thing as
+the tiers themselves.
 
 ### Important rule
 
@@ -98,9 +113,60 @@ Execution tiers answer:
 The same Pro tenant may run one query in Standard and another in Enterprise.
 The same Enterprise tenant may run many low-risk queries in Standard for speed.
 
+### 3.3 Why modes are not tiers
+
+Modes are the UX layer. Tiers are the runtime layer.
+
+Recommended mapping:
+
+| Mode | Typical tier | Product meaning |
+|---|---|---|
+| Auto | Routed dynamically | Let Grounded choose |
+| Instant | Standard | Fast everyday grounded answers |
+| Thinking | Enterprise | Deeper retrieval for harder queries |
+| Verified | Critical | Highest-assurance mode |
+
+This lets the UI feel intuitive without weakening the backend safety model.
+
 ---
 
-## 4. Capability Architecture
+## 4. Product Object Model
+
+The product should be built around these top-level objects:
+
+- Organization
+- Workspace
+- Dataset
+- Agent
+- Conversation
+- Run
+- API Key
+
+### Recommended meanings
+
+- Organization: billing, members, API keys, policy
+- Workspace: project area inside the organization
+- Dataset: uploaded documents plus ingestion/retrieval policy
+- Agent: reusable assistant attached to one or more datasets
+- Conversation: one chat thread inside an agent
+- Run: one execution record behind one answer
+
+### Current backend mapping
+
+Today the backend foundation maps to the future product shell like this:
+
+- `Tenant` -> future organization
+- `Namespace` -> future dataset
+- `Document` -> uploaded file
+- `IngestionJob` -> ingestion progress
+- `QueryTrace` -> run / audit record
+
+Workspaces, agents, conversations, and run objects as first-class product
+resources are the next layer to add.
+
+---
+
+## 5. Capability Architecture
 
 Not every capability is a single linear runtime stage. Grounded is better
 understood as a grouped capability architecture.
@@ -136,7 +202,7 @@ understood as a grouped capability architecture.
 
 ---
 
-## 5. Technology Defaults
+## 6. Technology Defaults
 
 These defaults remain the reference design until explicitly changed:
 
@@ -151,7 +217,7 @@ These defaults remain the reference design until explicitly changed:
 
 ---
 
-## 6. Runtime Execution Model
+## 7. Runtime Execution Model
 
 ### 6.1 Upload and ingestion flow
 
@@ -189,6 +255,7 @@ query into one tier.
 ```text
 User query
   -> authentication
+  -> optional agent resolution
   -> namespace policy lookup
   -> router recommendation
   -> effective tier decision
@@ -209,18 +276,20 @@ At query time the system should:
 
 1. authenticate tenant access
 2. resolve namespace policy
-3. inspect query complexity, ambiguity, and risk
-4. produce a router recommendation
-5. accept a user override if the plan allows it
-6. compute the effective tier
-7. execute the tier path
-8. record `tier_used` and `routing_reason` in the trace
+3. resolve the agent if the query came through an agent
+4. inspect query complexity, ambiguity, and risk
+5. produce a router recommendation
+6. accept a user override or mode selection if the plan allows it
+7. compute the effective tier
+8. execute the tier path
+9. record `tier_used` and `routing_reason` in the trace
 
 ### Routing rule
 
 ```text
 effective_tier = highest of:
   - namespace minimum tier
+  - agent default tier
   - router recommendation
   - user requested tier
 
@@ -250,7 +319,7 @@ Every query trace should capture at least:
 
 ---
 
-## 7. Tier Activation Model
+## 8. Tier Activation Model
 
 ### 7.1 Standard Tier
 
@@ -336,7 +405,7 @@ Everything in Enterprise, plus:
 
 ---
 
-## 8. Data Ownership and Policy Model
+## 9. Data Ownership and Policy Model
 
 ### Tenant
 
@@ -371,7 +440,30 @@ to Standard, Enterprise, or Critical.
 
 ---
 
-## 9. API and Schema Implications
+## 10. Product Flow Implications
+
+The intended product journey is:
+
+1. create or join organization
+2. open workspace
+3. create dataset
+4. upload data
+5. ingest and monitor readiness
+6. create agent
+7. open conversation inside that agent
+8. choose mode or leave on Auto
+9. receive grounded answer with citations and run details
+
+This means future backend work should treat:
+
+- datasets as the source of truth
+- agents as behavior attached to datasets
+- conversations as history inside agents
+- runs as answer-level execution records
+
+---
+
+## 11. API and Schema Implications
 
 The backend now applies these schema and contract rules:
 
@@ -384,9 +476,17 @@ The backend now applies these schema and contract rules:
   - tier used
   - why the tier was chosen
 
+Future schema additions should include:
+
+- workspace model
+- agent model
+- conversation model
+- message model
+- run model or run view on top of query traces
+
 ---
 
-## 10. Phase 0 Alignment Results
+## 12. Phase 0 Alignment Results
 
 The architecture-driven Phase 0 follow-ups are now in place:
 
@@ -397,18 +497,20 @@ The architecture-driven Phase 0 follow-ups are now in place:
 - query traces now support routing-specific metadata
 - README and core docs now match the final architecture vocabulary
 
-The remaining work starts in Phase 1. It no longer depends on resolving these
-schema or terminology issues first.
+The remaining work now continues from Phase 1 into the product-shell and higher
+tier phases.
 
 ---
 
-## 11. Design Principles
+## 13. Design Principles
 
 1. Keep subscription plans and execution tiers separate.
-2. Treat namespace policy as the safety floor.
-3. Use auto-routing by default.
-4. Allow manual override only within entitlement limits.
-5. Never silently downgrade below the required safety level.
-6. Keep Standard strong, narrow, and dependable.
-7. Gate advanced behavior behind evaluation and policy.
-8. Make every important decision traceable.
+2. Keep user-facing modes separate from internal tiers.
+3. Treat datasets as the source of truth.
+4. Treat namespace policy as the safety floor.
+5. Use auto-routing by default.
+6. Allow manual override only within entitlement limits.
+7. Never silently downgrade below the required safety level.
+8. Keep Standard strong, narrow, and dependable.
+9. Gate advanced behavior behind evaluation and policy.
+10. Make every important decision traceable.
