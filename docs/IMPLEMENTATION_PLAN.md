@@ -243,6 +243,10 @@ Why it belongs here:
 
 - these are quality uplift features, not baseline requirements
 
+Detailed Phase 2 delivery plan:
+
+- `docs/PHASE_2_ENTERPRISE_PLAN.md`
+
 ### Phase 3 - Critical Tier
 
 **Goal:** add the highest-assurance path for difficult and high-risk queries.
@@ -331,15 +335,13 @@ Use this order now that the Phase 0 alignment fixes are complete:
 
 Now that Standard is stable:
 
-10. add the product shell:
-    - dataset management
-    - agent model
-    - conversations and runs
-    - user-facing modes
-    - capability and dashboard endpoints
-    - API key management
-11. add Enterprise planner, temporal scoring, and reranking
-12. add Critical verification, corrective retrieval, and internal model retrieval
+10. keep the product shell aligned with backend contracts:
+    - datasets, agents, conversations, runs, and API keys stay stable
+    - `Auto` and `Instant` stay live
+    - `Thinking` and `Verified` stay honest and clearly unavailable until implemented
+11. add Enterprise planner, temporal scoring, reranking, and semantic chunking evaluation
+12. activate `thinking` through the Enterprise path only after evaluation wins
+13. add Critical verification, corrective retrieval, and internal model retrieval
 
 ## 6. Phase 0 Alignment Fixes
 

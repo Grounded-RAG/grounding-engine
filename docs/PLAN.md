@@ -64,18 +64,26 @@ The architecture-alignment follow-ups are now complete:
 
 ## Backend Next Step
 
-The next concrete backend phase is `Phase 1.5`.
+The next concrete backend phase is `Phase 2`.
 
-Build order:
+Current delivered state:
 
-1. capabilities and user-facing mode APIs
-2. workspace model
-3. dataset APIs over namespaces
-4. agent model
-5. conversations and messages
-6. run history APIs over query traces
-7. agent chat on top of the Standard engine
-8. dashboard and API key management
+1. Phase 1 Standard backend is complete
+2. Phase 1.5 product-shell backend is complete
+3. the frontend shell is now integrated against the current backend contracts
+
+Phase 2 build order:
+
+1. planner / query transformation for eligible queries
+2. temporal and freshness scoring
+3. reranking
+4. semantic chunking experiment behind flags and evaluation
+5. `thinking` mode activation on top of the Enterprise path
+6. Enterprise benchmarks and evaluation gates
+
+Detailed Phase 2 plan:
+
+- `docs/PHASE_2_ENTERPRISE_PLAN.md`
 
 ## Team Rule
 

@@ -17,5 +17,4 @@ coverage/
 .vscode/
 *.egg-info/
 .DS_Store
-/docs
 
