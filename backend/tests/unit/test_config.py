@@ -45,3 +45,41 @@ def test_settings_require_non_empty_api_key_salt() -> None:
 
     with pytest.raises(ValidationError):
         Settings(api_key_salt="   ")
+
+
+def test_settings_reject_placeholder_api_key_salt_outside_dev() -> None:
+    """Production-like environments should not accept the public placeholder salt."""
+
+    with pytest.raises(ValidationError):
+        Settings(app_env="production", api_key_salt="replace-in-local-env")
+
+
+def test_settings_reject_non_positive_upload_limit() -> None:
+    """Upload limits should fail validation when they are not positive."""
+
+    with pytest.raises(ValidationError):
+        Settings(document_upload_max_bytes=0)
+
+
+def test_settings_reject_chunk_overlap_greater_than_window() -> None:
+    """Chunk overlap should stay smaller than the chunk window size."""
+
+    with pytest.raises(ValidationError):
+        Settings(chunk_max_tokens=8, chunk_overlap_tokens=8)
+
+
+def test_settings_reject_blank_qdrant_collection() -> None:
+    """Dense index collection names should not be blank."""
+
+    with pytest.raises(ValidationError):
+        Settings(qdrant_collection="   ")
+
+
+def test_settings_reject_non_positive_retrieval_settings() -> None:
+    """Retrieval limits and fusion constants must be positive."""
+
+    with pytest.raises(ValidationError):
+        Settings(retrieval_candidate_limit=0)
+
+    with pytest.raises(ValidationError):
+        Settings(rrf_smoothing_constant=0)

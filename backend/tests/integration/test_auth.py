@@ -17,7 +17,7 @@ from app.core.database import dispose_database
 from app.core.security import hash_api_key
 from app.core.telemetry import REQUEST_ID_HEADER
 from app.main import create_app
-from app.models import PlanTier
+from app.models import ExecutionTier, SubscriptionPlan
 
 
 @dataclass(frozen=True)
@@ -76,16 +76,18 @@ def seeded_auth_data(auth_env: str) -> SeededAuthData:
                 insert into tenants (
                     tenant_id,
                     name,
-                    plan_tier,
+                    subscription_plan,
+                    max_execution_tier,
                     default_policy,
                     retention_days
                 )
-                values (%s, %s, %s, %s::jsonb, %s)
+                values (%s, %s, %s, %s, %s::jsonb, %s)
                 """,
                 (
                     tenant_id,
                     tenant_name,
-                    PlanTier.STANDARD.value,
+                    SubscriptionPlan.FREE.value,
+                    ExecutionTier.STANDARD.value,
                     json.dumps({"tier": "standard"}),
                     365,
                 ),
@@ -199,10 +201,36 @@ def test_auth_smoke_returns_resolved_tenant_context(
         "status": "authenticated",
         "tenant_id": str(seeded_auth_data.tenant_id),
         "tenant_name": seeded_auth_data.tenant_name,
-        "plan_tier": "standard",
+        "subscription_plan": "free",
+        "max_execution_tier": "standard",
         "api_key_id": str(seeded_auth_data.valid_key_id),
         "api_key_label": "integration-valid",
     }
+
+
+def test_auth_smoke_updates_api_key_last_used_at(
+    auth_client: TestClient,
+    seeded_auth_data: SeededAuthData,
+) -> None:
+    """Successful authentication should update the API key last-used timestamp."""
+
+    response = auth_client.get(
+        "/v1/auth/smoke",
+        headers={"X-API-Key": seeded_auth_data.valid_raw_api_key},
+    )
+
+    assert response.status_code == 200
+
+    with psycopg.connect(_sync_database_url()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "select last_used_at from api_keys where key_id = %s",
+                (seeded_auth_data.valid_key_id,),
+            )
+            row = cursor.fetchone()
+
+    assert row is not None
+    assert row[0] is not None
 
 
 def test_auth_smoke_preserves_request_id_header(

@@ -1,4 +1,3 @@
-/docs
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -18,3 +17,4 @@ coverage/
 .vscode/
 *.egg-info/
 .DS_Store
+

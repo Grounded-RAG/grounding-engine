@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     alembic_database_url: str = (
         "postgresql+psycopg://grounded:grounded@localhost:5433/grounded"
     )
+    document_upload_max_bytes: int = 25 * 1024 * 1024
+    ingestion_autorun_enabled: bool = True
+    chunk_max_tokens: int = 256
+    chunk_overlap_tokens: int = 40
+    qdrant_url: AnyHttpUrl = "http://localhost:6333"
+    qdrant_collection: str = "grounded_chunks"
+    dense_embedding_dimensions: int = 128
+    retrieval_candidate_limit: int = 8
+    rrf_smoothing_constant: int = 60
+    evidence_package_limit: int = 3
     api_key_salt: str = "replace-in-local-env"
     s3_endpoint_url: AnyHttpUrl = "http://localhost:9000"
     s3_bucket: str = "grounded-documents"
@@ -71,14 +81,89 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("document_upload_max_bytes")
+    @classmethod
+    def validate_document_upload_max_bytes(cls, value: int) -> int:
+        """Ensure the upload size limit is a positive number of bytes."""
+
+        if value <= 0:
+            raise ValueError("DOCUMENT_UPLOAD_MAX_BYTES must be greater than zero.")
+        return value
+
+    @field_validator("chunk_max_tokens")
+    @classmethod
+    def validate_chunk_max_tokens(cls, value: int) -> int:
+        """Ensure chunk token windows are positive."""
+
+        if value <= 0:
+            raise ValueError("CHUNK_MAX_TOKENS must be greater than zero.")
+        return value
+
+    @field_validator("chunk_overlap_tokens")
+    @classmethod
+    def validate_chunk_overlap_tokens(cls, value: int, info: ValidationInfo) -> int:
+        """Ensure chunk overlap stays non-negative and below the window size."""
+
+        if value < 0:
+            raise ValueError("CHUNK_OVERLAP_TOKENS must not be negative.")
+        max_tokens = info.data.get("chunk_max_tokens")
+        if isinstance(max_tokens, int) and value >= max_tokens:
+            raise ValueError(
+                "CHUNK_OVERLAP_TOKENS must be smaller than CHUNK_MAX_TOKENS."
+            )
+        return value
+
+    @field_validator("qdrant_collection")
+    @classmethod
+    def validate_qdrant_collection(cls, value: str) -> str:
+        """Ensure the Qdrant collection name is not blank."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("QDRANT_COLLECTION must not be empty.")
+        return normalized
+
+    @field_validator("dense_embedding_dimensions")
+    @classmethod
+    def validate_dense_embedding_dimensions(cls, value: int) -> int:
+        """Ensure dense embedding vectors have a positive configured size."""
+
+        if value <= 0:
+            raise ValueError("DENSE_EMBEDDING_DIMENSIONS must be greater than zero.")
+        return value
+
+    @field_validator(
+        "retrieval_candidate_limit",
+        "rrf_smoothing_constant",
+        "evidence_package_limit",
+    )
+    @classmethod
+    def validate_positive_retrieval_settings(cls, value: int, info: ValidationInfo) -> int:
+        """Ensure retrieval limits and fusion constants remain positive."""
+
+        if value <= 0:
+            raise ValueError(f"{info.field_name.upper()} must be greater than zero.")
+        return value
+
     @field_validator("api_key_salt")
     @classmethod
-    def validate_api_key_salt(cls, value: str) -> str:
-        """Ensure the API key salt is not empty."""
+    def validate_api_key_salt(cls, value: str, info: ValidationInfo) -> str:
+        """Ensure the API key salt is not empty or an unsafe placeholder."""
 
-        if not value.strip():
+        normalized = value.strip()
+        if not normalized:
             raise ValueError("API_KEY_SALT must not be empty.")
-        return value
+
+        app_env = (info.data.get("app_env") or "development").lower()
+        if normalized == "replace-in-local-env" and app_env not in {
+            "development",
+            "test",
+        }:
+            raise ValueError(
+                "API_KEY_SALT must be set to a secure non-default value outside "
+                "development and test."
+            )
+        return normalized
 
     @field_validator("s3_bucket", "s3_access_key", "s3_secret_key")
     @classmethod

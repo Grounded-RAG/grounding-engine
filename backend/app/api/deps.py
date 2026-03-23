@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -15,7 +17,7 @@ from app.config import get_settings
 from app.core.database import get_db_session
 from app.core.security import hash_api_key
 from app.core.telemetry import bind_tenant_context
-from app.models import APIKey, PlanTier
+from app.models import APIKey, ExecutionTier, SubscriptionPlan
 
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -28,7 +30,8 @@ class TenantContext:
 
     tenant_id: UUID
     tenant_name: str
-    plan_tier: PlanTier
+    subscription_plan: SubscriptionPlan
+    max_execution_tier: ExecutionTier
     api_key_id: UUID
     api_key_label: str
 
@@ -39,7 +42,6 @@ def _unauthorized(detail: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=detail,
-        headers={"WWW-Authenticate": "Bearer"},
     )
 
 
@@ -87,6 +89,12 @@ async def get_tenant_context(
             detail="API key tenant binding is invalid.",
         )
 
+    api_key_record.last_used_at = datetime.now(UTC)
+    try:
+        await session.commit()
+    except SQLAlchemyError:
+        await session.rollback()
+
     bind_tenant_context(
         tenant_id=str(api_key_record.tenant.tenant_id),
         api_key_id=str(api_key_record.key_id),
@@ -96,7 +104,8 @@ async def get_tenant_context(
     return TenantContext(
         tenant_id=api_key_record.tenant.tenant_id,
         tenant_name=api_key_record.tenant.name,
-        plan_tier=api_key_record.tenant.plan_tier,
+        subscription_plan=api_key_record.tenant.subscription_plan,
+        max_execution_tier=api_key_record.tenant.max_execution_tier,
         api_key_id=api_key_record.key_id,
         api_key_label=api_key_record.label,
     )

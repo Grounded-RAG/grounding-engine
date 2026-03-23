@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    and_,
     BigInteger,
     CheckConstraint,
     DateTime,
@@ -35,7 +36,12 @@ class Document(Base):
 
     __tablename__ = "documents"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "checksum", name="uq_documents_tenant_checksum"),
+        UniqueConstraint(
+            "tenant_id",
+            "namespace_id",
+            "checksum",
+            name="uq_documents_tenant_namespace_checksum",
+        ),
         UniqueConstraint("tenant_id", "doc_id", name="uq_documents_tenant_doc_id"),
         ForeignKeyConstraint(
             ["tenant_id", "namespace_id"],
@@ -63,7 +69,6 @@ class Document(Base):
     )
     namespace_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("namespaces.namespace_id"),
         nullable=False,
     )
     object_key: Mapped[str] = mapped_column(Text, nullable=False)
@@ -87,12 +92,27 @@ class Document(Base):
     tenant: Mapped["Tenant"] = relationship(
         back_populates="documents",
         foreign_keys=[tenant_id],
+        overlaps="documents,namespace",
     )
     namespace: Mapped["Namespace"] = relationship(
         back_populates="documents",
-        foreign_keys=[namespace_id],
+        primaryjoin=(
+            "and_("
+            "Document.tenant_id == Namespace.tenant_id, "
+            "Document.namespace_id == Namespace.namespace_id"
+            ")"
+        ),
+        foreign_keys="[Document.tenant_id, Document.namespace_id]",
+        overlaps="tenant,documents",
     )
     ingestion_jobs: Mapped[list["IngestionJob"]] = relationship(
         back_populates="document",
-        foreign_keys="IngestionJob.doc_id",
+        primaryjoin=(
+            "and_("
+            "Document.tenant_id == IngestionJob.tenant_id, "
+            "Document.doc_id == IngestionJob.doc_id"
+            ")"
+        ),
+        foreign_keys="[IngestionJob.tenant_id, IngestionJob.doc_id]",
+        overlaps="tenant,document,ingestion_jobs",
     )

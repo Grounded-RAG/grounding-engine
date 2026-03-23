@@ -16,7 +16,7 @@ test-foundation:
 	python -m pytest backend/tests/unit/test_config.py backend/tests/unit/test_database.py backend/tests/unit/test_alembic_config.py backend/tests/unit/test_models.py backend/tests/unit/test_security.py backend/tests/unit/test_storage.py backend/tests/integration/test_health.py backend/tests/integration/test_auth.py backend/tests/integration/test_telemetry.py
 
 compile:
-	python -m compileall backend/app backend/tests
+	python -m compileall backend/app backend/tests backend/alembic
 
 lint: compile
 

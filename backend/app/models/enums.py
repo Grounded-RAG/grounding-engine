@@ -1,4 +1,4 @@
-"""Shared SQLAlchemy enums for persisted domain models."""
+"""Shared domain enums for persisted and product-facing concepts."""
 
 from __future__ import annotations
 
@@ -28,12 +28,45 @@ def sqlalchemy_enum(enum_cls: type[EnumType], *, name: str) -> SQLAlchemyEnum:
     )
 
 
-class PlanTier(str, PythonEnum):
-    """Supported tenant and query tiers."""
+class SubscriptionPlan(str, PythonEnum):
+    """Supported product and billing plans."""
+
+    FREE = "free"
+    PRO = "pro"
+    BUSINESS = "business"
+    ENTERPRISE = "enterprise"
+
+
+class ExecutionTier(str, PythonEnum):
+    """Supported runtime execution tiers."""
 
     STANDARD = "standard"
     ENTERPRISE = "enterprise"
     CRITICAL = "critical"
+
+
+class UserFacingMode(str, PythonEnum):
+    """Supported product-facing runtime modes."""
+
+    AUTO = "auto"
+    INSTANT = "instant"
+    THINKING = "thinking"
+    VERIFIED = "verified"
+
+
+class AgentStatus(str, PythonEnum):
+    """Supported lifecycle states for product-facing agents."""
+
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class MessageRole(str, PythonEnum):
+    """Supported persisted roles for conversation messages."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
 
 
 class SensitivityLevel(str, PythonEnum):
@@ -43,6 +76,14 @@ class SensitivityLevel(str, PythonEnum):
     INTERNAL = "internal"
     CONFIDENTIAL = "confidential"
     RESTRICTED = "restricted"
+
+
+class FreshnessProfile(str, PythonEnum):
+    """Supported freshness profiles for namespace policy."""
+
+    STABLE = "stable"
+    BALANCED = "balanced"
+    AGGRESSIVE = "aggressive"
 
 
 class DocumentStatus(str, PythonEnum):

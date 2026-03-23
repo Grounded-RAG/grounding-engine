@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    and_,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -57,7 +58,6 @@ class IngestionJob(Base):
     )
     doc_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("documents.doc_id"),
         nullable=False,
     )
     status: Mapped[IngestionJobStatus] = mapped_column(
@@ -82,8 +82,16 @@ class IngestionJob(Base):
     tenant: Mapped["Tenant"] = relationship(
         back_populates="ingestion_jobs",
         foreign_keys=[tenant_id],
+        overlaps="document,ingestion_jobs",
     )
     document: Mapped["Document"] = relationship(
         back_populates="ingestion_jobs",
-        foreign_keys=[doc_id],
+        primaryjoin=(
+            "and_("
+            "IngestionJob.tenant_id == Document.tenant_id, "
+            "IngestionJob.doc_id == Document.doc_id"
+            ")"
+        ),
+        foreign_keys="[IngestionJob.tenant_id, IngestionJob.doc_id]",
+        overlaps="tenant,ingestion_jobs,document",
     )

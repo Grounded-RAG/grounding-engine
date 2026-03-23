@@ -1,0 +1,264 @@
+"""Unit tests for sparse, dense, and fused retrieval helpers."""
+
+from __future__ import annotations
+
+import uuid
+from types import SimpleNamespace
+
+import pytest
+
+from app.pipeline.contracts import FusedRetrievedChunk, RetrievedChunk
+from app.services.retrieval import (
+    dense_retrieve_chunks,
+    fuse_retrieval_hits,
+    retrieve_hybrid_candidates,
+    sparse_retrieve_chunks,
+)
+
+
+class FakeAsyncResult:
+    """Minimal mapping result wrapper for async SQL execution tests."""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self._rows = rows
+
+    def mappings(self) -> "FakeAsyncResult":
+        return self
+
+    def all(self) -> list[dict[str, object]]:
+        return self._rows
+
+
+class FakeAsyncSession:
+    """Minimal async session stub for sparse retrieval tests."""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+        self.executed = []
+
+    async def execute(self, statement, params=None):
+        self.executed.append((statement, params))
+        return FakeAsyncResult(self.rows)
+
+
+@pytest.mark.asyncio()
+async def test_sparse_retrieve_chunks_maps_database_rows() -> None:
+    """Sparse retrieval should convert DB rows into ordered retrieval hits."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    session = FakeAsyncSession(
+        [
+            {
+                "chunk_id": "chunk-1",
+                "tenant_id": tenant_id,
+                "namespace_id": namespace_id,
+                "doc_id": document_id,
+                "chunk_index": 0,
+                "chunk_text": "alpha beta",
+                "score": 0.42,
+            },
+            {
+                "chunk_id": "chunk-2",
+                "tenant_id": tenant_id,
+                "namespace_id": namespace_id,
+                "doc_id": document_id,
+                "chunk_index": 1,
+                "chunk_text": "beta gamma",
+                "score": 0.35,
+            },
+        ]
+    )
+
+    hits = await sparse_retrieve_chunks(
+        session=session,
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="beta",
+        limit=2,
+    )
+
+    assert [hit.chunk_id for hit in hits] == ["chunk-1", "chunk-2"]
+    assert [hit.rank for hit in hits] == [1, 2]
+    assert hits[0].source == "sparse"
+    assert session.executed[0][1]["query_text"] == "beta"
+
+
+@pytest.mark.asyncio()
+async def test_dense_retrieve_chunks_maps_qdrant_points(monkeypatch) -> None:
+    """Dense retrieval should convert Qdrant points into retrieval hits."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    async def fake_embed_texts(texts: list[str]):
+        assert texts == ["alpha query"]
+        from app.core.embeddings import DenseEmbedding
+
+        return [DenseEmbedding(text="alpha query", vector=[0.1, 0.2, 0.3])]
+
+    def fake_search_dense_points(*, query_vector, tenant_id, namespace_id, limit):
+        assert query_vector == [0.1, 0.2, 0.3]
+        assert limit == 3
+        return [
+            SimpleNamespace(
+                score=0.9,
+                payload={
+                    "chunk_id": "chunk-1",
+                    "tenant_id": str(tenant_id),
+                    "namespace_id": str(namespace_id),
+                    "document_id": str(document_id),
+                    "chunk_index": 0,
+                    "text": "alpha beta",
+                },
+            )
+        ]
+
+    monkeypatch.setattr("app.services.retrieval.embed_texts", fake_embed_texts)
+    monkeypatch.setattr(
+        "app.services.retrieval.search_dense_points",
+        fake_search_dense_points,
+    )
+
+    hits = await dense_retrieve_chunks(
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="alpha query",
+        limit=3,
+    )
+
+    assert len(hits) == 1
+    assert hits[0].chunk_id == "chunk-1"
+    assert hits[0].rank == 1
+    assert hits[0].source == "dense"
+
+
+def test_fuse_retrieval_hits_rewards_mutual_agreement() -> None:
+    """RRF should rank chunks found by both paths above single-path candidates."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="shared",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="shared text",
+            score=0.8,
+            rank=1,
+            source="sparse",
+        ),
+        RetrievedChunk(
+            chunk_id="sparse-only",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=1,
+            text="sparse only",
+            score=0.6,
+            rank=2,
+            source="sparse",
+        ),
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="dense-only",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=2,
+            text="dense only",
+            score=0.7,
+            rank=1,
+            source="dense",
+        ),
+        RetrievedChunk(
+            chunk_id="shared",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="shared text",
+            score=0.65,
+            rank=2,
+            source="dense",
+        ),
+    ]
+
+    fused_hits = fuse_retrieval_hits(sparse_hits, dense_hits, rrf_k=60)
+
+    assert isinstance(fused_hits[0], FusedRetrievedChunk)
+    assert fused_hits[0].chunk_id == "shared"
+    assert fused_hits[0].sources == ("dense", "sparse")
+    assert {hit.chunk_id for hit in fused_hits} == {
+        "shared",
+        "sparse-only",
+        "dense-only",
+    }
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_runs_both_paths(monkeypatch) -> None:
+    """Hybrid retrieval should return sparse, dense, and fused candidate sets."""
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-1",
+            tenant_id=uuid.uuid4(),
+            namespace_id=uuid.uuid4(),
+            document_id=uuid.uuid4(),
+            chunk_index=0,
+            text="alpha beta",
+            score=0.7,
+            rank=1,
+            source="sparse",
+        )
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-2",
+            tenant_id=uuid.uuid4(),
+            namespace_id=uuid.uuid4(),
+            document_id=uuid.uuid4(),
+            chunk_index=1,
+            text="beta gamma",
+            score=0.8,
+            rank=1,
+            source="dense",
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        assert kwargs["query_text"] == "beta query"
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        assert kwargs["query_text"] == "beta query"
+        return dense_hits
+
+    monkeypatch.setattr(
+        "app.services.retrieval.sparse_retrieve_chunks",
+        fake_sparse_retrieve_chunks,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=uuid.uuid4(),
+        namespace_id=uuid.uuid4(),
+        query_text="beta query",
+        limit=4,
+    )
+
+    assert bundle.sparse_hits == sparse_hits
+    assert bundle.dense_hits == dense_hits
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-1", "chunk-2"]
