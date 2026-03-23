@@ -12,6 +12,7 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Response,
     UploadFile,
     status,
 )
@@ -231,6 +232,7 @@ async def list_dataset_ingestion_jobs_route(
 )
 async def upload_dataset_document_route(
     background_tasks: BackgroundTasks,
+    response: Response,
     dataset_id: UUID,
     title: str | None = Form(default=None),
     file: UploadFile = File(...),
@@ -250,7 +252,10 @@ async def upload_dataset_document_route(
     except DocumentServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    if get_settings().ingestion_autorun_enabled:
+    if result.already_exists:
+        response.status_code = status.HTTP_200_OK
+
+    if get_settings().ingestion_autorun_enabled and result.should_schedule_ingestion:
         background_tasks.add_task(
             run_standard_ingestion_pipeline_background,
             result.ingestion_job.job_id,
@@ -266,4 +271,5 @@ async def upload_dataset_document_route(
         file_size_bytes=result.document.file_size_bytes,
         document_status=result.document.status,
         job_status=result.ingestion_job.status,
+        already_exists=result.already_exists,
     )

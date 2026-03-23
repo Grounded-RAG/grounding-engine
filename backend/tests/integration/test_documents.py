@@ -332,6 +332,7 @@ def test_document_upload_creates_document_job_and_storage_object(
     )
 
     assert response.status_code == 201
+    assert response.json()["already_exists"] is False
     assert response.json()["document_status"] == "uploaded"
     assert response.json()["job_status"] == "queued"
     assert response.json()["namespace_id"] == str(seeded_upload_data.namespace_id)
@@ -401,6 +402,64 @@ def test_document_upload_creates_document_job_and_storage_object(
         "completed_at": None,
         "created_at": status_response.json()["created_at"],
     }
+
+
+def test_document_upload_is_idempotent_for_duplicate_content_in_same_namespace(
+    upload_client: TestClient,
+    seeded_upload_data: SeededUploadData,
+) -> None:
+    """Uploading the same file bytes twice should reuse the existing document and job."""
+
+    payload = b"duplicate-safe handbook"
+
+    first_response = upload_client.post(
+        "/v1/documents/upload",
+        headers={"X-API-Key": seeded_upload_data.raw_api_key},
+        data={"namespace_id": str(seeded_upload_data.namespace_id)},
+        files={"file": ("handbook.txt", payload, "text/plain")},
+    )
+
+    assert first_response.status_code == 201
+    assert first_response.json()["already_exists"] is False
+
+    duplicate_response = upload_client.post(
+        "/v1/documents/upload",
+        headers={"X-API-Key": seeded_upload_data.raw_api_key},
+        data={"namespace_id": str(seeded_upload_data.namespace_id)},
+        files={"file": ("handbook-copy.txt", payload, "text/plain")},
+    )
+
+    assert duplicate_response.status_code == 200
+    duplicate_payload = duplicate_response.json()
+    assert duplicate_payload["already_exists"] is True
+    assert duplicate_payload["document_id"] == first_response.json()["document_id"]
+    assert duplicate_payload["job_id"] == first_response.json()["job_id"]
+    assert duplicate_payload["document_status"] == "uploaded"
+    assert duplicate_payload["job_status"] == "queued"
+
+    with psycopg.connect(_sync_database_url()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select count(*)
+                from documents
+                where tenant_id = %s and namespace_id = %s
+                """,
+                (seeded_upload_data.tenant_id, seeded_upload_data.namespace_id),
+            )
+            document_count = cursor.fetchone()
+            cursor.execute(
+                """
+                select count(*)
+                from ingestion_jobs
+                where tenant_id = %s
+                """,
+                (seeded_upload_data.tenant_id,),
+            )
+            job_count = cursor.fetchone()
+
+    assert document_count == (1,)
+    assert job_count == (1,)
 
 
 def test_document_upload_autoruns_pipeline_and_query_returns_grounded_answer(

@@ -535,3 +535,25 @@ def test_agent_chat_accepts_explicit_dataset_for_multi_dataset_agent(
     assert response.status_code == 200
     assert response.json()["dataset_id"] == str(seeded_agent_chat_data.secondary_dataset_id)
     assert response.json()["mode"] == "instant"
+
+
+def test_agent_chat_rejects_coming_soon_modes_with_clear_message(
+    agent_chat_client: TestClient,
+    seeded_agent_chat_data: SeededAgentChatData,
+) -> None:
+    """Thinking and Verified should fail clearly until later phases exist."""
+
+    response = agent_chat_client.post(
+        f"/v1/agents/{seeded_agent_chat_data.single_dataset_agent_id}/chat",
+        headers={"X-API-Key": seeded_agent_chat_data.raw_api_key},
+        json={
+            "conversation_id": str(seeded_agent_chat_data.single_conversation_id),
+            "message": "Use a deeper mode for this question.",
+            "mode": "thinking",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "Chat mode 'thinking' is not available yet."
+    }

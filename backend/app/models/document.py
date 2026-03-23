@@ -36,7 +36,12 @@ class Document(Base):
 
     __tablename__ = "documents"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "checksum", name="uq_documents_tenant_checksum"),
+        UniqueConstraint(
+            "tenant_id",
+            "namespace_id",
+            "checksum",
+            name="uq_documents_tenant_namespace_checksum",
+        ),
         UniqueConstraint("tenant_id", "doc_id", name="uq_documents_tenant_doc_id"),
         ForeignKeyConstraint(
             ["tenant_id", "namespace_id"],

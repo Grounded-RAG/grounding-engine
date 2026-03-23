@@ -11,6 +11,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Response,
     UploadFile,
     status,
 )
@@ -37,6 +38,7 @@ router = APIRouter()
 )
 async def upload_document(
     background_tasks: BackgroundTasks,
+    response: Response,
     namespace_id: UUID = Form(...),
     title: str | None = Form(default=None),
     file: UploadFile = File(...),
@@ -56,7 +58,10 @@ async def upload_document(
     except DocumentServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    if get_settings().ingestion_autorun_enabled:
+    if result.already_exists:
+        response.status_code = status.HTTP_200_OK
+
+    if get_settings().ingestion_autorun_enabled and result.should_schedule_ingestion:
         background_tasks.add_task(
             run_standard_ingestion_pipeline_background,
             result.ingestion_job.job_id,
@@ -72,6 +77,7 @@ async def upload_document(
         file_size_bytes=result.document.file_size_bytes,
         document_status=result.document.status,
         job_status=result.ingestion_job.status,
+        already_exists=result.already_exists,
     )
 
 

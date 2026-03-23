@@ -22,6 +22,7 @@ class DocumentUploadResponse(BaseModel):
     file_size_bytes: int
     document_status: DocumentStatus
     job_status: IngestionJobStatus
+    already_exists: bool = False
 
 
 class IngestionJobStatusResponse(BaseModel):

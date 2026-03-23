@@ -13,6 +13,7 @@ from app.models import MessageRole, UserFacingMode
 from app.schemas.agents import AgentChatRequest, AgentChatResponse
 from app.schemas.query import QueryRequest
 from app.services.agents import AgentServiceError, get_agent_for_tenant
+from app.services.capabilities import get_current_supported_modes
 from app.services.conversations import (
     ConversationServiceError,
     get_conversation_for_tenant,
@@ -39,6 +40,12 @@ def _resolve_chat_mode(
     """Resolve one user-facing chat mode against the agent allowlist."""
 
     mode = requested_mode or conversation_mode
+    supported_modes = get_current_supported_modes()
+    if mode not in supported_modes:
+        raise AgentChatServiceError(
+            f"Chat mode '{mode.value}' is not available yet.",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
     if mode.value not in agent_allowed_modes:
         raise AgentChatServiceError(
             "Chat mode must be one of the agent's allowed modes.",

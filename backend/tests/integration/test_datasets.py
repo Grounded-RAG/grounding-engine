@@ -419,6 +419,7 @@ def test_dataset_upload_lists_documents_and_jobs(
 
     assert response.status_code == 201
     payload = response.json()
+    assert payload["already_exists"] is False
     assert payload["dataset_id"] == str(seeded_dataset_data.existing_dataset_id)
     assert payload["document_status"] == "uploaded"
     assert payload["job_status"] == "queued"
@@ -443,3 +444,74 @@ def test_dataset_upload_lists_documents_and_jobs(
     assert jobs_payload[0]["dataset_id"] == str(seeded_dataset_data.existing_dataset_id)
     assert jobs_payload[0]["document_id"] == payload["document_id"]
     assert jobs_payload[0]["status"] == "queued"
+
+
+def test_dataset_upload_is_idempotent_for_duplicate_content(
+    dataset_client: TestClient,
+    seeded_dataset_data: SeededDatasetData,
+) -> None:
+    """Uploading the same bytes twice into one dataset should reuse the existing records."""
+
+    payload = b"duplicate dataset handbook"
+
+    first_response = dataset_client.post(
+        f"/v1/datasets/{seeded_dataset_data.existing_dataset_id}/upload",
+        headers={"X-API-Key": seeded_dataset_data.raw_api_key},
+        data={"title": "Dataset Manual"},
+        files={"file": ("manual.txt", payload, "text/plain")},
+    )
+
+    assert first_response.status_code == 201
+    assert first_response.json()["already_exists"] is False
+
+    duplicate_response = dataset_client.post(
+        f"/v1/datasets/{seeded_dataset_data.existing_dataset_id}/upload",
+        headers={"X-API-Key": seeded_dataset_data.raw_api_key},
+        data={"title": "Dataset Manual Copy"},
+        files={"file": ("manual-copy.txt", payload, "text/plain")},
+    )
+
+    assert duplicate_response.status_code == 200
+    duplicate_payload = duplicate_response.json()
+    assert duplicate_payload["already_exists"] is True
+    assert duplicate_payload["dataset_id"] == str(seeded_dataset_data.existing_dataset_id)
+    assert duplicate_payload["document_id"] == first_response.json()["document_id"]
+    assert duplicate_payload["job_id"] == first_response.json()["job_id"]
+
+
+def test_dataset_upload_allows_same_content_in_different_datasets(
+    dataset_client: TestClient,
+    seeded_dataset_data: SeededDatasetData,
+) -> None:
+    """The same file bytes should be accepted in different datasets for the same tenant."""
+
+    create_dataset_response = dataset_client.post(
+        "/v1/datasets",
+        headers={"X-API-Key": seeded_dataset_data.raw_api_key},
+        json={
+            "workspace_id": str(seeded_dataset_data.secondary_workspace_id),
+            "name": "shared-content-dataset",
+        },
+    )
+
+    assert create_dataset_response.status_code == 201
+    second_dataset_id = create_dataset_response.json()["dataset_id"]
+
+    payload = b"shared tenant content"
+
+    first_upload = dataset_client.post(
+        f"/v1/datasets/{seeded_dataset_data.existing_dataset_id}/upload",
+        headers={"X-API-Key": seeded_dataset_data.raw_api_key},
+        files={"file": ("shared.txt", payload, "text/plain")},
+    )
+    second_upload = dataset_client.post(
+        f"/v1/datasets/{second_dataset_id}/upload",
+        headers={"X-API-Key": seeded_dataset_data.raw_api_key},
+        files={"file": ("shared.txt", payload, "text/plain")},
+    )
+
+    assert first_upload.status_code == 201
+    assert second_upload.status_code == 201
+    assert first_upload.json()["already_exists"] is False
+    assert second_upload.json()["already_exists"] is False
+    assert first_upload.json()["document_id"] != second_upload.json()["document_id"]

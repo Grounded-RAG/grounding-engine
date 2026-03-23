@@ -67,7 +67,7 @@ def test_namespace_enforces_tenant_scoped_uniqueness() -> None:
 
 
 def test_document_enforces_tenant_safe_constraints() -> None:
-    """Documents should enforce checksum uniqueness and tenant-namespace pairing."""
+    """Documents should enforce dataset-scoped checksum uniqueness safely."""
 
     unique_constraints = {
         constraint.name
@@ -80,7 +80,7 @@ def test_document_enforces_tenant_safe_constraints() -> None:
         if isinstance(constraint, ForeignKeyConstraint)
     }
 
-    assert "uq_documents_tenant_checksum" in unique_constraints
+    assert "uq_documents_tenant_namespace_checksum" in unique_constraints
     assert "uq_documents_tenant_doc_id" in unique_constraints
     assert "fk_documents_tenant_namespace" in foreign_key_constraints
 

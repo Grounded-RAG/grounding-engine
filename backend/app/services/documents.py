@@ -11,7 +11,7 @@ from typing import Final
 
 from fastapi import UploadFile, status
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext
@@ -55,6 +55,8 @@ class DocumentUploadResult:
     document: Document
     ingestion_job: IngestionJob
     filename: str
+    already_exists: bool = False
+    should_schedule_ingestion: bool = False
 
 
 def _normalize_filename(filename: str | None) -> tuple[str, str, str]:
@@ -140,6 +142,70 @@ async def _get_namespace_for_tenant(
     return namespace
 
 
+async def _get_latest_ingestion_job_for_document(
+    *,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    document_id: uuid.UUID,
+) -> IngestionJob | None:
+    """Return the most recent ingestion job for one tenant-scoped document."""
+
+    statement = (
+        select(IngestionJob)
+        .where(
+            IngestionJob.tenant_id == tenant_id,
+            IngestionJob.doc_id == document_id,
+        )
+        .order_by(IngestionJob.created_at.desc(), IngestionJob.job_id.desc())
+    )
+    result = await session.execute(statement)
+    return result.scalars().first()
+
+
+async def _get_existing_document_upload(
+    *,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    namespace_id: uuid.UUID,
+    checksum: str,
+    filename: str,
+) -> DocumentUploadResult | None:
+    """Return an existing tenant+dataset document upload if the bytes already exist."""
+
+    statement = select(Document).where(
+        Document.tenant_id == tenant_id,
+        Document.namespace_id == namespace_id,
+        Document.checksum == checksum,
+    )
+    result = await session.execute(statement)
+    document = result.scalar_one_or_none()
+    if document is None:
+        return None
+
+    ingestion_job = await _get_latest_ingestion_job_for_document(
+        session=session,
+        tenant_id=tenant_id,
+        document_id=document.doc_id,
+    )
+    if ingestion_job is None:
+        raise DocumentServiceError(
+            "Existing document is missing its ingestion job.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    should_schedule_ingestion = (
+        document.status is DocumentStatus.UPLOADED
+        and ingestion_job.status is IngestionJobStatus.QUEUED
+    )
+    return DocumentUploadResult(
+        document=document,
+        ingestion_job=ingestion_job,
+        filename=filename,
+        already_exists=True,
+        should_schedule_ingestion=should_schedule_ingestion,
+    )
+
+
 async def create_document_upload(
     *,
     session: AsyncSession,
@@ -189,6 +255,16 @@ async def create_document_upload(
     normalized_mime_type = _SUPPORTED_UPLOAD_TYPES[suffix]
     document_title = _resolve_document_title(title, original_filename)
     checksum = hashlib.sha256(payload).hexdigest()
+    existing_upload = await _get_existing_document_upload(
+        session=session,
+        tenant_id=tenant_context.tenant_id,
+        namespace_id=namespace_id,
+        checksum=checksum,
+        filename=original_filename,
+    )
+    if existing_upload is not None:
+        return existing_upload
+
     object_key = _build_object_key(
         tenant_id=tenant_context.tenant_id,
         namespace_id=namespace_id,
@@ -237,6 +313,27 @@ async def create_document_upload(
 
     try:
         await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        try:
+            await delete_object(stored_object.key)
+        except StorageError:
+            pass
+
+        existing_upload = await _get_existing_document_upload(
+            session=session,
+            tenant_id=tenant_context.tenant_id,
+            namespace_id=namespace_id,
+            checksum=checksum,
+            filename=original_filename,
+        )
+        if existing_upload is not None:
+            return existing_upload
+
+        raise DocumentServiceError(
+            "Failed to persist uploaded document metadata.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ) from exc
     except SQLAlchemyError as exc:
         await session.rollback()
         try:
@@ -255,6 +352,7 @@ async def create_document_upload(
         document=document,
         ingestion_job=ingestion_job,
         filename=original_filename,
+        should_schedule_ingestion=True,
     )
 
 
