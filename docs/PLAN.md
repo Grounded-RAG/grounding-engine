@@ -39,6 +39,10 @@ Use these files as the source of truth:
 - `docs/SYSTEM_DESIGN.md`
 - `docs/IMPLEMENTATION_PLAN.md`
 - `docs/PHASE_1_5_BACKEND_PLAN.md`
+- `docs/PHASE_2_ENTERPRISE_PLAN.md`
+- `docs/PHASE_3_CRITICAL_PLAN.md`
+- `docs/PHASE_4_ADAPTIVE_GROUNDING_PLAN.md`
+- `docs/PHASE_5_PLATFORM_MATURITY_PLAN.md`
 - `docs/ENGINEERING_GUARDRAILS.md`
 - `docs/BRIEF.md`
 
@@ -61,6 +65,8 @@ The architecture-alignment follow-ups are now complete:
 - Phase 1.5: product shell and workspace model
 - Phase 2: Enterprise tier
 - Phase 3: Critical tier
+- Phase 4: adaptive grounding and source-aware intelligence
+- Phase 5: platform maturity
 
 ## Backend Next Step
 
@@ -84,6 +90,15 @@ Phase 2 build order:
 Detailed Phase 2 plan:
 
 - `docs/PHASE_2_ENTERPRISE_PLAN.md`
+
+Longer-term roadmap after Phase 2:
+
+- Phase 3 Critical assurance:
+  - `docs/PHASE_3_CRITICAL_PLAN.md`
+- Phase 4 adaptive grounding and source-aware intelligence:
+  - `docs/PHASE_4_ADAPTIVE_GROUNDING_PLAN.md`
+- Phase 5 platform maturity:
+  - `docs/PHASE_5_PLATFORM_MATURITY_PLAN.md`
 
 ## Team Rule
 

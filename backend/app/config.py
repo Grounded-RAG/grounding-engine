@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     app_env: AppEnv = "development"
     log_level: LogLevel = "INFO"
     api_base_url: AnyHttpUrl = "http://localhost:8000"
+    cors_allowed_origins: str = (
+        "http://localhost:8080,"
+        "http://127.0.0.1:8080,"
+        "http://localhost:5173,"
+        "http://127.0.0.1:5173,"
+        "http://localhost:3000,"
+        "http://127.0.0.1:3000"
+    )
     database_url: str = "postgresql+asyncpg://grounded:grounded@localhost:5433/grounded"
     alembic_database_url: str = (
         "postgresql+psycopg://grounded:grounded@localhost:5433/grounded"
