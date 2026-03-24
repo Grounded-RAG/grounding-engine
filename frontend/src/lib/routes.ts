@@ -3,6 +3,9 @@ export function workspaceBasePath(workspaceSlug?: string | null) {
 }
 
 export function workspacePath(workspaceSlug?: string | null, subpath = "") {
+  if (!subpath) {
+    return `${workspaceBasePath(workspaceSlug)}/overview`;
+  }
   const normalizedSubpath = subpath
     ? subpath.startsWith("/")
       ? subpath

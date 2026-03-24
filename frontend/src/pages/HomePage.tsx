@@ -127,7 +127,7 @@ function MarketingNav() {
 
 function HeroSection() {
   return (
-    <section className="relative pt-32 pb-20 md:pt-44 md:pb-28 overflow-hidden">
+    <section className="relative pt-24 pb-20 md:pt-32 md:pb-28 overflow-hidden">
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute top-20 left-1/4 w-[500px] h-[500px] rounded-full bg-accent/5 blur-[100px]" />
         <div className="absolute bottom-0 right-1/4 w-[400px] h-[400px] rounded-full bg-accent-teal/5 blur-[80px]" />

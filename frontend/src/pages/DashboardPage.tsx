@@ -26,7 +26,13 @@ import { useAuth } from "@/lib/auth";
 import { formatDateTime, formatRelativeOrDate, sentenceCase } from "@/lib/format";
 import { workspacePath } from "@/lib/routes";
 
-function WelcomeHero({ workspaceName }: { workspaceName: string | null }) {
+function WelcomeHero({
+  workspaceName,
+  workspaceSlug,
+}: {
+  workspaceName: string | null;
+  workspaceSlug: string | null;
+}) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
@@ -238,7 +244,7 @@ export default function DashboardPage() {
 
   return (
     <div className="max-w-6xl">
-      <WelcomeHero workspaceName={workspaceName} />
+      <WelcomeHero workspaceName={workspaceName} workspaceSlug={workspaceSlug} />
 
       <div className="grid md:grid-cols-4 gap-4 mb-8">
         <StatsCard icon={Database} label="Datasets" value={summary?.dataset_count ?? 0} sub="Source-of-truth collections" />

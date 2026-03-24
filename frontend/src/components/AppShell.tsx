@@ -34,7 +34,7 @@ const navItems: Array<{
   divider?: boolean;
   external?: boolean;
 }> = [
-  { label: "Overview", icon: LayoutDashboard, subpath: "", exact: true },
+  { label: "Overview", icon: LayoutDashboard, subpath: "/overview", exact: true },
   { label: "Agents", icon: Bot, subpath: "/agents" },
   { label: "Datasets", icon: Database, subpath: "/datasets" },
   { label: "Runs", icon: Activity, subpath: "/runs" },

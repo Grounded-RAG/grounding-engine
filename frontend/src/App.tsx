@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -35,7 +35,8 @@ const App = () => (
             <Route element={<RequireAuth />}>
               <Route path="/onboarding" element={<OnboardingPage />} />
               <Route path="/app" element={<AppShell />}>
-                <Route index element={<DashboardPage />} />
+                <Route index element={<Navigate to="overview" replace />} />
+                <Route path="overview" element={<DashboardPage />} />
                 <Route path="datasets" element={<DatasetsPage />} />
                 <Route path="datasets/:id" element={<DatasetDetailPage />} />
                 <Route path="agents" element={<AgentsPage />} />
@@ -45,7 +46,8 @@ const App = () => (
                 <Route path="api-keys" element={<SettingsPage />} />
               </Route>
               <Route path="/app/workspace/:workspaceSlug" element={<AppShell />}>
-                <Route index element={<DashboardPage />} />
+                <Route index element={<Navigate to="overview" replace />} />
+                <Route path="overview" element={<DashboardPage />} />
                 <Route path="datasets" element={<DatasetsPage />} />
                 <Route path="datasets/:id" element={<DatasetDetailPage />} />
                 <Route path="agents" element={<AgentsPage />} />

@@ -11,6 +11,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { signUpWithEmail } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { workspacePath } from "@/lib/routes";
+import heroVisual from "@/assets/hero-visual.png";
 
 export default function SignUpPage() {
   const [form, setForm] = useState({
@@ -159,18 +160,14 @@ export default function SignUpPage() {
         </motion.div>
       </div>
 
-      <div className="hidden lg:flex items-center justify-center relative overflow-hidden bg-secondary/50">
-        <div className="absolute inset-0 gradient-hero" />
-        <div className="absolute top-1/4 right-1/4 w-96 h-96 rounded-full bg-accent/8 blur-[80px]" />
-        <div className="absolute bottom-1/4 left-1/4 w-72 h-72 rounded-full bg-accent-teal/8 blur-[60px]" />
-        <div className="relative z-10 text-center max-w-md px-8">
-          <div className="flex items-center justify-center gap-3 mb-6 opacity-50">
-            <Leaf className="h-5 w-5 text-accent" />
-            <span className="text-sm text-muted-foreground">Grounded AI</span>
-          </div>
-          <h2 className="text-5xl font-semibold tracking-[-0.05em] text-foreground leading-tight">
-            Create a grounded workspace for your organization
-          </h2>
+      <div className="relative hidden min-h-screen overflow-hidden bg-white lg:flex lg:items-center lg:justify-center">
+        <div className="absolute inset-0 bg-gradient-to-br from-white via-white to-emerald-50/70" />
+        <div className="relative flex h-full w-full items-center justify-center p-12">
+          <img
+            src={heroVisual}
+            alt="Grounded AI visual"
+            className="h-full max-h-[760px] w-full max-w-[760px] object-contain"
+          />
         </div>
       </div>
     </div>
