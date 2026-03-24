@@ -249,3 +249,52 @@ def test_auth_smoke_preserves_request_id_header(
 
     assert response.status_code == 200
     assert response.headers[REQUEST_ID_HEADER] == "req-auth-123"
+
+
+def test_email_sign_in_provisions_workspace_and_authenticates(
+    auth_client: TestClient,
+) -> None:
+    """Email sign-in should provision a tenant/workspace and return a usable API key."""
+
+    email = f"preview-{uuid.uuid4().hex[:10]}@example.com"
+    tenant_id: uuid.UUID | None = None
+
+    try:
+        response = auth_client.post(
+            "/v1/auth/email/sign-in",
+            json={
+                "email": email,
+                "full_name": "Samra Demo",
+                "organization_name": "Grounded Preview Org",
+                "workspace_name": "Grounded Preview Workspace",
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        tenant_id = uuid.UUID(payload["tenant_id"])
+
+        assert payload["status"] == "authenticated"
+        assert payload["tenant_name"] == "Grounded Preview Org"
+        assert payload["subscription_plan"] == "free"
+        assert payload["max_execution_tier"] == "standard"
+        assert payload["workspace_name"] == "Grounded Preview Workspace"
+        assert payload["created_tenant"] is True
+        assert payload["created_workspace"] is True
+        assert payload["api_key"].startswith("grd_")
+
+        smoke_response = auth_client.get(
+            "/v1/auth/smoke",
+            headers={"X-API-Key": payload["api_key"]},
+        )
+
+        assert smoke_response.status_code == 200
+        assert smoke_response.json()["tenant_id"] == payload["tenant_id"]
+        assert smoke_response.json()["tenant_name"] == payload["tenant_name"]
+    finally:
+        if tenant_id is not None:
+            with psycopg.connect(_sync_database_url()) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("delete from workspaces where tenant_id = %s", (tenant_id,))
+                    cursor.execute("delete from api_keys where tenant_id = %s", (tenant_id,))
+                    cursor.execute("delete from tenants where tenant_id = %s", (tenant_id,))

@@ -12,6 +12,7 @@ import type {
   DatasetIngestionJobResponse,
   DatasetResponse,
   DatasetUploadResponse,
+  EmailSignInResponse,
   MessageResponse,
   RunResponse,
   UserFacingMode,
@@ -64,6 +65,20 @@ async function request<T>(path: string, apiKey: string, init?: RequestInit): Pro
 }
 
 export const apiBaseUrl = API_BASE_URL;
+
+export async function signInWithEmail(payload: {
+  email: string;
+  full_name?: string;
+  organization_name?: string;
+  workspace_name?: string;
+}) {
+  const response = await fetch(`${API_BASE_URL}/v1/auth/email/sign-in`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseResponse<EmailSignInResponse>(response);
+}
 
 export function authenticateWithApiKey(apiKey: string) {
   return request<AuthSmokeResponse>("/v1/auth/smoke", apiKey);

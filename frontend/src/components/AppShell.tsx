@@ -11,7 +11,6 @@ import {
   Settings,
   Key,
   BookOpen,
-  Leaf,
   Menu,
   ChevronLeft,
   Eye,
@@ -67,9 +66,7 @@ export default function AppShell() {
       )}>
         {/* Logo */}
         <div className="h-14 flex items-center px-4 border-b gap-2.5 shrink-0">
-          <div className="h-7 w-7 rounded-lg gradient-accent flex items-center justify-center shrink-0">
-            <Leaf className="h-3.5 w-3.5 text-accent-foreground" />
-          </div>
+          <img src="/grounded-mark.svg" alt="Grounded AI" className="h-7 w-7 shrink-0" />
           {sidebarOpen && <span className="text-sm font-bold text-foreground truncate">Grounded AI</span>}
         </div>
 
