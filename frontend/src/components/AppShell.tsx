@@ -23,34 +23,44 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { workspacePath } from "@/lib/routes";
 
 const navItems: Array<{
   label?: string;
   icon?: LucideIcon;
-  path?: string;
+  subpath?: string;
   exact?: boolean;
   coming?: boolean;
   divider?: boolean;
   external?: boolean;
 }> = [
-  { label: "Overview", icon: LayoutDashboard, path: "/app", exact: true },
-  { label: "Agents", icon: Bot, path: "/app/agents" },
-  { label: "Datasets", icon: Database, path: "/app/datasets" },
-  { label: "Runs", icon: Activity, path: "/app/runs" },
-  { label: "Monitoring", icon: Eye, path: "/app/monitoring", coming: true },
-  { label: "Feedback", icon: MessageSquareText, path: "/app/feedback", coming: true },
-  { label: "Usage", icon: BarChart3, path: "/app/usage", coming: true },
-  { label: "Billing", icon: CreditCard, path: "/app/billing", coming: true },
+  { label: "Overview", icon: LayoutDashboard, subpath: "", exact: true },
+  { label: "Agents", icon: Bot, subpath: "/agents" },
+  { label: "Datasets", icon: Database, subpath: "/datasets" },
+  { label: "Runs", icon: Activity, subpath: "/runs" },
+  { label: "Monitoring", icon: Eye, subpath: "/monitoring", coming: true },
+  { label: "Feedback", icon: MessageSquareText, subpath: "/feedback", coming: true },
+  { label: "Usage", icon: BarChart3, subpath: "/usage", coming: true },
+  { label: "Billing", icon: CreditCard, subpath: "/billing", coming: true },
   { divider: true },
-  { label: "Settings", icon: Settings, path: "/app/settings" },
-  { label: "API Keys", icon: Key, path: "/app/api-keys" },
+  { label: "Settings", icon: Settings, subpath: "/settings" },
+  { label: "API Keys", icon: Key, subpath: "/api-keys" },
   { label: "Docs", icon: BookOpen, path: "#", external: true },
 ] as const;
 
 export default function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const location = useLocation();
-  const { auth, workspaceName, signOut } = useAuth();
+  const { auth, workspaceName, workspaceSlug, signOut } = useAuth();
+
+  const resolvedNavItems = navItems.map((item) =>
+    "subpath" in item
+      ? {
+          ...item,
+          path: workspacePath(workspaceSlug, item.subpath ?? ""),
+        }
+      : item,
+  );
 
   const isActive = (path: string, exact?: boolean) => {
     if (exact) return location.pathname === path;
@@ -72,7 +82,7 @@ export default function AppShell() {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto py-3 px-2">
-          {navItems.map((item, i) => {
+          {resolvedNavItems.map((item, i) => {
             if ('divider' in item && item.divider) return <div key={i} className="border-t my-2 mx-2" />;
             const navItem = item as { label: string; icon: LucideIcon; path: string; exact?: boolean; coming?: boolean };
             const Icon = navItem.icon;

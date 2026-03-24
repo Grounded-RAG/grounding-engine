@@ -251,27 +251,29 @@ def test_auth_smoke_preserves_request_id_header(
     assert response.headers[REQUEST_ID_HEADER] == "req-auth-123"
 
 
-def test_email_sign_in_provisions_workspace_and_authenticates(
+def test_email_sign_up_and_sign_in_work_with_password_auth(
     auth_client: TestClient,
 ) -> None:
-    """Email sign-in should provision a tenant/workspace and return a usable API key."""
+    """Email/password auth should support sign-up followed by sign-in."""
 
     email = f"preview-{uuid.uuid4().hex[:10]}@example.com"
     tenant_id: uuid.UUID | None = None
+    password = "preview-pass-123"
 
     try:
-        response = auth_client.post(
-            "/v1/auth/email/sign-in",
+        sign_up_response = auth_client.post(
+            "/v1/auth/email/sign-up",
             json={
                 "email": email,
+                "password": password,
                 "full_name": "Samra Demo",
                 "organization_name": "Grounded Preview Org",
                 "workspace_name": "Grounded Preview Workspace",
             },
         )
 
-        assert response.status_code == 200
-        payload = response.json()
+        assert sign_up_response.status_code == 200
+        payload = sign_up_response.json()
         tenant_id = uuid.UUID(payload["tenant_id"])
 
         assert payload["status"] == "authenticated"
@@ -279,13 +281,29 @@ def test_email_sign_in_provisions_workspace_and_authenticates(
         assert payload["subscription_plan"] == "free"
         assert payload["max_execution_tier"] == "standard"
         assert payload["workspace_name"] == "Grounded Preview Workspace"
+        assert payload["workspace_slug"] == "grounded-preview-workspace"
         assert payload["created_tenant"] is True
         assert payload["created_workspace"] is True
         assert payload["api_key"].startswith("grd_")
 
+        sign_in_response = auth_client.post(
+            "/v1/auth/email/sign-in",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        assert sign_in_response.status_code == 200
+        sign_in_payload = sign_in_response.json()
+        assert sign_in_payload["tenant_id"] == payload["tenant_id"]
+        assert sign_in_payload["workspace_id"] == payload["workspace_id"]
+        assert sign_in_payload["created_tenant"] is False
+        assert sign_in_payload["created_workspace"] is False
+
         smoke_response = auth_client.get(
             "/v1/auth/smoke",
-            headers={"X-API-Key": payload["api_key"]},
+            headers={"X-API-Key": sign_in_payload["api_key"]},
         )
 
         assert smoke_response.status_code == 200

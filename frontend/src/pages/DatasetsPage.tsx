@@ -11,9 +11,10 @@ import { Label } from "@/components/ui/label";
 import { createDataset, listDatasets } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatDateTime, sentenceCase } from "@/lib/format";
+import { workspacePath } from "@/lib/routes";
 
 export default function DatasetsPage() {
-  const { apiKey, workspaceId } = useAuth();
+  const { apiKey, workspaceId, workspaceSlug } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
@@ -49,7 +50,7 @@ export default function DatasetsPage() {
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
-      navigate(`/app/datasets/${dataset.dataset_id}`);
+      navigate(workspacePath(workspaceSlug, `/datasets/${dataset.dataset_id}`));
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "Unable to create the dataset.";
@@ -178,7 +179,7 @@ export default function DatasetsPage() {
               transition={{ delay: index * 0.05 }}
             >
               <Link
-                to={`/app/datasets/${dataset.dataset_id}`}
+                to={workspacePath(workspaceSlug, `/datasets/${dataset.dataset_id}`)}
                 className="block rounded-2xl border bg-card p-5 hover-lift group"
               >
                 <div className="flex items-start justify-between gap-4">

@@ -24,6 +24,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatDateTime, formatRelativeOrDate, sentenceCase } from "@/lib/format";
+import { workspacePath } from "@/lib/routes";
 
 function WelcomeHero({ workspaceName }: { workspaceName: string | null }) {
   return (
@@ -46,17 +47,17 @@ function WelcomeHero({ workspaceName }: { workspaceName: string | null }) {
           ambiguity with tiered execution.
         </p>
         <div className="flex flex-wrap gap-3">
-          <Link to="/app/datasets">
+          <Link to={workspacePath(workspaceSlug, "/datasets")}>
             <Button className="rounded-full bg-accent text-accent-foreground hover:bg-accent/90 shadow-glow" size="sm">
               <Database className="h-3.5 w-3.5 mr-1" /> Create dataset
             </Button>
           </Link>
-          <Link to="/app/agents">
+          <Link to={workspacePath(workspaceSlug, "/agents")}>
             <Button variant="outline" className="rounded-full" size="sm">
               <Bot className="h-3.5 w-3.5 mr-1" /> Create agent
             </Button>
           </Link>
-          <Link to="/app/datasets">
+          <Link to={workspacePath(workspaceSlug, "/datasets")}>
             <Button variant="outline" className="rounded-full" size="sm">
               <Upload className="h-3.5 w-3.5 mr-1" /> Upload documents
             </Button>
@@ -162,7 +163,7 @@ function EmptyState({
 }
 
 export default function DashboardPage() {
-  const { apiKey, workspaceId, workspaceName } = useAuth();
+  const { apiKey, workspaceId, workspaceName, workspaceSlug } = useAuth();
 
   const summaryQuery = useQuery({
     queryKey: ["dashboard", "summary"],
@@ -260,14 +261,14 @@ export default function DashboardPage() {
               title="No runs yet"
               desc="Runs appear when an agent answers a question. Each run includes the grounded answer, citations, and trust signals."
               actionLabel="Open agents"
-              to="/app/agents"
+              to={workspacePath(workspaceSlug, "/agents")}
             />
           ) : (
             <div className="rounded-2xl border bg-card divide-y">
               {recentRuns.slice(0, 4).map((run) => (
                 <Link
                   key={run.run_id}
-                  to="/app/runs"
+                  to={workspacePath(workspaceSlug, "/runs")}
                   className="block px-5 py-4 transition-colors hover:bg-secondary/30"
                 >
                   <div className="flex items-start justify-between gap-4 mb-2">
@@ -297,7 +298,7 @@ export default function DashboardPage() {
         <div>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-foreground">Agents</h3>
-            <Link to="/app/agents" className="text-xs text-accent hover:underline">
+            <Link to={workspacePath(workspaceSlug, "/agents")} className="text-xs text-accent hover:underline">
               View all
             </Link>
           </div>
@@ -307,14 +308,14 @@ export default function DashboardPage() {
               title="No agents yet"
               desc="Create an agent, attach datasets, and start running grounded conversations backed by your documents."
               actionLabel="Create agent"
-              to="/app/agents"
+              to={workspacePath(workspaceSlug, "/agents")}
             />
           ) : (
             <div className="rounded-2xl border bg-card divide-y">
               {agents.slice(0, 3).map((agent) => (
                 <Link
                   key={agent.agent_id}
-                  to={`/app/agents/${agent.agent_id}`}
+                  to={workspacePath(workspaceSlug, `/agents/${agent.agent_id}`)}
                   className="block px-5 py-4 transition-colors hover:bg-secondary/30"
                 >
                   <div className="flex items-start justify-between gap-3 mb-2">
@@ -340,7 +341,7 @@ export default function DashboardPage() {
         <div>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-foreground">Datasets</h3>
-            <Link to="/app/datasets" className="text-xs text-accent hover:underline">
+            <Link to={workspacePath(workspaceSlug, "/datasets")} className="text-xs text-accent hover:underline">
               View all
             </Link>
           </div>
@@ -350,14 +351,14 @@ export default function DashboardPage() {
               title="No datasets yet"
               desc="Create a dataset and upload source files so Grounded has evidence to reason over."
               actionLabel="Create dataset"
-              to="/app/datasets"
+              to={workspacePath(workspaceSlug, "/datasets")}
             />
           ) : (
             <div className="rounded-2xl border bg-card divide-y">
               {datasets.slice(0, 3).map((dataset) => (
                 <Link
                   key={dataset.dataset_id}
-                  to={`/app/datasets/${dataset.dataset_id}`}
+                  to={workspacePath(workspaceSlug, `/datasets/${dataset.dataset_id}`)}
                   className="block px-5 py-4 transition-colors hover:bg-secondary/30"
                 >
                   <div className="flex items-start justify-between gap-3 mb-2">
@@ -388,14 +389,14 @@ export default function DashboardPage() {
               title="No ingestion jobs yet"
               desc="Upload files into a dataset to track ingestion, indexing, and readiness."
               actionLabel="Open datasets"
-              to="/app/datasets"
+              to={workspacePath(workspaceSlug, "/datasets")}
             />
           ) : (
             <div className="rounded-2xl border bg-card divide-y">
               {recentJobs.slice(0, 4).map((job) => (
                 <Link
                   key={job.job_id}
-                  to={`/app/datasets/${job.dataset_id}`}
+                  to={workspacePath(workspaceSlug, `/datasets/${job.dataset_id}`)}
                   className="block px-5 py-4 transition-colors hover:bg-secondary/30"
                 >
                   <div className="flex items-center justify-between gap-4">

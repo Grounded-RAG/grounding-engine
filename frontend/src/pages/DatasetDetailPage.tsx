@@ -23,6 +23,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatDateTime, formatFileSize, formatRelativeOrDate, sentenceCase } from "@/lib/format";
+import { workspacePath } from "@/lib/routes";
 import type { DatasetIngestionJobResponse } from "@/lib/types";
 
 function StatusBadge({
@@ -44,7 +45,7 @@ function StatusBadge({
 
 export default function DatasetDetailPage() {
   const { id } = useParams();
-  const { apiKey } = useAuth();
+  const { apiKey, workspaceSlug } = useAuth();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [title, setTitle] = useState("");
@@ -117,7 +118,7 @@ export default function DatasetDetailPage() {
   if (!dataset) {
     return (
       <div className="max-w-4xl">
-        <Link to="/app/datasets" className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-4">
+        <Link to={workspacePath(workspaceSlug, "/datasets")} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-4">
           <ArrowLeft className="h-3.5 w-3.5" /> Back to datasets
         </Link>
         <div className="rounded-2xl border bg-card p-10 text-center">
@@ -130,7 +131,7 @@ export default function DatasetDetailPage() {
 
   return (
     <div className="max-w-6xl">
-      <Link to="/app/datasets" className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-4">
+      <Link to={workspacePath(workspaceSlug, "/datasets")} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-4">
         <ArrowLeft className="h-3.5 w-3.5" /> Back to datasets
       </Link>
 

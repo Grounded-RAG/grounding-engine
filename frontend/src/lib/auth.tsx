@@ -13,6 +13,7 @@ import type { AuthSmokeResponse } from "@/lib/types";
 const API_KEY_STORAGE_KEY = "grounded_api_key";
 const WORKSPACE_ID_STORAGE_KEY = "grounded_workspace_id";
 const WORKSPACE_NAME_STORAGE_KEY = "grounded_workspace_name";
+const WORKSPACE_SLUG_STORAGE_KEY = "grounded_workspace_slug";
 
 function readStorage(key: string) {
   if (typeof window === "undefined") return null;
@@ -34,9 +35,10 @@ interface AuthContextValue {
   isLoading: boolean;
   workspaceId: string | null;
   workspaceName: string | null;
+  workspaceSlug: string | null;
   signInWithApiKey: (apiKey: string) => Promise<AuthSmokeResponse>;
   signOut: () => void;
-  setWorkspace: (workspaceId: string | null, workspaceName?: string | null) => void;
+  setWorkspace: (workspaceId: string | null, workspaceName?: string | null, workspaceSlug?: string | null) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -46,6 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<AuthSmokeResponse | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(() => readStorage(WORKSPACE_ID_STORAGE_KEY));
   const [workspaceName, setWorkspaceName] = useState<string | null>(() => readStorage(WORKSPACE_NAME_STORAGE_KEY));
+  const [workspaceSlug, setWorkspaceSlug] = useState<string | null>(() => readStorage(WORKSPACE_SLUG_STORAGE_KEY));
   const [isLoading, setIsLoading] = useState<boolean>(Boolean(apiKey));
 
   useEffect(() => {
@@ -71,8 +74,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setAuth(null);
           setWorkspaceId(null);
           setWorkspaceName(null);
+          setWorkspaceSlug(null);
           writeStorage(WORKSPACE_ID_STORAGE_KEY, null);
           writeStorage(WORKSPACE_NAME_STORAGE_KEY, null);
+          writeStorage(WORKSPACE_SLUG_STORAGE_KEY, null);
         }
       } finally {
         if (!cancelled) {
@@ -101,17 +106,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeStorage(API_KEY_STORAGE_KEY, null);
     writeStorage(WORKSPACE_ID_STORAGE_KEY, null);
     writeStorage(WORKSPACE_NAME_STORAGE_KEY, null);
+    writeStorage(WORKSPACE_SLUG_STORAGE_KEY, null);
     setApiKey(null);
     setAuth(null);
     setWorkspaceId(null);
     setWorkspaceName(null);
+    setWorkspaceSlug(null);
   }, []);
 
-  const setWorkspace = useCallback((nextWorkspaceId: string | null, nextWorkspaceName?: string | null) => {
+  const setWorkspace = useCallback((
+    nextWorkspaceId: string | null,
+    nextWorkspaceName?: string | null,
+    nextWorkspaceSlug?: string | null,
+  ) => {
     setWorkspaceId(nextWorkspaceId);
     setWorkspaceName(nextWorkspaceName ?? null);
+    setWorkspaceSlug(nextWorkspaceSlug ?? null);
     writeStorage(WORKSPACE_ID_STORAGE_KEY, nextWorkspaceId);
     writeStorage(WORKSPACE_NAME_STORAGE_KEY, nextWorkspaceName ?? null);
+    writeStorage(WORKSPACE_SLUG_STORAGE_KEY, nextWorkspaceSlug ?? null);
   }, []);
 
   const value = useMemo<AuthContextValue>(
@@ -121,11 +134,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       workspaceId,
       workspaceName,
+      workspaceSlug,
       signInWithApiKey,
       signOut,
       setWorkspace,
     }),
-    [apiKey, auth, isLoading, signInWithApiKey, signOut, workspaceId, workspaceName, setWorkspace],
+    [apiKey, auth, isLoading, signInWithApiKey, signOut, workspaceId, workspaceName, workspaceSlug, setWorkspace],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -1,9 +1,14 @@
-"""Preview email sign-in services for local product access."""
+"""Preview email/password auth services for local product access."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import re
+import secrets
 import uuid
+from typing import Any
 
 from fastapi import status
 from sqlalchemy import select
@@ -12,13 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import generate_api_key, hash_api_key
 from app.models import APIKey, ExecutionTier, SubscriptionPlan, Tenant, Workspace
-from app.schemas.auth import EmailSignInRequest
+from app.schemas.auth import EmailSignInRequest, EmailSignUpRequest
 from app.schemas.workspaces import WorkspaceCreateRequest
 from app.services.workspaces import create_workspace
 
 
 class EmailSignInServiceError(RuntimeError):
-    """Raised when preview email sign-in cannot be completed."""
+    """Raised when preview email auth cannot be completed."""
 
     def __init__(self, detail: str, *, status_code: int) -> None:
         super().__init__(detail)
@@ -28,6 +33,7 @@ class EmailSignInServiceError(RuntimeError):
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+_PASSWORD_ITERATIONS = 600_000
 
 
 def _normalize_email(email: str) -> str:
@@ -35,6 +41,16 @@ def _normalize_email(email: str) -> str:
     if not normalized or not _EMAIL_RE.match(normalized):
         raise EmailSignInServiceError(
             "Enter a valid work email address.",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    return normalized
+
+
+def _normalize_password(password: str) -> str:
+    normalized = password.strip()
+    if len(normalized) < 8:
+        raise EmailSignInServiceError(
+            "Password must be at least 8 characters long.",
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
     return normalized
@@ -59,7 +75,7 @@ def _derive_tenant_name(
 ) -> str:
     base = organization_name or full_name or email.split("@", maxsplit=1)[0]
     normalized = base.strip()
-    return normalized[:255] or "Grounded Workspace"
+    return normalized[:255] or "Grounded AI"
 
 
 def _derive_workspace_name(
@@ -75,6 +91,44 @@ def _derive_workspace_name(
         or (f"{full_name}'s Workspace" if full_name else None)
         or f"{email.split('@', maxsplit=1)[0]} workspace"
     )[:255]
+
+
+def _hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    derived_key = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        _PASSWORD_ITERATIONS,
+    )
+    encoded_salt = base64.urlsafe_b64encode(salt).decode("ascii")
+    encoded_hash = base64.urlsafe_b64encode(derived_key).decode("ascii")
+    return f"pbkdf2_sha256${_PASSWORD_ITERATIONS}${encoded_salt}${encoded_hash}"
+
+
+def _verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        algorithm, iterations_raw, salt_raw, hash_raw = stored_hash.split("$", maxsplit=3)
+    except ValueError:
+        return False
+
+    if algorithm != "pbkdf2_sha256":
+        return False
+
+    try:
+        iterations = int(iterations_raw)
+        salt = base64.urlsafe_b64decode(salt_raw.encode("ascii"))
+        expected_hash = base64.urlsafe_b64decode(hash_raw.encode("ascii"))
+    except (ValueError, TypeError):
+        return False
+
+    computed_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        iterations,
+    )
+    return hmac.compare_digest(computed_hash, expected_hash)
 
 
 async def _get_tenant_by_owner_email(
@@ -109,6 +163,7 @@ async def _create_tenant_for_email(
     *,
     session: AsyncSession,
     email: str,
+    password_hash: str,
     full_name: str | None,
     organization_name: str | None,
 ) -> Tenant:
@@ -128,7 +183,9 @@ async def _create_tenant_for_email(
         default_policy={
             "tier": ExecutionTier.STANDARD.value,
             "owner_email": email,
-            "auth_provider": "email_preview",
+            "owner_name": full_name,
+            "auth_provider": "email_password_preview",
+            "password_hash": password_hash,
         },
         retention_days=365,
     )
@@ -138,7 +195,7 @@ async def _create_tenant_for_email(
     except SQLAlchemyError as exc:
         await session.rollback()
         raise EmailSignInServiceError(
-            "Failed to create tenant for email sign-in.",
+            "Failed to create tenant for email sign-up.",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         ) from exc
 
@@ -165,66 +222,35 @@ async def _get_or_create_workspace(
     if existing_workspace is not None:
         return existing_workspace, False
 
-    workspace = await create_workspace(
-        session=session,
-        tenant_id=tenant_id,
-        workspace_request=WorkspaceCreateRequest(
-            name=_derive_workspace_name(
-                email=email,
-                full_name=full_name,
-                organization_name=organization_name,
-                workspace_name=workspace_name,
-            ),
-            slug=_slugify(
-                _derive_workspace_name(
-                    email=email,
-                    full_name=full_name,
-                    organization_name=organization_name,
-                    workspace_name=workspace_name,
-                ),
-            )
-            or None,
-            description="Provisioned from preview email sign-in.",
-        ),
-    )
-    return workspace, True
-
-
-async def issue_preview_email_sign_in(
-    *,
-    session: AsyncSession,
-    sign_in_request: EmailSignInRequest,
-    api_key_salt: str,
-) -> tuple[Tenant, Workspace, APIKey, str, bool, bool]:
-    """Find or create a preview tenant/workspace, then issue a fresh API key."""
-
-    email = _normalize_email(sign_in_request.email)
-    full_name = _normalize_optional(sign_in_request.full_name)
-    organization_name = _normalize_optional(sign_in_request.organization_name)
-    workspace_name = _normalize_optional(sign_in_request.workspace_name)
-
-    tenant = await _get_tenant_by_owner_email(session=session, owner_email=email)
-    created_tenant = tenant is None
-    if tenant is None:
-        tenant = await _create_tenant_for_email(
-            session=session,
-            email=email,
-            full_name=full_name,
-            organization_name=organization_name,
-        )
-
-    workspace, created_workspace = await _get_or_create_workspace(
-        session=session,
-        tenant_id=tenant.tenant_id,
+    resolved_workspace_name = _derive_workspace_name(
         email=email,
         full_name=full_name,
         organization_name=organization_name,
         workspace_name=workspace_name,
     )
 
+    workspace = await create_workspace(
+        session=session,
+        tenant_id=tenant_id,
+        workspace_request=WorkspaceCreateRequest(
+            name=resolved_workspace_name,
+            slug=_slugify(resolved_workspace_name) or None,
+            description="Provisioned from email authentication.",
+        ),
+    )
+    return workspace, True
+
+
+async def _issue_session_api_key(
+    *,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    email: str,
+    api_key_salt: str,
+) -> tuple[APIKey, str]:
     raw_api_key = generate_api_key()
     api_key_record = APIKey(
-        tenant_id=tenant.tenant_id,
+        tenant_id=tenant_id,
         label=f"email-signin:{email}",
         key_hash=hash_api_key(raw_api_key, api_key_salt),
     )
@@ -239,4 +265,93 @@ async def issue_preview_email_sign_in(
         ) from exc
 
     await session.refresh(api_key_record)
-    return tenant, workspace, api_key_record, raw_api_key, created_tenant, created_workspace
+    return api_key_record, raw_api_key
+
+
+async def sign_up_with_email_password(
+    *,
+    session: AsyncSession,
+    sign_up_request: EmailSignUpRequest,
+    api_key_salt: str,
+) -> tuple[Tenant, Workspace, APIKey, str, bool, bool]:
+    """Create a preview tenant/workspace using email/password authentication."""
+
+    email = _normalize_email(sign_up_request.email)
+    password = _normalize_password(sign_up_request.password)
+    full_name = _normalize_optional(sign_up_request.full_name)
+    organization_name = _normalize_optional(sign_up_request.organization_name)
+    workspace_name = _normalize_optional(sign_up_request.workspace_name)
+
+    existing_tenant = await _get_tenant_by_owner_email(session=session, owner_email=email)
+    if existing_tenant is not None:
+        raise EmailSignInServiceError(
+            "An account already exists for this email. Sign in instead.",
+            status_code=status.HTTP_409_CONFLICT,
+        )
+
+    tenant = await _create_tenant_for_email(
+        session=session,
+        email=email,
+        password_hash=_hash_password(password),
+        full_name=full_name,
+        organization_name=organization_name,
+    )
+
+    workspace, created_workspace = await _get_or_create_workspace(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        email=email,
+        full_name=full_name,
+        organization_name=organization_name,
+        workspace_name=workspace_name,
+    )
+    api_key_record, raw_api_key = await _issue_session_api_key(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        email=email,
+        api_key_salt=api_key_salt,
+    )
+    return tenant, workspace, api_key_record, raw_api_key, True, created_workspace
+
+
+async def sign_in_with_email_password(
+    *,
+    session: AsyncSession,
+    sign_in_request: EmailSignInRequest,
+    api_key_salt: str,
+) -> tuple[Tenant, Workspace, APIKey, str, bool, bool]:
+    """Authenticate a preview tenant/workspace using email/password credentials."""
+
+    email = _normalize_email(sign_in_request.email)
+    password = _normalize_password(sign_in_request.password)
+
+    tenant = await _get_tenant_by_owner_email(session=session, owner_email=email)
+    if tenant is None:
+        raise EmailSignInServiceError(
+            "No account was found for this email. Create an account first.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    default_policy: dict[str, Any] = tenant.default_policy or {}
+    stored_hash = default_policy.get("password_hash")
+    if not isinstance(stored_hash, str) or not _verify_password(password, stored_hash):
+        raise EmailSignInServiceError(
+            "Incorrect email or password.",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    workspace, created_workspace = await _get_or_create_workspace(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        email=email,
+        full_name=default_policy.get("owner_name"),
+        organization_name=tenant.name,
+        workspace_name=None,
+    )
+    api_key_record, raw_api_key = await _issue_session_api_key(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        email=email,
+        api_key_salt=api_key_salt,
+    )
+    return tenant, workspace, api_key_record, raw_api_key, False, created_workspace

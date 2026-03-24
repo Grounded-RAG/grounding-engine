@@ -27,6 +27,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatRelativeOrDate, sentenceCase } from "@/lib/format";
+import { workspacePath } from "@/lib/routes";
 import type { UserFacingMode } from "@/lib/types";
 
 const MODE_OPTIONS: Array<{ label: string; value: UserFacingMode; available: boolean }> = [
@@ -38,7 +39,7 @@ const MODE_OPTIONS: Array<{ label: string; value: UserFacingMode; available: boo
 
 export default function AgentChatPage() {
   const { id } = useParams();
-  const { apiKey, workspaceId } = useAuth();
+  const { apiKey, workspaceId, workspaceSlug } = useAuth();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
@@ -224,7 +225,7 @@ export default function AgentChatPage() {
   if (!agent) {
     return (
       <div className="max-w-4xl">
-        <Link to="/app/agents" className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-4">
+        <Link to={workspacePath(workspaceSlug, "/agents")} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-4">
           <ArrowLeft className="h-3.5 w-3.5" /> Back to agents
         </Link>
         <div className="rounded-2xl border bg-card p-10 text-center">
@@ -244,7 +245,7 @@ export default function AgentChatPage() {
     <div className="max-w-full -m-6 md:-m-8 h-[calc(100vh-3.5rem)] flex">
       <div className="w-72 border-r bg-card flex flex-col shrink-0 hidden md:flex">
         <div className="p-4 border-b">
-          <Link to="/app/agents" className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mb-3">
+          <Link to={workspacePath(workspaceSlug, "/agents")} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mb-3">
             <ArrowLeft className="h-3 w-3" /> Back to agents
           </Link>
           <div className="flex items-center gap-2">
@@ -290,7 +291,7 @@ export default function AgentChatPage() {
                     ))}
                   </div>
                 ) : (
-                  <Link to="/app/datasets" className="text-xs text-accent hover:underline">
+                  <Link to={workspacePath(workspaceSlug, "/datasets")} className="text-xs text-accent hover:underline">
                     Create a dataset first
                   </Link>
                 )}

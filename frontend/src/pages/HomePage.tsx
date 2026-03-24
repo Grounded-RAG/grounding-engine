@@ -11,10 +11,8 @@ import {
   ArrowRight,
   Database,
   Bot,
-  MessageSquare,
   Eye,
   ChevronRight,
-  BarChart3,
   Building2,
   Play,
   Quote,
@@ -45,17 +43,22 @@ function MarketingNav() {
     <header className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-xl border-b border-border/50">
       <div className="max-w-7xl mx-auto flex h-16 items-center justify-between px-6">
         <Link to="/" className="flex items-center gap-2">
-          <img src="/grounded-mark.svg" alt="Grounded AI" className="h-7 w-7" />
-          <span className="text-xl font-bold text-foreground tracking-tight">Grounded</span>
+          <Leaf className="h-7 w-7 text-accent" />
+          <span className="text-xl font-bold text-foreground tracking-tight">Grounded AI</span>
         </Link>
         <nav className="hidden md:flex items-center gap-8">
-          {["Product", "Solutions", "Resources", "Company", "Pricing"].map((item) => (
+          {[
+            { label: "Product", target: "product" },
+            { label: "Solutions", target: "solutions" },
+            { label: "Trust", target: "trust" },
+            { label: "Pricing", target: "pricing" },
+          ].map((item) => (
             <a
-              key={item}
-              href={`#${item.toLowerCase()}`}
+              key={item.label}
+              href={`#${item.target}`}
               className="text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
-              {item}
+              {item.label}
             </a>
           ))}
         </nav>
@@ -89,14 +92,19 @@ function MarketingNav() {
           animate={{ opacity: 1, y: 0 }}
           className="md:hidden border-t bg-background px-6 py-4 space-y-3"
         >
-          {["Product", "Solutions", "Resources", "Company", "Pricing"].map((item) => (
+          {[
+            { label: "Product", target: "product" },
+            { label: "Solutions", target: "solutions" },
+            { label: "Trust", target: "trust" },
+            { label: "Pricing", target: "pricing" },
+          ].map((item) => (
             <a
-              key={item}
-              href={`#${item.toLowerCase()}`}
+              key={item.label}
+              href={`#${item.target}`}
               className="block text-sm text-foreground py-2"
               onClick={() => setMobileOpen(false)}
             >
-              {item}
+              {item.label}
             </a>
           ))}
           <div className="flex gap-3 pt-2">
@@ -194,7 +202,7 @@ function TrustStrip() {
           Trusted by teams building on critical knowledge
         </p>
         <div className="flex flex-wrap justify-center items-center gap-x-12 gap-y-4 opacity-40">
-          {["Enterprise Co.", "TechCorp", "Legal Partners LLP", "Global Compliance", "InnovateLab", "SecureOps"].map((name) => (
+          {["Policy teams", "Compliance operations", "Research groups", "Technical operations", "Knowledge teams"].map((name) => (
             <span key={name} className="text-sm font-semibold text-foreground tracking-wide">
               {name}
             </span>
@@ -285,7 +293,7 @@ function CapabilitiesSection() {
 
 function ProblemSection() {
   return (
-    <section className="py-24 md:py-32 bg-secondary/50">
+    <section id="trust" className="py-24 md:py-32 bg-secondary/50">
       <div className="max-w-7xl mx-auto px-6">
         <div className="text-center max-w-3xl mx-auto mb-20">
           <h2 className="text-4xl md:text-5xl font-serif text-foreground mb-5">
@@ -574,7 +582,7 @@ function UseCasesSection() {
 function PricingSection() {
   const plans = [
     { name: "Free", price: "$0", modes: ["Auto", "Instant"], cta: "Get started", featured: false },
-    { name: "Pro", price: "$49", modes: ["Auto", "Instant", "Thinking"], cta: "Get started", featured: true },
+    { name: "Pro", price: "$25", modes: ["Auto", "Instant", "Thinking"], cta: "Get started", featured: true },
     { name: "Business", price: "$199", modes: ["Auto", "Instant", "Thinking", "Verified*"], cta: "Get started", featured: false },
     { name: "Enterprise", price: "Custom", modes: ["Auto", "Instant", "Thinking", "Verified"], cta: "Contact us", featured: false },
   ];
@@ -673,7 +681,7 @@ function Footer() {
               <div className="h-6 w-6 rounded-md gradient-accent flex items-center justify-center">
                 <Leaf className="h-3 w-3 text-accent-foreground" />
               </div>
-              <span className="text-lg font-bold text-foreground">Grounded</span>
+              <span className="text-lg font-bold text-foreground">Grounded AI</span>
             </div>
             <p className="text-sm text-muted-foreground leading-relaxed">
               The grounded intelligence layer for expert work. Reduce hallucination. Resolve ambiguity.
@@ -695,7 +703,7 @@ function Footer() {
           ))}
         </div>
         <div className="border-t mt-12 pt-8 text-center text-sm text-muted-foreground">
-          &copy; {new Date().getFullYear()} Grounded. All rights reserved.
+          &copy; {new Date().getFullYear()} Grounded AI. All rights reserved.
         </div>
       </div>
     </footer>

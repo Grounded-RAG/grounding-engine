@@ -7,6 +7,7 @@ import { AuthProvider } from "@/lib/auth";
 import RequireAuth from "@/components/RequireAuth";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
+import SignUpPage from "./pages/SignUpPage";
 import OnboardingPage from "./pages/OnboardingPage";
 import AppShell from "./components/AppShell";
 import DashboardPage from "./pages/DashboardPage";
@@ -30,9 +31,20 @@ const App = () => (
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/sign-up" element={<SignUpPage />} />
             <Route element={<RequireAuth />}>
               <Route path="/onboarding" element={<OnboardingPage />} />
               <Route path="/app" element={<AppShell />}>
+                <Route index element={<DashboardPage />} />
+                <Route path="datasets" element={<DatasetsPage />} />
+                <Route path="datasets/:id" element={<DatasetDetailPage />} />
+                <Route path="agents" element={<AgentsPage />} />
+                <Route path="agents/:id" element={<AgentChatPage />} />
+                <Route path="runs" element={<RunsPage />} />
+                <Route path="settings" element={<SettingsPage />} />
+                <Route path="api-keys" element={<SettingsPage />} />
+              </Route>
+              <Route path="/app/workspace/:workspaceSlug" element={<AppShell />}>
                 <Route index element={<DashboardPage />} />
                 <Route path="datasets" element={<DatasetsPage />} />
                 <Route path="datasets/:id" element={<DatasetDetailPage />} />

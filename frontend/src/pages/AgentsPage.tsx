@@ -12,10 +12,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { createAgent, listAgents, listDatasets } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatDateTime } from "@/lib/format";
+import { workspacePath } from "@/lib/routes";
 import type { UserFacingMode } from "@/lib/types";
 
 export default function AgentsPage() {
-  const { apiKey, workspaceId } = useAuth();
+  const { apiKey, workspaceId, workspaceSlug } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
@@ -65,7 +66,7 @@ export default function AgentsPage() {
       setShowCreateForm(false);
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      navigate(`/app/agents/${agent.agent_id}`);
+      navigate(workspacePath(workspaceSlug, `/agents/${agent.agent_id}`));
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "Unable to create the agent.";
@@ -241,7 +242,7 @@ export default function AgentsPage() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.05 }}
               >
-                <Link to={`/app/agents/${agent.agent_id}`} className="block rounded-2xl border bg-card p-5 hover-lift group">
+                <Link to={workspacePath(workspaceSlug, `/agents/${agent.agent_id}`)} className="block rounded-2xl border bg-card p-5 hover-lift group">
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex items-center gap-3">
                       <div className="h-10 w-10 rounded-xl bg-accent/10 flex items-center justify-center">

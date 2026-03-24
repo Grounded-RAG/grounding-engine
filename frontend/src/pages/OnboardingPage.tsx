@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createWorkspace } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { workspacePath } from "@/lib/routes";
 
 const steps = [
   { title: "About you", subtitle: "Tell us who will use this workspace." },
@@ -83,9 +84,9 @@ export default function OnboardingPage() {
       });
     },
     onSuccess: (workspace) => {
-      setWorkspace(workspace.workspace_id, workspace.name);
+      setWorkspace(workspace.workspace_id, workspace.name, workspace.slug);
       toast.success("Workspace created.");
-      navigate("/app");
+      navigate(workspacePath(workspace.slug));
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "Unable to create the workspace.";

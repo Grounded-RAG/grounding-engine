@@ -10,9 +10,17 @@ from app.models.enums import ExecutionTier, SubscriptionPlan
 
 
 class EmailSignInRequest(BaseModel):
-    """Preview email sign-in request used by the frontend login page."""
+    """Email/password sign-in request."""
 
     email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class EmailSignUpRequest(BaseModel):
+    """Email/password sign-up request."""
+
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=256)
     full_name: str | None = Field(default=None, min_length=1, max_length=255)
     organization_name: str | None = Field(default=None, min_length=1, max_length=255)
     workspace_name: str | None = Field(default=None, min_length=1, max_length=255)
@@ -30,11 +38,12 @@ class AuthSmokeResponse(BaseModel):
     api_key_label: str
 
 
-class EmailSignInResponse(AuthSmokeResponse):
-    """Response returned after preview email sign-in succeeds."""
+class EmailAuthResponse(AuthSmokeResponse):
+    """Response returned after email auth succeeds."""
 
     api_key: str
     workspace_id: UUID
     workspace_name: str
+    workspace_slug: str
     created_tenant: bool = False
     created_workspace: bool = False
