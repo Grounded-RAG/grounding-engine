@@ -45,7 +45,7 @@ def shape_grounded_response(
             chunk_id=item.chunk_id,
             document_id=item.document_id,
             chunk_index=item.chunk_index,
-            quote=item.text,
+            quote=draft.citation_snippets.get(item.chunk_id, item.text),
         )
         for item in cited_items
     ]

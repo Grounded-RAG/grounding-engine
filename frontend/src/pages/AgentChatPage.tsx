@@ -4,17 +4,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Bot,
-  CheckCircle2,
   Database,
   FileSearch,
   Plus,
   Send,
   Zap,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   attachDatasetToAgent,
   createAgentConversation,
@@ -36,6 +36,35 @@ const MODE_OPTIONS: Array<{ label: string; value: UserFacingMode; available: boo
   { label: "Thinking", value: "thinking", available: false },
   { label: "Verified", value: "verified", available: false },
 ];
+
+function EmptyPanel({
+  icon: Icon,
+  title,
+  description,
+  to,
+  actionLabel,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  to: string;
+  actionLabel: string;
+}) {
+  return (
+    <div className="rounded-[28px] border bg-card px-8 py-10 text-center shadow-sm">
+      <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/10">
+        <Icon className="h-6 w-6 text-accent" />
+      </div>
+      <h3 className="mb-2 text-2xl font-semibold tracking-[-0.02em] text-foreground">{title}</h3>
+      <p className="mx-auto max-w-2xl text-sm leading-7 text-muted-foreground">{description}</p>
+      <Link to={to} className="mt-6 inline-flex">
+        <Button variant="outline" className="rounded-full">
+          {actionLabel}
+        </Button>
+      </Link>
+    </div>
+  );
+}
 
 export default function AgentChatPage() {
   const { id } = useParams();
@@ -225,12 +254,17 @@ export default function AgentChatPage() {
   if (!agent) {
     return (
       <div className="max-w-4xl">
-        <Link to={workspacePath(workspaceSlug, "/agents")} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-4">
+        <Link
+          to={workspacePath(workspaceSlug, "/agents")}
+          className="mb-4 flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
           <ArrowLeft className="h-3.5 w-3.5" /> Back to agents
         </Link>
         <div className="rounded-2xl border bg-card p-10 text-center">
-          <h1 className="text-lg font-semibold text-foreground mb-2">Agent not found</h1>
-          <p className="text-sm text-muted-foreground">This agent may have been removed or is no longer available.</p>
+          <h1 className="mb-2 text-lg font-semibold text-foreground">Agent not found</h1>
+          <p className="text-sm text-muted-foreground">
+            This agent may have been removed or is no longer available.
+          </p>
         </div>
       </div>
     );
@@ -240,37 +274,48 @@ export default function AgentChatPage() {
   const conversations = conversationsQuery.data ?? [];
   const messages = messagesQuery.data ?? [];
   const run = runQuery.data;
+  const activeConversation =
+    conversations.find((conversation) => conversation.conversation_id === selectedConversationId) ?? null;
 
   return (
-    <div className="max-w-full -m-6 md:-m-8 h-[calc(100vh-3.5rem)] flex">
-      <div className="w-72 border-r bg-card flex flex-col shrink-0 hidden md:flex">
-        <div className="p-4 border-b">
-          <Link to={workspacePath(workspaceSlug, "/agents")} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mb-3">
+    <div className="max-w-full -m-6 md:-m-8 h-[calc(100vh-3.5rem)] grid grid-cols-1 border-y bg-background md:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)_320px]">
+      <aside className="hidden border-r bg-card/90 md:flex md:flex-col">
+        <div className="border-b px-5 py-5">
+          <Link
+            to={workspacePath(workspaceSlug, "/agents")}
+            className="mb-4 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
             <ArrowLeft className="h-3 w-3" /> Back to agents
           </Link>
-          <div className="flex items-center gap-2">
-            <Bot className="h-4 w-4 text-accent" />
-            <span className="text-sm font-semibold text-foreground truncate">{agent.name}</span>
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl bg-accent/10">
+              <Bot className="h-4 w-4 text-accent" />
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-foreground">{agent.name}</div>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {agent.description || "Grounded assistant backed by your datasets."}
+              </p>
+            </div>
           </div>
-          <p className="text-xs text-muted-foreground mt-1">
-            {agent.description || "Grounded assistant backed by your datasets."}
-          </p>
         </div>
-        <div className="p-3 border-b space-y-3">
+
+        <div className="border-b px-4 py-4 space-y-4">
           <Button
-            variant="pill-outline"
+            variant="outline"
             size="sm"
-            className="w-full"
+            className="h-11 w-full rounded-2xl"
             onClick={() => createConversationMutation.mutate("New conversation")}
             disabled={createConversationMutation.isPending}
           >
-            <Plus className="h-3.5 w-3.5 mr-1" /> New Chat
+            <Plus className="mr-1 h-3.5 w-3.5" /> New Chat
           </Button>
+
           <div>
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Attached datasets</div>
+            <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Attached datasets</div>
             {attachedDatasets.length === 0 ? (
               <div className="space-y-2">
-                <div className="text-xs text-muted-foreground">
+                <div className="text-xs leading-5 text-muted-foreground">
                   Attach a dataset before sending grounded questions.
                 </div>
                 {availableDatasets.length > 0 ? (
@@ -281,35 +326,46 @@ export default function AgentChatPage() {
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="w-full justify-start rounded-xl"
+                        className="w-full justify-start rounded-2xl"
                         onClick={() => attachDatasetMutation.mutate(dataset.dataset_id)}
                         disabled={attachDatasetMutation.isPending}
                       >
-                        <Database className="h-3.5 w-3.5 mr-2" />
+                        <Database className="mr-2 h-3.5 w-3.5" />
                         {dataset.name}
                       </Button>
                     ))}
                   </div>
                 ) : (
-                  <Link to={workspacePath(workspaceSlug, "/datasets")} className="text-xs text-accent hover:underline">
+                  <Link
+                    to={workspacePath(workspaceSlug, "/datasets")}
+                    className="text-xs text-accent hover:underline"
+                  >
                     Create a dataset first
                   </Link>
                 )}
               </div>
             ) : (
-              <div className="flex flex-wrap gap-2">
+              <div className="space-y-2">
                 {attachedDatasets.map((dataset) => (
-                  <Badge key={dataset.dataset_id} variant="outline" className="text-[10px]">
-                    <Database className="h-2.5 w-2.5 mr-0.5" /> {dataset.name}
-                  </Badge>
+                  <div
+                    key={dataset.dataset_id}
+                    className="flex items-center gap-2 rounded-2xl border bg-background px-3 py-2.5 text-xs text-foreground"
+                  >
+                    <Database className="h-3 w-3 text-accent" />
+                    <span className="truncate">{dataset.name}</span>
+                  </div>
                 ))}
               </div>
             )}
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+
+        <div className="flex-1 overflow-y-auto px-3 py-4">
+          <div className="mb-3 px-2 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+            Conversations
+          </div>
           {conversations.length === 0 ? (
-            <div className="px-3 py-8 text-center text-xs text-muted-foreground">
+            <div className="px-3 py-8 text-center text-xs leading-5 text-muted-foreground">
               No conversations yet. Start a new chat to create the first run.
             </div>
           ) : (
@@ -317,136 +373,105 @@ export default function AgentChatPage() {
               <button
                 key={conversation.conversation_id}
                 onClick={() => setSelectedConversationId(conversation.conversation_id)}
-                className={`w-full text-left rounded-xl px-3 py-2.5 transition-colors ${
+                className={`mb-1.5 w-full rounded-xl px-3 py-2.5 text-left transition-colors ${
                   selectedConversationId === conversation.conversation_id
                     ? "bg-accent/10 text-foreground"
-                    : "text-muted-foreground hover:bg-secondary"
+                    : "text-muted-foreground hover:bg-secondary/70"
                 }`}
               >
-                <div className="text-xs font-medium truncate">{conversation.title}</div>
-                <div className="text-[10px] text-muted-foreground mt-0.5">
+                <div className="truncate text-sm font-medium">{conversation.title}</div>
+                <div className="mt-0.5 text-[10px] text-muted-foreground">
                   {conversation.last_used_mode} • {formatRelativeOrDate(conversation.updated_at)}
                 </div>
               </button>
             ))
           )}
         </div>
-      </div>
+      </aside>
 
-      <div className="flex-1 flex flex-col min-w-0">
-        <div className="border-b flex flex-col gap-3 px-4 py-4 shrink-0">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-medium text-foreground">
-                {conversations.find((conversation) => conversation.conversation_id === selectedConversationId)?.title ||
-                  "New conversation"}
+      <section className="min-w-0 flex flex-col bg-background">
+        <div className="shrink-0 border-b bg-background/90 px-6 py-4 backdrop-blur">
+          <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="truncate text-lg font-semibold text-foreground">
+                {activeConversation?.title || "New conversation"}
               </h2>
-              <div className="flex items-center gap-2 flex-wrap mt-1">
-                <Badge variant="outline" className="text-[10px]">
-                  {agent.default_mode}
-                </Badge>
-                <Badge variant="outline" className="text-[10px]">
-                  {agent.dataset_ids.length} dataset{agent.dataset_ids.length === 1 ? "" : "s"} attached
-                </Badge>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>{agent.name}</span>
+                <span>•</span>
+                <span>{attachedDatasets.length} dataset{attachedDatasets.length === 1 ? "" : "s"} attached</span>
               </div>
             </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              {MODE_OPTIONS.map((mode) => (
-                <button
-                  key={mode.value}
-                  type="button"
-                  onClick={() => mode.available && setSelectedMode(mode.value)}
-                  disabled={!mode.available}
-                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-                    selectedMode === mode.value
-                      ? "bg-accent text-accent-foreground"
-                      : mode.available
-                        ? "border border-border text-foreground hover:bg-secondary"
-                        : "border border-border text-muted-foreground/40 cursor-not-allowed"
-                  }`}
-                >
-                  {mode.label}
-                  {!mode.available ? <span className="ml-1 text-[9px]">soon</span> : null}
-                </button>
-              ))}
-            </div>
+            <Badge variant="outline" className="hidden text-[10px] sm:inline-flex">
+              Grounded chat
+            </Badge>
           </div>
-          {attachedDatasets.length > 1 ? (
-            <div className="flex items-center gap-3 text-xs">
-              <label htmlFor="chat-dataset" className="text-muted-foreground">
-                Answer from dataset
-              </label>
-              <select
-                id="chat-dataset"
-                value={selectedDatasetId}
-                onChange={(event) => setSelectedDatasetId(event.target.value)}
-                className="h-9 rounded-xl border bg-background px-3 text-foreground"
-              >
-                {attachedDatasets.map((dataset) => (
-                  <option key={dataset.dataset_id} value={dataset.dataset_id}>
-                    {dataset.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : null}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {messagesQuery.isLoading && selectedConversationId ? (
-            <div className="text-sm text-muted-foreground">Loading conversation…</div>
-          ) : messages.length === 0 ? (
-            <div className="max-w-2xl rounded-2xl border bg-card p-8">
-              <h3 className="text-lg font-semibold text-foreground mb-2">Start a grounded conversation</h3>
-              <p className="text-sm text-muted-foreground">
-                Ask a question about the datasets attached to this agent. Grounded will create a run with citations,
-                confidence, and traceable answer metadata.
-              </p>
-            </div>
-          ) : (
-            messages.map((message) => {
-              const isAssistant = message.role === "assistant";
-              return (
-                <div
-                  key={message.message_id}
-                  className={`max-w-3xl ${isAssistant ? "" : "ml-auto"}`}
-                >
-                  {isAssistant ? (
-                    <button
-                      type="button"
-                      onClick={() => message.run_id && setActiveRunId(message.run_id)}
-                      className="w-full text-left rounded-2xl border bg-card px-5 py-4 hover:border-accent/40 transition-colors"
-                    >
-                      <p className="text-sm text-foreground leading-relaxed whitespace-pre-line">{message.content}</p>
-                      <div className="flex items-center gap-2 mt-3 flex-wrap">
-                        {message.run_id ? (
-                          <Badge variant="accent" className="text-[10px]">
-                            <FileSearch className="h-2.5 w-2.5 mr-0.5" /> Inspect run
-                          </Badge>
-                        ) : null}
-                        <span className="text-[10px] text-muted-foreground">
-                          {formatRelativeOrDate(message.created_at)}
-                        </span>
+        <div className="flex-1 overflow-y-auto">
+          <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-6 py-8">
+            {messagesQuery.isLoading && selectedConversationId ? (
+              <div className="text-sm text-muted-foreground">Loading conversation...</div>
+            ) : messages.length === 0 ? (
+              <div className="flex flex-1 items-center justify-center">
+                <EmptyPanel
+                  icon={Bot}
+                  title="Start a grounded conversation"
+                  description="Ask a question about the datasets attached to this agent. Grounded will create a run with citations, confidence, and traceable answer metadata."
+                  to={workspacePath(workspaceSlug, "/datasets")}
+                  actionLabel={attachedDatasets.length === 0 ? "Open datasets" : "Review datasets"}
+                />
+              </div>
+            ) : (
+              messages.map((message) => {
+                const isAssistant = message.role === "assistant";
+                return (
+                  <div key={message.message_id} className={`mb-8 flex ${isAssistant ? "justify-start" : "justify-end"}`}>
+                    {isAssistant ? (
+                      <div className="w-full max-w-3xl">
+                        <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                          <Bot className="h-3.5 w-3.5 text-accent" />
+                          <span>{agent.name}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => message.run_id && setActiveRunId(message.run_id)}
+                          className="w-full rounded-[26px] border bg-card px-6 py-5 text-left shadow-sm transition-colors hover:border-accent/40"
+                        >
+                          <p className="whitespace-pre-line text-[15px] leading-8 text-foreground">
+                            {message.content}
+                          </p>
+                          <div className="mt-4 flex flex-wrap items-center gap-2">
+                            {message.run_id ? (
+                              <Badge variant="accent" className="text-[10px]">
+                                <FileSearch className="mr-0.5 h-2.5 w-2.5" /> Inspect run
+                              </Badge>
+                            ) : null}
+                            <span className="text-[10px] text-muted-foreground">
+                              {formatRelativeOrDate(message.created_at)}
+                            </span>
+                          </div>
+                        </button>
                       </div>
-                    </button>
-                  ) : (
-                    <div className="rounded-2xl bg-secondary px-5 py-3.5">
-                      <p className="text-sm text-foreground whitespace-pre-line">{message.content}</p>
-                    </div>
-                  )}
-                </div>
-              );
-            })
-          )}
+                    ) : (
+                      <div className="max-w-xl rounded-[26px] bg-secondary px-6 py-4">
+                        <p className="whitespace-pre-line text-[15px] leading-7 text-foreground">{message.content}</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
 
-        <div className="border-t p-4">
-          <div className="max-w-3xl mx-auto flex gap-2">
-            <Input
+        <div className="shrink-0 border-t bg-background/95 px-6 py-4 backdrop-blur">
+          <div className="mx-auto w-full max-w-5xl rounded-[30px] border bg-card p-4 shadow-[0_20px_50px_rgba(15,23,42,0.08)]">
+            <Textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               placeholder="Ask a grounded question..."
-              className="flex-1 h-11 rounded-xl"
+              className="min-h-[88px] resize-none border-0 bg-transparent px-2 py-2 text-base shadow-none focus-visible:ring-0"
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
@@ -456,31 +481,78 @@ export default function AgentChatPage() {
                 }
               }}
             />
-            <Button
-              variant="pill-accent"
-              size="icon"
-              className="h-11 w-11"
-              disabled={!draft.trim() || chatMutation.isPending}
-              onClick={() => chatMutation.mutate()}
-            >
-              <Send className="h-4 w-4" />
-            </Button>
+
+            <div className="mt-3 flex flex-col gap-3 border-t pt-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                {attachedDatasets.length > 1 ? (
+                  <select
+                    id="chat-dataset"
+                    value={selectedDatasetId}
+                    onChange={(event) => setSelectedDatasetId(event.target.value)}
+                    className="h-9 rounded-full border bg-background px-3 text-foreground"
+                  >
+                    {attachedDatasets.map((dataset) => (
+                      <option key={dataset.dataset_id} value={dataset.dataset_id}>
+                        {dataset.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : attachedDatasets.length === 1 ? (
+                  <Badge variant="outline" className="h-9 rounded-full px-3 text-[11px]">
+                    <Database className="mr-1.5 h-3 w-3" />
+                    {attachedDatasets[0].name}
+                  </Badge>
+                ) : (
+                  <span className="px-1">Attach a dataset to enable grounded answers.</span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {MODE_OPTIONS.map((mode) => (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    onClick={() => mode.available && setSelectedMode(mode.value)}
+                    disabled={!mode.available}
+                    className={`rounded-full px-4 py-2 text-xs font-medium transition-all ${
+                      selectedMode === mode.value
+                        ? "bg-accent text-accent-foreground"
+                        : mode.available
+                          ? "border border-border bg-background text-foreground hover:bg-secondary"
+                          : "border border-border bg-background text-muted-foreground/40 cursor-not-allowed"
+                    }`}
+                  >
+                    {mode.label}
+                    {!mode.available ? <span className="ml-1 text-[9px]">soon</span> : null}
+                  </button>
+                ))}
+                <Button
+                  variant="pill-accent"
+                  size="icon"
+                  className="h-11 w-11 rounded-full"
+                  disabled={!draft.trim() || chatMutation.isPending}
+                  onClick={() => chatMutation.mutate()}
+                >
+                  <Send className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <div className="w-80 border-l bg-card overflow-y-auto hidden lg:block">
-        <div className="p-4 border-b">
+      <aside className="hidden overflow-y-auto border-l bg-card/90 xl:block">
+        <div className="border-b p-4">
           <h3 className="text-sm font-semibold text-foreground">Answer Inspector</h3>
         </div>
 
         {!run ? (
-          <div className="p-6 text-sm text-muted-foreground">
+          <div className="p-6 text-sm leading-7 text-muted-foreground">
             Select an assistant answer to inspect citations, confidence, and run details.
           </div>
         ) : (
           <>
-            <div className="p-4 border-b space-y-2">
+            <div className="space-y-2 border-b p-4">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">Run ID</span>
                 <span className="font-mono text-foreground">{run.run_id.slice(0, 8)}</span>
@@ -488,7 +560,7 @@ export default function AgentChatPage() {
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">Mode</span>
                 <Badge variant="accent" className="text-[10px]">
-                  <Zap className="h-2.5 w-2.5 mr-0.5" /> {run.selected_mode ?? "auto"}
+                  <Zap className="mr-0.5 h-2.5 w-2.5" /> {run.selected_mode ?? "auto"}
                 </Badge>
               </div>
               <div className="flex items-center justify-between text-xs">
@@ -501,15 +573,18 @@ export default function AgentChatPage() {
               </div>
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">Verification</span>
-                <Badge variant={run.verification_status === "passed" ? "success" : "warning"} className="text-[10px]">
+                <Badge
+                  variant={run.verification_status === "passed" ? "success" : "warning"}
+                  className="text-[10px]"
+                >
                   {sentenceCase(run.verification_status)}
                 </Badge>
               </div>
             </div>
 
-            <div className="p-4 border-b">
-              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Routing</h4>
-              <p className="text-xs text-muted-foreground leading-relaxed">{run.routing_reason}</p>
+            <div className="border-b p-4">
+              <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Routing</h4>
+              <p className="text-xs leading-6 text-muted-foreground">{run.routing_reason}</p>
               {run.degraded_reasons.length > 0 ? (
                 <div className="mt-3 space-y-2">
                   {run.degraded_reasons.map((reason) => (
@@ -522,18 +597,18 @@ export default function AgentChatPage() {
             </div>
 
             <div className="p-4">
-              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Citations</h4>
+              <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Citations</h4>
               <div className="space-y-3">
                 {run.citations.length === 0 ? (
                   <div className="text-xs text-muted-foreground">No citations were returned for this run.</div>
                 ) : (
                   run.citations.map((citation) => (
                     <div key={citation.citation_id} className="rounded-xl border bg-secondary/30 p-3">
-                      <div className="flex items-center gap-2 mb-2">
+                      <div className="mb-2 flex items-center gap-2">
                         <FileSearch className="h-3 w-3 text-accent" />
-                        <span className="text-xs font-medium text-foreground truncate">{citation.citation_id}</span>
+                        <span className="truncate text-xs font-medium text-foreground">{citation.citation_id}</span>
                       </div>
-                      <p className="text-xs text-muted-foreground">"{citation.quote}"</p>
+                      <p className="text-xs leading-6 text-muted-foreground">"{citation.quote}"</p>
                     </div>
                   ))
                 )}
@@ -541,7 +616,7 @@ export default function AgentChatPage() {
             </div>
           </>
         )}
-      </div>
+      </aside>
     </div>
   );
 }

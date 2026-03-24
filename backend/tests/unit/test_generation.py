@@ -55,6 +55,7 @@ def test_generate_grounded_draft_uses_evidence_only() -> None:
     assert "[E001]" in draft.answer_text
     assert "[E002]" in draft.answer_text
     assert draft.cited_evidence_ids == ["chunk-1", "chunk-2"]
+    assert draft.citation_snippets["chunk-1"] == "Grounded handles tenant-safe uploads."
     assert draft.generator_provider == "local-grounded-v1"
 
 
@@ -85,6 +86,7 @@ def test_generate_grounded_draft_prefers_query_aligned_sentence() -> None:
     assert draft.answer_text.startswith(
         "Hybrid retrieval merges sparse and dense search results. [E001]"
     )
+    assert draft.citation_snippets["chunk-1"] == "Hybrid retrieval merges sparse and dense search results."
 
 
 def test_generate_grounded_draft_rejects_empty_evidence() -> None:
@@ -99,6 +101,57 @@ def test_generate_grounded_draft_rejects_empty_evidence() -> None:
                 items=[],
             ),
         )
+
+
+def test_generate_grounded_draft_rejects_non_meaningful_greeting_queries() -> None:
+    """Short greetings should degrade instead of reusing unrelated evidence."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-1",
+                text="Samrawit studies software engineering at Addis Ababa Science and Technology University.",
+            ),
+        ],
+    )
+
+    with pytest.raises(GroundedGenerationError, match="meaningful query terms"):
+        generate_grounded_draft(
+            query_text="hi",
+            evidence_package=evidence_package,
+        )
+
+
+def test_generate_grounded_draft_omits_irrelevant_evidence_items() -> None:
+    """Only evidence that actually supports the query should be cited."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1", "chunk-2"],
+        selected_evidence_ids=["chunk-1", "chunk-2"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-1",
+                text="Education: BSc in Software Engineering at Addis Ababa Science and Technology University.",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-2",
+                text="Awarded for a Huawei Seeds for the Future project in China.",
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What is her education status?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.cited_evidence_ids == ["chunk-1"]
+    assert "[E002]" not in draft.answer_text
 
 
 def test_generate_answer_from_evidence_delegates_to_generation_backend() -> None:

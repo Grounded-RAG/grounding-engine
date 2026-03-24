@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
   Database,
@@ -52,6 +52,14 @@ export default function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const location = useLocation();
   const { auth, workspaceName, workspaceSlug, signOut } = useAuth();
+  const isAgentChatRoute = /\/agents\/[^/]+$/.test(location.pathname);
+  const effectiveSidebarOpen = isAgentChatRoute ? false : sidebarOpen;
+
+  useEffect(() => {
+    if (isAgentChatRoute) {
+      setSidebarOpen(false);
+    }
+  }, [isAgentChatRoute]);
 
   const resolvedNavItems = navItems.map((item) =>
     "subpath" in item
@@ -72,12 +80,12 @@ export default function AppShell() {
       {/* Sidebar */}
       <aside className={cn(
         "fixed left-0 top-0 bottom-0 z-40 flex flex-col border-r bg-card transition-all duration-200",
-        sidebarOpen ? "w-60" : "w-14"
+        effectiveSidebarOpen ? "w-60" : "w-14"
       )}>
         {/* Logo */}
         <div className="h-14 flex items-center px-4 border-b gap-2.5 shrink-0">
           <img src="/grounded-mark.svg" alt="Grounded AI" className="h-7 w-7 shrink-0" />
-          {sidebarOpen && <span className="text-sm font-bold text-foreground truncate">Grounded AI</span>}
+          {effectiveSidebarOpen && <span className="text-sm font-bold text-foreground truncate">Grounded AI</span>}
         </div>
 
         {/* Nav */}
@@ -98,7 +106,7 @@ export default function AppShell() {
                 )}
               >
                 <Icon className="h-4 w-4 shrink-0" />
-                {sidebarOpen && (
+                {effectiveSidebarOpen && (
                   <>
                     <span className="truncate">{navItem.label}</span>
                     {navItem.coming && <Badge variant="coming" className="ml-auto text-[9px] px-1.5">Soon</Badge>}
@@ -112,16 +120,17 @@ export default function AppShell() {
         {/* Collapse toggle */}
         <div className="border-t p-2">
           <button
+            disabled={isAgentChatRoute}
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="flex items-center justify-center w-full h-8 rounded-lg hover:bg-secondary text-muted-foreground transition-colors"
+            className="flex items-center justify-center w-full h-8 rounded-lg hover:bg-secondary text-muted-foreground transition-colors disabled:cursor-default disabled:opacity-60"
           >
-            <ChevronLeft className={cn("h-4 w-4 transition-transform", !sidebarOpen && "rotate-180")} />
+            <ChevronLeft className={cn("h-4 w-4 transition-transform", !effectiveSidebarOpen && "rotate-180")} />
           </button>
         </div>
       </aside>
 
       {/* Main content */}
-      <div className={cn("flex-1 flex flex-col transition-all duration-200", sidebarOpen ? "ml-60" : "ml-14")}>
+      <div className={cn("flex-1 flex flex-col transition-all duration-200", effectiveSidebarOpen ? "ml-60" : "ml-14")}>
         {/* Topbar */}
         <header className="h-14 border-b bg-card/80 backdrop-blur-lg flex items-center px-6 gap-4 sticky top-0 z-30">
           <button

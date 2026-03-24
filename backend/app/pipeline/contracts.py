@@ -170,4 +170,5 @@ class GroundedAnswerDraft:
 
     answer_text: str
     cited_evidence_ids: list[str]
+    citation_snippets: dict[str, str]
     generator_provider: str

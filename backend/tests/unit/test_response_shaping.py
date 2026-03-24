@@ -60,6 +60,10 @@ def test_shape_grounded_response_builds_structured_citations() -> None:
             "It also tracks ingestion job status. [E002]"
         ),
         cited_evidence_ids=["chunk-1", "chunk-2"],
+        citation_snippets={
+            "chunk-1": "Grounded supports tenant-safe uploads.",
+            "chunk-2": "It also tracks ingestion job status.",
+        },
         generator_provider="local-grounded-v1",
     )
 
@@ -90,6 +94,7 @@ def test_shape_grounded_response_deduplicates_repeated_citations() -> None:
     draft = GroundedAnswerDraft(
         answer_text="Grounded returns cited answers. [E001] [E001]",
         cited_evidence_ids=["chunk-1", "chunk-1"],
+        citation_snippets={"chunk-1": "Grounded returns cited answers."},
         generator_provider="local-grounded-v1",
     )
 
@@ -117,6 +122,7 @@ def test_shape_grounded_response_rejects_unknown_evidence_reference() -> None:
     draft = GroundedAnswerDraft(
         answer_text="Grounded uses evidence packaging. [E999]",
         cited_evidence_ids=["chunk-missing"],
+        citation_snippets={"chunk-missing": "Grounded uses evidence packaging."},
         generator_provider="local-grounded-v1",
     )
 
