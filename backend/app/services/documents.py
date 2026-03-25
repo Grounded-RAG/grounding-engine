@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext
 from app.config import get_settings
-from app.core.storage import StorageError, delete_object, upload_bytes
+from app.core.storage import StorageError, delete_object, upload_bytes, upload_fileobj
 from app.models import (
     Document,
     DocumentStatus,
@@ -225,101 +225,41 @@ async def create_document_upload(
     provided_content_type = (upload_file.content_type or "").strip().lower()
     try:
         original_filename, safe_filename, suffix = _normalize_filename(upload_file.filename)
-        payload = await upload_file.read()
-    finally:
-        await upload_file.close()
+        
+        hasher = hashlib.sha256()
+        file_size_bytes = 0
+        while chunk := await upload_file.read(8192):
+            hasher.update(chunk)
+            file_size_bytes += len(chunk)
+        checksum = hasher.hexdigest()
+        await upload_file.seek(0)
+        
+        if provided_content_type not in _GENERIC_CONTENT_TYPES and (
+            provided_content_type != _SUPPORTED_UPLOAD_TYPES[suffix]
+        ):
+            raise DocumentServiceError(
+                "Uploaded file content type does not match the file extension.",
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            )
 
-    if provided_content_type not in _GENERIC_CONTENT_TYPES and (
-        provided_content_type != _SUPPORTED_UPLOAD_TYPES[suffix]
-    ):
-        raise DocumentServiceError(
-            "Uploaded file content type does not match the file extension.",
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-        )
+        if file_size_bytes == 0:
+            raise DocumentServiceError(
+                "Uploaded file must not be empty.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
-    if not payload:
-        raise DocumentServiceError(
-            "Uploaded file must not be empty.",
-            status_code=status.HTTP_400_BAD_REQUEST,
-        )
+        settings = get_settings()
+        if file_size_bytes > settings.document_upload_max_bytes:
+            raise DocumentServiceError(
+                "Uploaded file exceeds the configured size limit.",
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
 
-    settings = get_settings()
-    if len(payload) > settings.document_upload_max_bytes:
-        raise DocumentServiceError(
-            "Uploaded file exceeds the configured size limit.",
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-        )
-
-    document_id = uuid.uuid4()
-    job_id = uuid.uuid4()
-    normalized_mime_type = _SUPPORTED_UPLOAD_TYPES[suffix]
-    document_title = _resolve_document_title(title, original_filename)
-    checksum = hashlib.sha256(payload).hexdigest()
-    existing_upload = await _get_existing_document_upload(
-        session=session,
-        tenant_id=tenant_context.tenant_id,
-        namespace_id=namespace_id,
-        checksum=checksum,
-        filename=original_filename,
-    )
-    if existing_upload is not None:
-        return existing_upload
-
-    object_key = _build_object_key(
-        tenant_id=tenant_context.tenant_id,
-        namespace_id=namespace_id,
-        document_id=document_id,
-        filename=safe_filename,
-    )
-
-    try:
-        stored_object = await upload_bytes(
-            object_key,
-            payload,
-            content_type=normalized_mime_type,
-            metadata={
-                "tenant_id": str(tenant_context.tenant_id),
-                "namespace_id": str(namespace_id),
-                "document_id": str(document_id),
-                "checksum": checksum,
-            },
-        )
-    except StorageError as exc:
-        raise DocumentServiceError(
-            "Failed to store uploaded file.",
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        ) from exc
-
-    document = Document(
-        doc_id=document_id,
-        tenant_id=tenant_context.tenant_id,
-        namespace_id=namespace_id,
-        object_key=stored_object.key,
-        source_uri=f"s3://{stored_object.bucket}/{stored_object.key}",
-        mime_type=normalized_mime_type,
-        title=document_title,
-        checksum=checksum,
-        file_size_bytes=stored_object.size,
-        status=DocumentStatus.UPLOADED,
-    )
-    ingestion_job = IngestionJob(
-        job_id=job_id,
-        tenant_id=tenant_context.tenant_id,
-        doc_id=document_id,
-        status=IngestionJobStatus.QUEUED,
-    )
-    session.add(document)
-    session.add(ingestion_job)
-
-    try:
-        await session.commit()
-    except IntegrityError as exc:
-        await session.rollback()
-        try:
-            await delete_object(stored_object.key)
-        except StorageError:
-            pass
-
+        document_id = uuid.uuid4()
+        job_id = uuid.uuid4()
+        normalized_mime_type = _SUPPORTED_UPLOAD_TYPES[suffix]
+        document_title = _resolve_document_title(title, original_filename)
+        
         existing_upload = await _get_existing_document_upload(
             session=session,
             tenant_id=tenant_context.tenant_id,
@@ -330,30 +270,97 @@ async def create_document_upload(
         if existing_upload is not None:
             return existing_upload
 
-        raise DocumentServiceError(
-            "Failed to persist uploaded document metadata.",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        ) from exc
-    except SQLAlchemyError as exc:
-        await session.rollback()
+        object_key = _build_object_key(
+            tenant_id=tenant_context.tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            filename=safe_filename,
+        )
+
         try:
-            await delete_object(stored_object.key)
-        except StorageError:
-            pass
-        raise DocumentServiceError(
-            "Failed to persist uploaded document metadata.",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        ) from exc
+            stored_object = await upload_fileobj(
+                object_key,
+                upload_file.file,
+                content_type=normalized_mime_type,
+                metadata={
+                    "tenant_id": str(tenant_context.tenant_id),
+                    "namespace_id": str(namespace_id),
+                    "document_id": str(document_id),
+                    "checksum": checksum,
+                },
+            )
+        except StorageError as exc:
+            raise DocumentServiceError(
+                "Failed to store uploaded file.",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
 
-    await session.refresh(document)
-    await session.refresh(ingestion_job)
+        document = Document(
+            doc_id=document_id,
+            tenant_id=tenant_context.tenant_id,
+            namespace_id=namespace_id,
+            object_key=stored_object.key,
+            source_uri=f"s3://{stored_object.bucket}/{stored_object.key}",
+            mime_type=normalized_mime_type,
+            title=document_title,
+            checksum=checksum,
+            file_size_bytes=stored_object.size,
+            status=DocumentStatus.UPLOADED,
+        )
+        ingestion_job = IngestionJob(
+            job_id=job_id,
+            tenant_id=tenant_context.tenant_id,
+            doc_id=document_id,
+            status=IngestionJobStatus.QUEUED,
+        )
+        session.add(document)
+        session.add(ingestion_job)
 
-    return DocumentUploadResult(
-        document=document,
-        ingestion_job=ingestion_job,
-        filename=original_filename,
-        should_schedule_ingestion=True,
-    )
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            try:
+                await delete_object(stored_object.key)
+            except StorageError:
+                pass
+
+            existing_upload = await _get_existing_document_upload(
+                session=session,
+                tenant_id=tenant_context.tenant_id,
+                namespace_id=namespace_id,
+                checksum=checksum,
+                filename=original_filename,
+            )
+            if existing_upload is not None:
+                return existing_upload
+
+            raise DocumentServiceError(
+                "Failed to persist uploaded document metadata.",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ) from exc
+        except SQLAlchemyError as exc:
+            await session.rollback()
+            try:
+                await delete_object(stored_object.key)
+            except StorageError:
+                pass
+            raise DocumentServiceError(
+                "Failed to persist uploaded document metadata.",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ) from exc
+
+        await session.refresh(document)
+        await session.refresh(ingestion_job)
+
+        return DocumentUploadResult(
+            document=document,
+            ingestion_job=ingestion_job,
+            filename=original_filename,
+            should_schedule_ingestion=True,
+        )
+    finally:
+        await upload_file.close()
 
 
 async def get_ingestion_job_for_tenant(
