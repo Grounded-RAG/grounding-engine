@@ -11,6 +11,7 @@ from app.pipeline.contracts import ChunkManifest, ChunkingConfig
 from app.pipeline.orchestrator import build_chunk_manifest
 from app.services.extraction import derive_extracted_text_key
 from app.services.ingestion import IngestionJobContext, IngestionProcessorError
+from starlette.concurrency import run_in_threadpool
 
 
 @dataclass(frozen=True)
@@ -54,14 +55,16 @@ async def chunk_extracted_document(
         ) from exc
 
     settings = get_settings()
-    manifest = build_chunk_manifest(
+    config = ChunkingConfig(
+        max_tokens=settings.chunk_max_tokens,
+        overlap_tokens=settings.chunk_overlap_tokens,
+    )
+    manifest = await run_in_threadpool(
+        build_chunk_manifest,
         document_id=context.document_id,
         text=text,
         source_artifact_key=extracted_text_key,
-        config=ChunkingConfig(
-            max_tokens=settings.chunk_max_tokens,
-            overlap_tokens=settings.chunk_overlap_tokens,
-        ),
+        config=config,
     )
     if not manifest.chunks:
         raise IngestionProcessorError(
