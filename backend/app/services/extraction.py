@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import io
 import re
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import BinaryIO, Final
 from uuid import UUID
 
 from docx import Document as DocxDocument
 from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
-from app.core.storage import StorageError, download_bytes, upload_bytes
+from app.core.storage import StorageError, download_fileobj, upload_bytes
 from app.models import Document
 from app.services.ingestion import IngestionJobContext, IngestionProcessorError
 
@@ -70,16 +72,16 @@ def _parse_pdf_creation_date(raw_value: str | None) -> datetime | None:
         return None
 
 
-def _extract_text_from_txt(payload: bytes) -> tuple[str, str | None, datetime | None]:
+def _extract_text_from_txt(fileobj: BinaryIO) -> tuple[str, str | None, datetime | None]:
     """Extract normalized text from a UTF-8 text file."""
 
-    return payload.decode("utf-8"), None, None
+    return fileobj.read().decode("utf-8"), None, None
 
 
-def _extract_text_from_pdf(payload: bytes) -> tuple[str, str | None, datetime | None]:
+def _extract_text_from_pdf(fileobj: BinaryIO) -> tuple[str, str | None, datetime | None]:
     """Extract text and lightweight metadata from a PDF payload."""
 
-    reader = PdfReader(io.BytesIO(payload))
+    reader = PdfReader(fileobj)
     text = "\n\n".join((page.extract_text() or "") for page in reader.pages)
     metadata = reader.metadata or {}
     title = None
@@ -89,10 +91,10 @@ def _extract_text_from_pdf(payload: bytes) -> tuple[str, str | None, datetime | 
     return text, title, published_at
 
 
-def _extract_text_from_docx(payload: bytes) -> tuple[str, str | None, datetime | None]:
+def _extract_text_from_docx(fileobj: BinaryIO) -> tuple[str, str | None, datetime | None]:
     """Extract text and lightweight metadata from a DOCX payload."""
 
-    document = DocxDocument(io.BytesIO(payload))
+    document = DocxDocument(fileobj)
     text = "\n\n".join(
         paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()
     )
@@ -107,22 +109,22 @@ def _extract_text_from_docx(payload: bytes) -> tuple[str, str | None, datetime |
     return text, title, published_at
 
 
-def extract_text_from_payload(
-    payload: bytes,
+def extract_text_from_file(
+    fileobj: BinaryIO,
     *,
     mime_type: str,
 ) -> tuple[str, str | None, datetime | None]:
     """Extract text and optional metadata from a supported payload."""
 
     if mime_type == "text/plain":
-        return _extract_text_from_txt(payload)
+        return _extract_text_from_txt(fileobj)
     if mime_type == "application/pdf":
-        return _extract_text_from_pdf(payload)
+        return _extract_text_from_pdf(fileobj)
     if (
         mime_type
         == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     ):
-        return _extract_text_from_docx(payload)
+        return _extract_text_from_docx(fileobj)
 
     raise IngestionProcessorError(
         "UNSUPPORTED_EXTRACTION_MIME_TYPE",
@@ -172,24 +174,27 @@ async def extract_document_artifact(
 ) -> ExtractedDocument:
     """Extract normalized text from the source object and write a derived artifact."""
 
-    try:
-        payload = await download_bytes(context.object_key)
-    except StorageError as exc:
-        raise IngestionProcessorError(
-            "SOURCE_DOWNLOAD_FAILED",
-            "Failed to download uploaded source file from storage.",
-        ) from exc
+    with tempfile.TemporaryFile() as tmp_file:
+        try:
+            await download_fileobj(context.object_key, tmp_file)
+        except StorageError as exc:
+            raise IngestionProcessorError(
+                "SOURCE_DOWNLOAD_FAILED",
+                "Failed to stream uploaded source file from storage.",
+            ) from exc
 
-    try:
-        extracted_text, extracted_title, published_at = extract_text_from_payload(
-            payload,
-            mime_type=context.mime_type,
-        )
-    except UnicodeDecodeError as exc:
-        raise IngestionProcessorError(
-            "TEXT_DECODE_FAILED",
-            "Failed to decode the uploaded text document as UTF-8.",
-        ) from exc
+        tmp_file.seek(0)
+        try:
+            extracted_text, extracted_title, published_at = await run_in_threadpool(
+                extract_text_from_file,
+                tmp_file,
+                mime_type=context.mime_type,
+            )
+        except UnicodeDecodeError as exc:
+            raise IngestionProcessorError(
+                "TEXT_DECODE_FAILED",
+                "Failed to decode the uploaded text document as UTF-8.",
+            ) from exc
 
     normalized_text = _normalize_text(extracted_text)
     if not normalized_text:
