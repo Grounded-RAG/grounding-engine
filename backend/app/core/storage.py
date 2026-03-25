@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from functools import lru_cache
+import typing
 
 import boto3
 from botocore.client import BaseClient
@@ -142,6 +143,61 @@ async def download_bytes(key: str) -> bytes:
 
     try:
         return await asyncio.to_thread(_download)
+    except (BotoCoreError, ClientError) as exc:
+        raise StorageError("Failed to download object from storage.") from exc
+
+
+async def upload_fileobj(
+    key: str,
+    fileobj: typing.BinaryIO,
+    *,
+    content_type: str | None = None,
+    metadata: dict[str, str] | None = None,
+) -> StoredObject:
+    """Upload a file-like object to storage in a streamed manner."""
+
+    def _upload() -> StoredObject:
+        client = get_storage_client()
+        bucket = get_storage_bucket()
+        ensure_bucket_exists()
+        extra_args: dict[str, object] = {}
+        if content_type is not None:
+            extra_args["ContentType"] = content_type
+        if metadata is not None:
+            extra_args["Metadata"] = metadata
+
+        client.upload_fileobj(fileobj, bucket, key, ExtraArgs=extra_args)
+        
+        # Boto3 upload_fileobj does not return ETag, so we head the object to get size and ETag
+        response = client.head_object(Bucket=bucket, Key=key)
+        etag = response.get("ETag")
+        if isinstance(etag, str):
+            etag = etag.strip('"')
+        else:
+            etag = None
+            
+        return StoredObject(
+            bucket=bucket,
+            key=key,
+            etag=etag,
+            size=response.get("ContentLength", 0),
+        )
+
+    try:
+        return await asyncio.to_thread(_upload)
+    except (BotoCoreError, ClientError) as exc:
+        raise StorageError("Failed to upload object to storage.") from exc
+
+
+async def download_fileobj(key: str, fileobj: typing.BinaryIO) -> None:
+    """Download an object from storage directly into a file-like object."""
+
+    def _download() -> None:
+        client = get_storage_client()
+        client.download_fileobj(get_storage_bucket(), key, fileobj)
+
+    try:
+        await asyncio.to_thread(_download)
     except (BotoCoreError, ClientError) as exc:
         raise StorageError("Failed to download object from storage.") from exc
 
