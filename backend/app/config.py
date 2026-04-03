@@ -52,8 +52,11 @@ class Settings(BaseSettings):
     openai_base_url: AnyHttpUrl = "https://api.openai.com/v1"
     openai_model: str = "gpt-4.1-mini"
     openai_timeout_seconds: int = 30
+    provider_max_retries: int = 2
+    provider_retry_backoff_ms: int = 250
     qdrant_url: AnyHttpUrl = "http://localhost:6333"
     qdrant_collection: str = "grounded_chunks"
+    qdrant_check_compatibility: bool = False
     embedding_backend: EmbeddingBackend = "local_hash_v1"
     dense_embedding_dimensions: int = 128
     openai_embedding_model: str = "text-embedding-3-small"
@@ -199,6 +202,7 @@ class Settings(BaseSettings):
         "retrieval_candidate_limit",
         "rrf_smoothing_constant",
         "evidence_package_limit",
+        "provider_max_retries",
     )
     @classmethod
     def validate_positive_retrieval_settings(cls, value: int, info: ValidationInfo) -> int:
@@ -206,6 +210,15 @@ class Settings(BaseSettings):
 
         if value <= 0:
             raise ValueError(f"{info.field_name.upper()} must be greater than zero.")
+        return value
+
+    @field_validator("provider_retry_backoff_ms")
+    @classmethod
+    def validate_provider_retry_backoff_ms(cls, value: int) -> int:
+        """Ensure provider retry backoff stays non-negative."""
+
+        if value < 0:
+            raise ValueError("PROVIDER_RETRY_BACKOFF_MS must not be negative.")
         return value
 
     @field_validator("evidence_package_limit")

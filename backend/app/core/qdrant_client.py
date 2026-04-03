@@ -20,7 +20,10 @@ def get_qdrant_client() -> QdrantClient:
     """Return a cached Qdrant client using the configured endpoint."""
 
     settings = get_settings()
-    return QdrantClient(url=str(settings.qdrant_url))
+    return QdrantClient(
+        url=str(settings.qdrant_url),
+        check_compatibility=settings.qdrant_check_compatibility,
+    )
 
 
 def reset_qdrant_client() -> None:

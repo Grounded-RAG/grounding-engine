@@ -627,7 +627,9 @@ export default function AgentChatPage() {
               <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Citations</h4>
               <div className="space-y-3">
                 {run.citations.length === 0 ? (
-                  <div className="text-xs text-muted-foreground">No citations were returned for this run.</div>
+                  <div className="text-xs text-muted-foreground">
+                    No citations were returned because this run stayed in clarification or degraded mode.
+                  </div>
                 ) : (
                   run.citations.map((citation) => (
                     <div key={citation.citation_id} className="rounded-xl border bg-secondary/30 p-3">

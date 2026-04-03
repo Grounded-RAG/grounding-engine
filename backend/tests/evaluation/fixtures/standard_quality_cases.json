@@ -60,5 +60,50 @@
         "score": 0.91
       }
     ]
+  },
+  {
+    "name": "experience_question_prefers_experience_chunk",
+    "query": "What experience does she have at iCog Labs?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "AI Engineer",
+      "iCog Labs",
+      "[E002]"
+    ],
+    "expected_citation_ids": ["E002"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-projects",
+        "text": "Projects: Built a grounded RAG writing assistant and a travel planning assistant.",
+        "score": 0.78
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-experience",
+        "text": "Professional experience: AI Engineer at iCog Labs working on grounded retrieval, prompt pipelines, and adaptive agent behavior.",
+        "score": 0.94
+      }
+    ]
+  },
+  {
+    "name": "unrelated_query_without_alignment_fails_generation",
+    "query": "What is the weather today?",
+    "expected_type": "generation_error",
+    "expected_error_contains": "query-aligned support",
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-experience",
+        "text": "Professional experience: AI Engineer at iCog Labs working on grounded retrieval, prompt pipelines, and adaptive agent behavior.",
+        "score": 0.94
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-education",
+        "text": "Education: BSc in Software Engineering at Addis Ababa Science and Technology University.",
+        "score": 0.88
+      }
+    ]
   }
 ]

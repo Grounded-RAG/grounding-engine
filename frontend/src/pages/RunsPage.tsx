@@ -201,7 +201,9 @@ export default function RunsPage() {
                 <div>
                   <h3 className="text-sm font-semibold text-foreground mb-3">Citations</h3>
                   {selectedRun.citations.length === 0 ? (
-                    <div className="text-sm text-muted-foreground">No citations were returned for this run.</div>
+                    <div className="text-sm text-muted-foreground">
+                      No citations were returned because this run stayed in clarification or degraded mode.
+                    </div>
                   ) : (
                     <div className="space-y-3">
                       {selectedRun.citations.map((citation) => (

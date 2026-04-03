@@ -14,6 +14,12 @@ from app.pipeline.contracts import ChunkManifest, ChunkingConfig, DocumentChunk
 _TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\S+")
 _PARAGRAPH_BREAK_PATTERN: Final[re.Pattern[str]] = re.compile(r"\n\s*\n+")
 _SENTENCE_BREAK_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?<=[.!?])\s+")
+_HEADING_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?m)^(?:[A-Z][A-Z0-9/&,\- ]{2,}|[A-Z][A-Za-z0-9/&,\- ]{1,48}:)\s*$"
+)
+_BULLET_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?m)^(?:\s*[-*•]\s+|\s*\d+[\.\)]\s+)"
+)
 
 
 @dataclass(frozen=True)
@@ -119,7 +125,13 @@ def _char_spans_to_token_spans(
     block_starts = [0]
     for match in _PARAGRAPH_BREAK_PATTERN.finditer(text):
         block_starts.append(match.end())
-    block_starts.append(len(text))
+    for match in _HEADING_LINE_PATTERN.finditer(text):
+        block_starts.append(match.start())
+    for match in _BULLET_LINE_PATTERN.finditer(text):
+        block_starts.append(match.start())
+    block_starts = sorted({start for start in block_starts if 0 <= start <= len(text)})
+    if not block_starts or block_starts[-1] != len(text):
+        block_starts.append(len(text))
 
     for start_char, end_char in zip(block_starts, block_starts[1:]):
         raw_start = start_char

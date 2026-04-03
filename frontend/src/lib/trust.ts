@@ -14,7 +14,7 @@ export function confidenceLabelText(label: ConfidenceLabel): string {
 
 export function supportSummaryText(summary: SupportSummary): string {
   if (summary === "grounded") return "Well-supported by retrieved evidence";
-  if (summary === "partial") return "Partially supported; review citations";
+  if (summary === "partial") return "Partially supported by retrieved evidence; review the citations before relying on it";
   return "Ask a question about the attached documents to get a grounded answer with citations";
 }
 
@@ -48,9 +48,9 @@ export function providerDisplayText(run: {
 export function degradedReasonDescription(reason: string): string {
   switch (reason) {
     case "NO_GROUNDED_EVIDENCE":
-      return "No retrieved evidence supported the question.";
+      return "No retrieved evidence in the attached dataset supported this question.";
     case "INSUFFICIENT_SUPPORT":
-      return "Related evidence existed, but not enough to answer confidently.";
+      return "Related evidence existed, but not enough of it directly supported a confident answer.";
     case "LOW_CONFIDENCE_SUPPORT":
       return "The answer used weak or limited evidence and should be reviewed.";
     case "QUERY_REQUIRES_CLARIFICATION":

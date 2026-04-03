@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from app.config import get_settings
 from app.pipeline.contracts import EvidencePackage, GroundedAnswerDraft
+from app.core.provider_retry import run_with_retries
 
 
 class OpenAICompatibleGenerationError(RuntimeError):
@@ -161,7 +162,11 @@ async def generate_openai_compatible_draft(
             return response.read().decode("utf-8")
 
     try:
-        raw_body = await asyncio.to_thread(_perform_request)
+        raw_body = await run_with_retries(
+            lambda: asyncio.to_thread(_perform_request),
+            max_retries=settings.provider_max_retries,
+            backoff_ms=settings.provider_retry_backoff_ms,
+        )
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
         raise OpenAICompatibleGenerationError(

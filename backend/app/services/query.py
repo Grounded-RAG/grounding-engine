@@ -39,12 +39,24 @@ _SMALLTALK_QUERIES = {
     "hi",
     "hello",
     "hey",
+    "hiya",
+    "yo",
+    "good day",
     "good morning",
     "good afternoon",
     "good evening",
     "how are you",
+    "how are you doing",
+    "can you help me",
+    "help me",
+    "who are you",
+    "what can you do",
+    "nice to meet you",
+    "ok",
+    "okay",
     "thanks",
     "thank you",
+    "thank you so much",
 }
 
 
@@ -71,10 +83,17 @@ def _degraded_reason_for_generation_exception(exc: Exception) -> tuple[str, str]
 def _is_smalltalk_query(query_text: str) -> bool:
     """Detect greetings and conversational filler that should clarify scope."""
 
-    normalized = re.sub(r"\s+", " ", query_text.strip().casefold())
+    normalized = re.sub(r"[^a-z0-9\s]+", " ", query_text.strip().casefold())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
     if not normalized:
         return False
-    return normalized in _SMALLTALK_QUERIES
+    if normalized in _SMALLTALK_QUERIES:
+        return True
+    tokens = normalized.split()
+    return len(tokens) <= 4 and all(
+        token in {"hi", "hello", "hey", "hiya", "yo", "thanks", "thank", "okay", "ok"}
+        for token in tokens
+    )
 
 
 def _smalltalk_response() -> GroundedAnswerResponse:

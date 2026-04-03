@@ -77,6 +77,35 @@ def test_build_chunk_manifest_can_preserve_paragraph_boundaries() -> None:
     ]
 
 
+def test_build_chunk_manifest_respects_heading_and_bullet_boundaries() -> None:
+    """Structure-aware chunking should split resume-like headings and bullet lists more cleanly."""
+
+    manifest = build_chunk_manifest(
+        document_id=uuid.uuid4(),
+        text=(
+            "EDUCATION\n"
+            "BSc in Software Engineering at Addis Ababa Science and Technology University.\n"
+            "EXPERIENCE\n"
+            "- AI Engineer at iCog Labs\n"
+            "- Built grounded retrieval and citation workflows\n"
+            "PROJECTS\n"
+            "StyleCraft adaptive writing assistant."
+        ),
+        source_artifact_key="artifact.txt",
+        config=ChunkingConfig(
+            max_tokens=12,
+            overlap_tokens=2,
+            strategy="structure_aware_v1",
+        ),
+    )
+
+    assert manifest.chunking_strategy == "structure_aware_v1"
+    assert len(manifest.chunks) >= 3
+    assert manifest.chunks[0].text.startswith("EDUCATION BSc in Software Engineering")
+    assert any("EXPERIENCE - AI Engineer at iCog Labs" in chunk.text for chunk in manifest.chunks)
+    assert any("PROJECTS StyleCraft adaptive writing assistant." in chunk.text for chunk in manifest.chunks)
+
+
 def test_derive_chunk_manifest_key_uses_chunk_artifact_path() -> None:
     """Chunk manifests should live under the deterministic artifact prefix."""
 

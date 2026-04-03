@@ -6,7 +6,9 @@ import uuid
 from types import SimpleNamespace
 
 from app.core.qdrant_client import (
+    get_qdrant_client,
     ensure_qdrant_collection,
+    reset_qdrant_client,
     search_dense_points,
     upsert_dense_points,
 )
@@ -127,3 +129,31 @@ def test_search_dense_points_applies_tenant_namespace_filter(monkeypatch) -> Non
     assert must_conditions[0].match.value == str(tenant_id)
     assert must_conditions[1].key == "namespace_id"
     assert must_conditions[1].match.value == str(namespace_id)
+
+
+def test_get_qdrant_client_respects_compatibility_flag(monkeypatch) -> None:
+    """Qdrant client construction should use the configured compatibility policy."""
+
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, *, url: str, check_compatibility: bool) -> None:
+            captured["url"] = url
+            captured["check_compatibility"] = check_compatibility
+
+    monkeypatch.setenv("QDRANT_CHECK_COMPATIBILITY", "false")
+    monkeypatch.setattr("app.core.qdrant_client.QdrantClient", FakeClient)
+
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    reset_qdrant_client()
+    try:
+        client = get_qdrant_client()
+    finally:
+        reset_qdrant_client()
+        get_settings.cache_clear()
+
+    assert isinstance(client, FakeClient)
+    assert captured["url"] == "http://localhost:6333/"
+    assert captured["check_compatibility"] is False

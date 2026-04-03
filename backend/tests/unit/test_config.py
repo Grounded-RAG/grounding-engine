@@ -106,3 +106,10 @@ def test_settings_emit_startup_warnings_for_fallback_prone_standard_config() -> 
 
     assert any("GEMINI_API_KEY" in warning for warning in warnings)
     assert any("CHUNKING_STRATEGY" in warning for warning in warnings)
+
+
+def test_settings_reject_negative_provider_retry_backoff() -> None:
+    """Provider retry backoff should stay non-negative."""
+
+    with pytest.raises(ValidationError):
+        Settings(provider_retry_backoff_ms=-1)
