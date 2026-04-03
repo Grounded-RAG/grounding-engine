@@ -52,6 +52,31 @@ def test_build_chunk_manifest_respects_token_windows_and_overlap() -> None:
     assert manifest.chunks[1].end_token == 6
 
 
+def test_build_chunk_manifest_can_preserve_paragraph_boundaries() -> None:
+    """Structure-aware chunking should prefer paragraph grouping over raw slicing."""
+
+    manifest = build_chunk_manifest(
+        document_id=uuid.uuid4(),
+        text=(
+            "Overview of the grounded system.\n\n"
+            "Datasets provide the source of truth for retrieval.\n\n"
+            "Agents answer using grounded evidence with citations."
+        ),
+        source_artifact_key="artifact.txt",
+        config=ChunkingConfig(
+            max_tokens=14,
+            overlap_tokens=2,
+            strategy="structure_aware_v1",
+        ),
+    )
+
+    assert manifest.chunking_strategy == "structure_aware_v1"
+    assert [chunk.text for chunk in manifest.chunks] == [
+        "Overview of the grounded system. Datasets provide the source of truth for retrieval.",
+        "for retrieval. Agents answer using grounded evidence with citations.",
+    ]
+
+
 def test_derive_chunk_manifest_key_uses_chunk_artifact_path() -> None:
     """Chunk manifests should live under the deterministic artifact prefix."""
 

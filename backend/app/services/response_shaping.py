@@ -2,12 +2,38 @@
 
 from __future__ import annotations
 
+from app.config import get_settings
 from app.pipeline.contracts import EvidenceItem, EvidencePackage, GroundedAnswerDraft
 from app.schemas.query import CitationResponse, GroundedAnswerResponse
 
 
 class ResponseShapingError(RuntimeError):
     """Raised when a grounded draft cannot be shaped into a valid response."""
+
+
+def _calculate_confidence(
+    *,
+    cited_items: list[EvidenceItem],
+    draft: GroundedAnswerDraft,
+) -> float:
+    """Estimate grounded confidence from retrieval strength and support coverage."""
+
+    average_score = sum(item.score for item in cited_items) / len(cited_items)
+    retrieval_signal = min(
+        average_score * max(get_settings().rrf_smoothing_constant / 3, 1),
+        1.0,
+    )
+    support_signal = min(max(draft.support_coverage, 0.0), 1.0)
+    diversity_signal = min(max(draft.source_diversity, 0) / 2, 1.0)
+    return round(
+        min(
+            0.65 * retrieval_signal
+            + 0.25 * support_signal
+            + 0.10 * diversity_signal,
+            1.0,
+        ),
+        4,
+    )
 
 
 def shape_grounded_response(
@@ -49,14 +75,22 @@ def shape_grounded_response(
         )
         for item in cited_items
     ]
-    confidence_score = round(sum(item.score for item in cited_items) / len(cited_items), 4)
+    confidence_score = _calculate_confidence(
+        cited_items=cited_items,
+        draft=draft,
+    )
+    degraded_reasons: list[str] = []
+    verification_status = "passed"
+    if confidence_score < 0.25:
+        verification_status = "degraded"
+        degraded_reasons.append("LOW_CONFIDENCE_SUPPORT")
 
     return GroundedAnswerResponse(
         answer=draft.answer_text,
         citations=citations,
         confidence_score=min(max(confidence_score, 0.0), 1.0),
-        verification_status="passed",
-        degraded_reasons=[],
+        verification_status=verification_status,
+        degraded_reasons=degraded_reasons,
     )
 
 

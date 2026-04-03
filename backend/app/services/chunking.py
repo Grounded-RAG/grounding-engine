@@ -61,6 +61,7 @@ async def chunk_extracted_document(
         config=ChunkingConfig(
             max_tokens=settings.chunk_max_tokens,
             overlap_tokens=settings.chunk_overlap_tokens,
+            strategy=settings.chunking_strategy,
         ),
     )
     if not manifest.chunks:

@@ -65,13 +65,15 @@ def test_shape_grounded_response_builds_structured_citations() -> None:
             "chunk-2": "It also tracks ingestion job status.",
         },
         generator_provider="local-grounded-v1",
+        support_coverage=1.0,
+        source_diversity=2,
     )
 
     response = shape_grounded_response(draft=draft, evidence_package=package)
 
     assert response.answer == draft.answer_text
     assert response.verification_status == "passed"
-    assert response.confidence_score == 0.85
+    assert response.confidence_score == 1.0
     assert response.degraded_reasons == []
     assert [citation.citation_id for citation in response.citations] == ["E001", "E002"]
     assert response.citations[0].quote == "Grounded supports tenant-safe uploads."
@@ -96,6 +98,8 @@ def test_shape_grounded_response_deduplicates_repeated_citations() -> None:
         cited_evidence_ids=["chunk-1", "chunk-1"],
         citation_snippets={"chunk-1": "Grounded returns cited answers."},
         generator_provider="local-grounded-v1",
+        support_coverage=1.0,
+        source_diversity=2,
     )
 
     response = shape_grounded_response(draft=draft, evidence_package=package)
@@ -143,3 +147,33 @@ def test_shape_degraded_response_returns_structured_fallback() -> None:
     assert response.confidence_score == 0.0
     assert response.verification_status == "degraded"
     assert response.degraded_reasons == ["NO_GROUNDED_EVIDENCE"]
+
+
+def test_shape_grounded_response_degrades_low_confidence_support() -> None:
+    """Weak support should still return the answer but mark it degraded."""
+
+    item = _evidence_item(
+        citation_id="E001",
+        chunk_id="chunk-1",
+        text="One weakly ranked supporting snippet.",
+        score=0.001,
+    )
+    package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1", "chunk-2", "chunk-3"],
+        selected_evidence_ids=["chunk-1"],
+        items=[item],
+    )
+    draft = GroundedAnswerDraft(
+        answer_text="One weakly ranked supporting snippet. [E001]",
+        cited_evidence_ids=["chunk-1"],
+        citation_snippets={"chunk-1": "One weakly ranked supporting snippet."},
+        generator_provider="local-grounded-v1",
+        support_coverage=0.2,
+        source_diversity=1,
+    )
+
+    response = shape_grounded_response(draft=draft, evidence_package=package)
+
+    assert response.verification_status == "degraded"
+    assert response.degraded_reasons == ["LOW_CONFIDENCE_SUPPORT"]
+    assert response.confidence_score < 0.25
