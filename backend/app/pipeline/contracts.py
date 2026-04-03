@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 from uuid import UUID
+
+
+ChunkingStrategy = Literal[
+    "deterministic_token_window_v1",
+    "structure_aware_v1",
+]
 
 
 @dataclass(frozen=True)
 class ChunkingConfig:
-    """Deterministic token-window chunking settings."""
+    """Chunking settings for ingestion manifests."""
 
     max_tokens: int
     overlap_tokens: int
+    strategy: ChunkingStrategy = "deterministic_token_window_v1"
 
 
 @dataclass(frozen=True)
@@ -172,3 +180,5 @@ class GroundedAnswerDraft:
     cited_evidence_ids: list[str]
     citation_snippets: dict[str, str]
     generator_provider: str
+    support_coverage: float = 0.0
+    source_diversity: int = 0

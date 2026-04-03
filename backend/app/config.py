@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import AnyHttpUrl, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.pipeline.contracts import ChunkingStrategy
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -13,6 +14,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 AppEnv = Literal["development", "test", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+GeneratorBackend = Literal["local_grounded_v1"]
 
 
 class Settings(BaseSettings):
@@ -37,8 +39,10 @@ class Settings(BaseSettings):
     )
     document_upload_max_bytes: int = 25 * 1024 * 1024
     ingestion_autorun_enabled: bool = True
+    chunking_strategy: ChunkingStrategy = "deterministic_token_window_v1"
     chunk_max_tokens: int = 256
     chunk_overlap_tokens: int = 40
+    generator_backend: GeneratorBackend = "local_grounded_v1"
     qdrant_url: AnyHttpUrl = "http://localhost:6333"
     qdrant_collection: str = "grounded_chunks"
     dense_embedding_dimensions: int = 128
@@ -106,6 +110,26 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("CHUNK_MAX_TOKENS must be greater than zero.")
         return value
+
+    @field_validator("chunking_strategy")
+    @classmethod
+    def validate_chunking_strategy(cls, value: str) -> str:
+        """Ensure the configured chunking strategy is non-empty."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("CHUNKING_STRATEGY must not be empty.")
+        return normalized
+
+    @field_validator("generator_backend")
+    @classmethod
+    def validate_generator_backend(cls, value: str) -> str:
+        """Ensure the configured generation backend is non-empty."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("GENERATOR_BACKEND must not be empty.")
+        return normalized
 
     @field_validator("chunk_overlap_tokens")
     @classmethod

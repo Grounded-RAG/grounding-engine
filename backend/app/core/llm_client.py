@@ -141,7 +141,8 @@ def generate_grounded_draft(
             "Grounded generation could not derive query-aligned support."
         )
 
-    for _, item, snippet in sorted(ranked_support, key=lambda entry: entry[0], reverse=True)[:3]:
+    top_support = sorted(ranked_support, key=lambda entry: entry[0], reverse=True)[:3]
+    for _, item, snippet in top_support:
         rendered_parts.append(f"{snippet} [{item.citation_id}]")
         cited_ids.append(item.chunk_id)
         citation_snippets[item.chunk_id] = snippet
@@ -152,9 +153,13 @@ def generate_grounded_draft(
         )
 
     answer_text = " ".join(rendered_parts)
+    support_coverage = min(len(top_support) / max(len(evidence_package.items), 1), 1.0)
+    source_diversity = len({source for _, item, _ in top_support for source in item.sources})
     return GroundedAnswerDraft(
         answer_text=answer_text,
         cited_evidence_ids=cited_ids,
         citation_snippets=citation_snippets,
         generator_provider="local-grounded-v1",
+        support_coverage=round(support_coverage, 4),
+        source_diversity=source_diversity,
     )

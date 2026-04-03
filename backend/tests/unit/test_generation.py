@@ -57,6 +57,8 @@ def test_generate_grounded_draft_uses_evidence_only() -> None:
     assert draft.cited_evidence_ids == ["chunk-1", "chunk-2"]
     assert draft.citation_snippets["chunk-1"] == "Grounded handles tenant-safe uploads."
     assert draft.generator_provider == "local-grounded-v1"
+    assert draft.support_coverage == 1.0
+    assert draft.source_diversity == 2
 
 
 def test_generate_grounded_draft_prefers_query_aligned_sentence() -> None:
@@ -178,3 +180,4 @@ def test_generate_answer_from_evidence_delegates_to_generation_backend() -> None
         "Grounded returns answers anchored in retrieved evidence. [E001]"
     )
     assert draft.generator_provider == "local-grounded-v1"
+    assert draft.support_coverage == 1.0
