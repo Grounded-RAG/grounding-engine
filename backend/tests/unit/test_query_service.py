@@ -11,6 +11,7 @@ from app.api.deps import TenantContext
 from app.models import ExecutionTier, UserFacingMode
 from app.pipeline.contracts import EvidencePackage, FusedRetrievedChunk, RetrievedChunk
 from app.schemas.query import QueryRequest
+from app.services.generation import GenerationBackend
 from app.services.query import QueryServiceError, execute_standard_query
 from app.services.retrieval import RetrievalBundle
 
@@ -126,6 +127,13 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
         "app.services.query.retrieve_hybrid_candidates",
         fake_retrieve_hybrid_candidates,
     )
+    monkeypatch.setattr(
+        "app.services.generation.resolve_generation_backend",
+        lambda: GenerationBackend(
+            provider_name="local_grounded_v1",
+            implementation="local",
+        ),
+    )
 
     result = await execute_standard_query(
         session=session,
@@ -134,6 +142,8 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
     )
 
     assert result.response.verification_status == "passed"
+    assert result.response.confidence_label == "high"
+    assert result.response.support_summary == "grounded"
     assert result.response.degraded_reasons == []
     assert session.committed is True
     assert len(session.added) == 1
@@ -221,6 +231,48 @@ async def test_execute_standard_query_degrades_when_no_evidence(monkeypatch) -> 
     assert result.response.verification_status == "degraded"
     assert result.response.degraded_reasons == ["NO_GROUNDED_EVIDENCE"]
     assert result.response.citations == []
+    assert result.response.support_summary == "insufficient"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_requests_clarification_for_vague_query(monkeypatch) -> None:
+    """Very vague chat prompts should degrade as clarification requests, not false answers."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="hi")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        del kwargs
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.generation.resolve_generation_backend",
+        lambda: GenerationBackend(
+            provider_name="local_grounded_v1",
+            implementation="local",
+        ),
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+    )
+
+    assert result.response.verification_status == "degraded"
+    assert result.response.degraded_reasons == ["QUERY_REQUIRES_CLARIFICATION"]
+    assert "more specific grounded question" in result.response.answer
 
 
 @pytest.mark.asyncio()

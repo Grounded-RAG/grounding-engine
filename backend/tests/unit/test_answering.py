@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from app.pipeline.contracts import EvidenceItem, EvidencePackage
 from app.services.answering import answer_from_evidence
 
@@ -21,8 +23,8 @@ def _evidence_item(*, citation_id: str, chunk_id: str, text: str, score: float) 
         sources=("dense", "sparse"),
     )
 
-
-def test_answer_from_evidence_returns_grounded_response() -> None:
+@pytest.mark.asyncio()
+async def test_answer_from_evidence_returns_grounded_response() -> None:
     """Answer orchestration should return a passed grounded response when evidence exists."""
 
     package = EvidencePackage(
@@ -38,7 +40,7 @@ def test_answer_from_evidence_returns_grounded_response() -> None:
         ],
     )
 
-    response = answer_from_evidence(
+    response = await answer_from_evidence(
         query_text="What does grounded return?",
         evidence_package=package,
     )
@@ -46,12 +48,15 @@ def test_answer_from_evidence_returns_grounded_response() -> None:
     assert response.verification_status == "passed"
     assert response.citations[0].citation_id == "E001"
     assert response.degraded_reasons == []
+    assert response.confidence_label == "high"
+    assert response.support_summary == "grounded"
 
 
-def test_answer_from_evidence_returns_degraded_when_evidence_missing() -> None:
+@pytest.mark.asyncio()
+async def test_answer_from_evidence_returns_degraded_when_evidence_missing() -> None:
     """Answer orchestration should return a degraded response when no evidence exists."""
 
-    response = answer_from_evidence(
+    response = await answer_from_evidence(
         query_text="What does grounded return?",
         evidence_package=EvidencePackage(
             retrieved_chunk_ids=[],
@@ -63,3 +68,4 @@ def test_answer_from_evidence_returns_degraded_when_evidence_missing() -> None:
     assert response.verification_status == "degraded"
     assert response.citations == []
     assert response.degraded_reasons == ["NO_GROUNDED_EVIDENCE"]
+    assert response.support_summary == "insufficient"

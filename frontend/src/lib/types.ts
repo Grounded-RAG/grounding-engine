@@ -1,6 +1,8 @@
 export type ExecutionTier = "standard" | "enterprise" | "critical";
 export type UserFacingMode = "auto" | "instant" | "thinking" | "verified";
 export type VerificationStatus = "passed" | "degraded";
+export type ConfidenceLabel = "low" | "medium" | "high";
+export type SupportSummary = "grounded" | "partial" | "insufficient";
 export type IngestionJobStatus = "queued" | "running" | "indexed" | "failed";
 export type DocumentStatus = "uploaded" | "processing" | "indexed" | "failed";
 
@@ -128,8 +130,15 @@ export interface AgentChatResponse {
   answer: string;
   citations: CitationResponse[];
   confidence_score: number;
+  confidence_label: ConfidenceLabel;
+  support_summary: SupportSummary;
   verification_status: VerificationStatus;
   degraded_reasons: string[];
+  generator_provider: string;
+  provider_backend: string;
+  provider_model: string | null;
+  provider_fallback_used: boolean;
+  provider_fallback_from: string | null;
   agent_id: string;
   conversation_id: string;
   dataset_id: string;
@@ -153,9 +162,15 @@ export interface RunResponse {
   answer: string;
   citations: CitationResponse[];
   confidence_score: number;
+  confidence_label: ConfidenceLabel;
+  support_summary: SupportSummary;
   verification_status: VerificationStatus;
   degraded_reasons: string[];
   generator_provider: string;
+  provider_backend: string;
+  provider_model: string | null;
+  provider_fallback_used: boolean;
+  provider_fallback_from: string | null;
   retrieved_chunk_ids: string[];
   selected_evidence_ids: string[];
   total_latency_ms: number;

@@ -74,7 +74,11 @@ def test_shape_grounded_response_builds_structured_citations() -> None:
     assert response.answer == draft.answer_text
     assert response.verification_status == "passed"
     assert response.confidence_score == 1.0
+    assert response.confidence_label == "high"
+    assert response.support_summary == "grounded"
     assert response.degraded_reasons == []
+    assert response.provider_backend == "local_grounded_v1"
+    assert response.provider_fallback_used is False
     assert [citation.citation_id for citation in response.citations] == ["E001", "E002"]
     assert response.citations[0].quote == "Grounded supports tenant-safe uploads."
 
@@ -177,3 +181,40 @@ def test_shape_grounded_response_degrades_low_confidence_support() -> None:
     assert response.verification_status == "degraded"
     assert response.degraded_reasons == ["LOW_CONFIDENCE_SUPPORT"]
     assert response.confidence_score < 0.25
+    assert response.confidence_label == "low"
+    assert response.support_summary == "insufficient"
+
+
+def test_shape_grounded_response_trims_long_citation_quotes() -> None:
+    """Citation quotes should stay compact enough for the inspector UI."""
+
+    long_sentence = (
+        "Grounded keeps evidence traceable across retrieval, packaging, generation, and product inspection "
+        "so reviewers can inspect why a specific answer was returned and whether the support was actually strong enough."
+    )
+    item = _evidence_item(
+        citation_id="E001",
+        chunk_id="chunk-1",
+        text=long_sentence,
+        score=0.9,
+    )
+    package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[item],
+    )
+    draft = GroundedAnswerDraft(
+        answer_text=f"{long_sentence} [E001]",
+        cited_evidence_ids=["chunk-1"],
+        citation_snippets={"chunk-1": long_sentence},
+        generator_provider="local-grounded-v1:fallback_from_gemini_v1",
+        support_coverage=1.0,
+        source_diversity=2,
+    )
+
+    response = shape_grounded_response(draft=draft, evidence_package=package)
+
+    assert response.provider_fallback_used is True
+    assert response.provider_fallback_from == "gemini_v1"
+    assert response.citations[0].quote.endswith("…")
+    assert len(response.citations[0].quote) <= 220

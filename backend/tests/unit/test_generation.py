@@ -158,7 +158,8 @@ def test_generate_grounded_draft_omits_irrelevant_evidence_items() -> None:
     assert "[E002]" not in draft.answer_text
 
 
-def test_generate_answer_from_evidence_delegates_to_generation_backend() -> None:
+@pytest.mark.asyncio()
+async def test_generate_answer_from_evidence_delegates_to_generation_backend(monkeypatch) -> None:
     """The generation service should delegate to the grounded generator backend."""
 
     evidence_package = EvidencePackage(
@@ -173,7 +174,15 @@ def test_generate_answer_from_evidence_delegates_to_generation_backend() -> None
         ],
     )
 
-    draft = generate_answer_from_evidence(
+    monkeypatch.setattr(
+        "app.services.generation.resolve_generation_backend",
+        lambda: GenerationBackend(
+            provider_name="local_grounded_v1",
+            implementation="local",
+        ),
+    )
+
+    draft = await generate_answer_from_evidence(
         query_text="What does grounded return?",
         evidence_package=evidence_package,
     )
@@ -185,7 +194,8 @@ def test_generate_answer_from_evidence_delegates_to_generation_backend() -> None
     assert draft.support_coverage == 1.0
 
 
-def test_generate_answer_from_evidence_falls_back_from_openai_backend(monkeypatch) -> None:
+@pytest.mark.asyncio()
+async def test_generate_answer_from_evidence_falls_back_from_openai_backend(monkeypatch) -> None:
     """Provider-backed generation should fall back cleanly when the provider fails."""
 
     evidence_package = EvidencePackage(
@@ -208,7 +218,7 @@ def test_generate_answer_from_evidence_falls_back_from_openai_backend(monkeypatc
         ),
     )
 
-    def fake_generate_openai_compatible_draft(**kwargs):
+    async def fake_generate_openai_compatible_draft(**kwargs):
         del kwargs
         raise OpenAICompatibleGenerationError("provider unavailable")
 
@@ -217,7 +227,7 @@ def test_generate_answer_from_evidence_falls_back_from_openai_backend(monkeypatc
         fake_generate_openai_compatible_draft,
     )
 
-    draft = generate_answer_from_evidence(
+    draft = await generate_answer_from_evidence(
         query_text="What does grounded return?",
         evidence_package=evidence_package,
     )
@@ -228,7 +238,8 @@ def test_generate_answer_from_evidence_falls_back_from_openai_backend(monkeypatc
     assert draft.generator_provider == "local-grounded-v1:fallback_from_openai_compatible_v1"
 
 
-def test_generate_answer_from_evidence_falls_back_from_gemini_backend(monkeypatch) -> None:
+@pytest.mark.asyncio()
+async def test_generate_answer_from_evidence_falls_back_from_gemini_backend(monkeypatch) -> None:
     """Gemini-backed generation should also fall back cleanly when unavailable."""
 
     evidence_package = EvidencePackage(
@@ -251,7 +262,7 @@ def test_generate_answer_from_evidence_falls_back_from_gemini_backend(monkeypatc
         ),
     )
 
-    def fake_generate_gemini_draft(**kwargs):
+    async def fake_generate_gemini_draft(**kwargs):
         del kwargs
         raise GeminiGenerationError("provider unavailable")
 
@@ -260,7 +271,7 @@ def test_generate_answer_from_evidence_falls_back_from_gemini_backend(monkeypatc
         fake_generate_gemini_draft,
     )
 
-    draft = generate_answer_from_evidence(
+    draft = await generate_answer_from_evidence(
         query_text="What does grounded return?",
         evidence_package=evidence_package,
     )

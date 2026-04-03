@@ -481,9 +481,13 @@ def test_run_list_returns_recent_runs_and_supports_dataset_filter(
     assert payload[0]["conversation_id"] == str(seeded_run_data.conversation_id)
     assert payload[0]["selected_mode"] == "instant"
     assert payload[0]["verification_status"] == "passed"
+    assert payload[0]["confidence_label"] == "high"
+    assert payload[0]["support_summary"] == "grounded"
     assert payload[1]["dataset_id"] == str(seeded_run_data.secondary_dataset_id)
     assert payload[1]["selected_mode"] is None
     assert payload[1]["verification_status"] == "degraded"
+    assert payload[1]["confidence_label"] == "low"
+    assert payload[1]["support_summary"] == "insufficient"
 
     filtered_response = run_client.get(
         "/v1/runs",
@@ -535,4 +539,8 @@ def test_run_get_returns_structured_run_details(
     assert payload["query"] == "What is the maintenance window?"
     assert payload["answer"] == "Maintenance window: Friday at 22:00 UTC. [E001]"
     assert payload["confidence_score"] == 0.92
+    assert payload["confidence_label"] == "high"
+    assert payload["support_summary"] == "grounded"
+    assert payload["provider_backend"] == "local_grounded_v1"
+    assert payload["provider_fallback_used"] is False
     assert payload["citations"][0]["citation_id"] == "E001"
