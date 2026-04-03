@@ -22,6 +22,8 @@ async def lifespan(app: FastAPI):
         environment=app.state.settings.app_env,
         version=app.state.settings.app_version,
     )
+    for warning in app.state.settings.startup_warnings():
+        logger.warning("startup_warning", detail=warning)
     yield
     logger.info("application_shutdown")
 

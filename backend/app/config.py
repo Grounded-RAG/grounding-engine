@@ -208,6 +208,18 @@ class Settings(BaseSettings):
             raise ValueError(f"{info.field_name.upper()} must be greater than zero.")
         return value
 
+    @field_validator("evidence_package_limit")
+    @classmethod
+    def validate_evidence_package_limit(cls, value: int, info: ValidationInfo) -> int:
+        """Keep packaged evidence at or below the retrieved candidate pool."""
+
+        candidate_limit = info.data.get("retrieval_candidate_limit")
+        if isinstance(candidate_limit, int) and value > candidate_limit:
+            raise ValueError(
+                "EVIDENCE_PACKAGE_LIMIT must not exceed RETRIEVAL_CANDIDATE_LIMIT."
+            )
+        return value
+
     @field_validator("api_key_salt")
     @classmethod
     def validate_api_key_salt(cls, value: str, info: ValidationInfo) -> str:
@@ -253,6 +265,37 @@ class Settings(BaseSettings):
                 "S3_SECURE must match the scheme used by S3_ENDPOINT_URL."
             )
         return value
+
+    def startup_warnings(self) -> list[str]:
+        """Return non-fatal startup warnings for fallback-prone Standard config."""
+
+        warnings: list[str] = []
+        if self.generator_backend == "gemini_v1" and not self.gemini_api_key:
+            warnings.append(
+                "GENERATOR_BACKEND=gemini_v1 is configured without GEMINI_API_KEY; "
+                "Standard generation will fall back to local grounded generation."
+            )
+        if self.embedding_backend == "gemini_v1" and not self.gemini_api_key:
+            warnings.append(
+                "EMBEDDING_BACKEND=gemini_v1 is configured without GEMINI_API_KEY; "
+                "dense retrieval will fall back to local hash embeddings."
+            )
+        if self.generator_backend == "openai_compatible_v1" and not self.openai_api_key:
+            warnings.append(
+                "GENERATOR_BACKEND=openai_compatible_v1 is configured without OPENAI_API_KEY; "
+                "Standard generation will fall back to local grounded generation."
+            )
+        if self.embedding_backend == "openai_compatible_v1" and not self.openai_api_key:
+            warnings.append(
+                "EMBEDDING_BACKEND=openai_compatible_v1 is configured without OPENAI_API_KEY; "
+                "dense retrieval will fall back to local hash embeddings."
+            )
+        if self.chunking_strategy == "deterministic_token_window_v1":
+            warnings.append(
+                "CHUNKING_STRATEGY is using the deterministic token-window baseline. "
+                "Consider structure_aware_v1 for stronger Standard retrieval quality."
+            )
+        return warnings
 
 
 @lru_cache

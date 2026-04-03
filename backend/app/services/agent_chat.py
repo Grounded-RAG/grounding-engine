@@ -191,6 +191,13 @@ async def execute_agent_chat_turn(
         answer=query_result.response.answer,
         citations=query_result.response.citations,
         confidence_score=query_result.response.confidence_score,
+        confidence_label=query_result.response.confidence_label,
+        support_summary=query_result.response.support_summary,
         verification_status=query_result.response.verification_status,
         degraded_reasons=query_result.response.degraded_reasons,
+        generator_provider=query_result.response.generator_provider,
+        provider_backend=query_result.response.provider_backend,
+        provider_model=query_result.response.provider_model,
+        provider_fallback_used=query_result.response.provider_fallback_used,
+        provider_fallback_from=query_result.response.provider_fallback_from,
     )

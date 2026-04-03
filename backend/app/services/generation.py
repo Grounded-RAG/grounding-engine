@@ -12,6 +12,10 @@ from app.core.openai_generator import (
     generate_openai_compatible_draft,
 )
 from app.pipeline.contracts import EvidencePackage, GroundedAnswerDraft
+from app.core.telemetry import get_logger
+
+
+logger = get_logger("app.generation")
 
 
 @dataclass(frozen=True)
@@ -21,19 +25,19 @@ class GenerationBackend:
     provider_name: str
     implementation: str = "local"
 
-    def generate(
+    async def generate(
         self,
         *,
         query_text: str,
         evidence_package: EvidencePackage,
     ) -> GroundedAnswerDraft:
         if self.implementation == "gemini":
-            return generate_gemini_draft(
+            return await generate_gemini_draft(
                 query_text=query_text,
                 evidence_package=evidence_package,
             )
         if self.implementation == "openai_compatible":
-            return generate_openai_compatible_draft(
+            return await generate_openai_compatible_draft(
                 query_text=query_text,
                 evidence_package=evidence_package,
             )
@@ -71,7 +75,7 @@ def resolve_generation_backend() -> GenerationBackend:
         ) from exc
 
 
-def generate_answer_from_evidence(
+async def generate_answer_from_evidence(
     *,
     query_text: str,
     evidence_package: EvidencePackage,
@@ -80,11 +84,16 @@ def generate_answer_from_evidence(
 
     backend = resolve_generation_backend()
     try:
-        return backend.generate(
+        return await backend.generate(
             query_text=query_text,
             evidence_package=evidence_package,
         )
     except (GeminiGenerationError, OpenAICompatibleGenerationError):
+        logger.warning(
+            "generation_provider_fallback",
+            configured_backend=backend.provider_name,
+            fallback_backend="local_grounded_v1",
+        )
         fallback_draft = generate_grounded_draft(
             query_text=query_text,
             evidence_package=evidence_package,

@@ -34,6 +34,26 @@ class QueryServiceError(RuntimeError):
         self.status_code = status_code
 
 
+def _degraded_reason_for_generation_exception(exc: Exception) -> tuple[str, str]:
+    """Map generator/shaping failures to clearer Standard degraded outcomes."""
+
+    message = str(exc).lower()
+    if "meaningful query terms" in message:
+        return (
+            "QUERY_REQUIRES_CLARIFICATION",
+            "Please ask a more specific grounded question so I can search the attached evidence.",
+        )
+    if "query-aligned support" in message:
+        return (
+            "INSUFFICIENT_QUERY_ALIGNMENT",
+            "I found related material, but not enough evidence that directly answers this question.",
+        )
+    return (
+        "INSUFFICIENT_SUPPORT",
+        "I found some related material, but not enough grounded evidence to answer confidently.",
+    )
+
+
 @dataclass(frozen=True)
 class QueryExecutionResult:
     """Completed Standard query result including persisted trace metadata."""
@@ -195,7 +215,7 @@ async def execute_standard_query(
         generator_provider = "degraded-handler-v1"
     else:
         try:
-            draft = generate_answer_from_evidence(
+            draft = await generate_answer_from_evidence(
                 query_text=query_request.query,
                 evidence_package=evidence_package,
             )
@@ -204,13 +224,11 @@ async def execute_standard_query(
                 evidence_package=evidence_package,
             )
             generator_provider = draft.generator_provider
-        except (GroundedGenerationError, ResponseShapingError):
+        except (GroundedGenerationError, ResponseShapingError) as exc:
+            degraded_reason, answer_text = _degraded_reason_for_generation_exception(exc)
             response = shape_degraded_response(
-                reason="INSUFFICIENT_SUPPORT",
-                answer_text=(
-                    "I found some related material, but not enough grounded evidence "
-                    "to answer confidently."
-                ),
+                reason=degraded_reason,
+                answer_text=answer_text,
             )
             generator_provider = "degraded-handler-v1"
     answering_ms = int((time.perf_counter() - answering_started) * 1000)
