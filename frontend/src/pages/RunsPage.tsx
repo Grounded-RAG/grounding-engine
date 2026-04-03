@@ -14,6 +14,13 @@ import { Input } from "@/components/ui/input";
 import { listRuns, getRun } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatDateTime, formatRelativeOrDate, sentenceCase } from "@/lib/format";
+import {
+  confidenceBadgeVariant,
+  confidenceLabelText,
+  degradedReasonDescription,
+  providerDisplayText,
+  supportSummaryText,
+} from "@/lib/trust";
 
 export default function RunsPage() {
   const { apiKey } = useAuth();
@@ -116,6 +123,9 @@ export default function RunsPage() {
                       ) : null}
                       {sentenceCase(run.verification_status)}
                     </Badge>
+                    <Badge variant={confidenceBadgeVariant(run.confidence_label)} className="text-[10px]">
+                      {confidenceLabelText(run.confidence_label)}
+                    </Badge>
                     <span className="text-[10px] text-muted-foreground ml-auto flex items-center gap-1">
                       <Clock className="h-2.5 w-2.5" /> {formatRelativeOrDate(run.created_at)}
                     </span>
@@ -143,10 +153,13 @@ export default function RunsPage() {
                     <Badge variant={selectedRun.verification_status === "passed" ? "success" : "warning"} className="text-[10px]">
                       {sentenceCase(selectedRun.verification_status)}
                     </Badge>
+                    <Badge variant={confidenceBadgeVariant(selectedRun.confidence_label)} className="text-[10px]">
+                      {confidenceLabelText(selectedRun.confidence_label)}
+                    </Badge>
                   </div>
                   <h2 className="text-lg font-semibold text-foreground mb-2">{selectedRun.query}</h2>
                   <p className="text-sm text-muted-foreground">
-                    Created {formatDateTime(selectedRun.created_at)} • {selectedRun.total_latency_ms} ms • Provider {selectedRun.generator_provider}
+                    Created {formatDateTime(selectedRun.created_at)} • {selectedRun.total_latency_ms} ms • Provider {providerDisplayText(selectedRun)}
                   </p>
                 </div>
 
@@ -163,11 +176,26 @@ export default function RunsPage() {
                     <div className="text-lg font-semibold text-foreground">
                       {Math.round(selectedRun.confidence_score * 100)}%
                     </div>
+                    <div className="mt-2">
+                      <Badge variant={confidenceBadgeVariant(selectedRun.confidence_label)} className="text-[10px]">
+                        {confidenceLabelText(selectedRun.confidence_label)}
+                      </Badge>
+                    </div>
                   </div>
                   <div className="rounded-2xl border bg-secondary/20 p-4">
                     <div className="text-xs text-muted-foreground mb-1">Routing reason</div>
                     <div className="text-sm text-foreground">{selectedRun.routing_reason}</div>
                   </div>
+                </div>
+
+                <div className="rounded-2xl border bg-secondary/20 p-4">
+                  <div className="text-xs text-muted-foreground mb-1">Support summary</div>
+                  <div className="text-sm text-foreground">{supportSummaryText(selectedRun.support_summary)}</div>
+                  {selectedRun.provider_fallback_used ? (
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      Provider fallback used from {selectedRun.provider_fallback_from ?? "configured backend"}.
+                    </div>
+                  ) : null}
                 </div>
 
                 <div>
@@ -192,11 +220,14 @@ export default function RunsPage() {
                 {selectedRun.degraded_reasons.length > 0 ? (
                   <div>
                     <h3 className="text-sm font-semibold text-foreground mb-2">Degraded reasons</h3>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="space-y-2">
                       {selectedRun.degraded_reasons.map((reason) => (
-                        <Badge key={reason} variant="warning" className="text-[10px]">
-                          {sentenceCase(reason)}
-                        </Badge>
+                        <div key={reason} className="rounded-2xl border border-amber-200/70 bg-amber-50/70 p-4">
+                          <div className="text-sm font-medium text-amber-900">{sentenceCase(reason)}</div>
+                          <div className="mt-1 text-sm leading-relaxed text-amber-800">
+                            {degradedReasonDescription(reason)}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   </div>

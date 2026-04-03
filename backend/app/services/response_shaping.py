@@ -2,13 +2,36 @@
 
 from __future__ import annotations
 
+import re
+
 from app.config import get_settings
 from app.pipeline.contracts import EvidenceItem, EvidencePackage, GroundedAnswerDraft
 from app.schemas.query import CitationResponse, GroundedAnswerResponse
+from app.services.trust import (
+    confidence_label_for_score,
+    provider_metadata,
+    support_summary_for_response,
+)
 
 
 class ResponseShapingError(RuntimeError):
     """Raised when a grounded draft cannot be shaped into a valid response."""
+
+
+_WHITESPACE_PATTERN = re.compile(r"\s+")
+
+
+def _normalize_quote(quote: str, *, max_length: int = 180) -> str:
+    """Trim and normalize citation snippets so the inspector stays readable."""
+
+    normalized = _WHITESPACE_PATTERN.sub(" ", quote).strip().strip('"')
+    if len(normalized) <= max_length:
+        return normalized
+
+    truncated = normalized[: max_length - 1].rsplit(" ", 1)[0].strip()
+    if not truncated:
+        truncated = normalized[: max_length - 1].strip()
+    return f"{truncated}…"
 
 
 def _calculate_confidence(
@@ -71,7 +94,7 @@ def shape_grounded_response(
             chunk_id=item.chunk_id,
             document_id=item.document_id,
             chunk_index=item.chunk_index,
-            quote=draft.citation_snippets.get(item.chunk_id, item.text),
+            quote=_normalize_quote(draft.citation_snippets.get(item.chunk_id, item.text)),
         )
         for item in cited_items
     ]
@@ -84,13 +107,27 @@ def shape_grounded_response(
     if confidence_score < 0.25:
         verification_status = "degraded"
         degraded_reasons.append("LOW_CONFIDENCE_SUPPORT")
+    confidence_label = confidence_label_for_score(confidence_score)
+    support_summary = support_summary_for_response(
+        confidence_score=confidence_score,
+        degraded_reasons=degraded_reasons,
+        citation_count=len(citations),
+    )
+    provider_info = provider_metadata(draft.generator_provider)
 
     return GroundedAnswerResponse(
         answer=draft.answer_text,
         citations=citations,
         confidence_score=min(max(confidence_score, 0.0), 1.0),
+        confidence_label=confidence_label,
+        support_summary=support_summary,
         verification_status=verification_status,
         degraded_reasons=degraded_reasons,
+        generator_provider=draft.generator_provider,
+        provider_backend=str(provider_info["provider_backend"]),
+        provider_model=provider_info["provider_model"],
+        provider_fallback_used=bool(provider_info["provider_fallback_used"]),
+        provider_fallback_from=provider_info["provider_fallback_from"],
     )
 
 
@@ -110,6 +147,13 @@ def shape_degraded_response(
         or "I do not have enough grounded evidence to answer confidently.",
         citations=[],
         confidence_score=0.0,
+        confidence_label="low",
+        support_summary="insufficient",
         verification_status="degraded",
         degraded_reasons=[normalized_reason],
+        generator_provider="degraded-handler-v1",
+        provider_backend="degraded_handler_v1",
+        provider_model=None,
+        provider_fallback_used=False,
+        provider_fallback_from=None,
     )

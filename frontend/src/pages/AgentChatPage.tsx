@@ -28,6 +28,13 @@ import {
 import { useAuth } from "@/lib/auth";
 import { formatRelativeOrDate, sentenceCase } from "@/lib/format";
 import { workspacePath } from "@/lib/routes";
+import {
+  confidenceBadgeVariant,
+  confidenceLabelText,
+  degradedReasonDescription,
+  providerDisplayText,
+  supportSummaryText,
+} from "@/lib/trust";
 import type { UserFacingMode } from "@/lib/types";
 
 const MODE_OPTIONS: Array<{ label: string; value: UserFacingMode; available: boolean }> = [
@@ -569,7 +576,12 @@ export default function AgentChatPage() {
               </div>
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">Confidence</span>
-                <span className="text-foreground">{Math.round(run.confidence_score * 100)}%</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-foreground">{Math.round(run.confidence_score * 100)}%</span>
+                  <Badge variant={confidenceBadgeVariant(run.confidence_label)} className="text-[10px]">
+                    {confidenceLabelText(run.confidence_label)}
+                  </Badge>
+                </div>
               </div>
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">Verification</span>
@@ -582,19 +594,30 @@ export default function AgentChatPage() {
               </div>
               <div className="flex items-center justify-between gap-3 text-xs">
                 <span className="text-muted-foreground">Provider</span>
-                <span className="truncate text-right text-foreground">{run.generator_provider}</span>
+                <span className="max-w-[180px] truncate text-right text-foreground">
+                  {providerDisplayText(run)}
+                </span>
               </div>
             </div>
 
             <div className="border-b p-4">
               <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Routing</h4>
               <p className="text-xs leading-6 text-muted-foreground">{run.routing_reason}</p>
+              <div className="mt-3 rounded-xl border bg-secondary/20 p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  Support summary
+                </div>
+                <p className="mt-2 text-xs leading-6 text-foreground">
+                  {supportSummaryText(run.support_summary)}
+                </p>
+              </div>
               {run.degraded_reasons.length > 0 ? (
                 <div className="mt-3 space-y-2">
                   {run.degraded_reasons.map((reason) => (
-                    <Badge key={reason} variant="warning" className="mr-2 mb-2 text-[10px]">
-                      {sentenceCase(reason)}
-                    </Badge>
+                    <div key={reason} className="rounded-xl border border-amber-200/70 bg-amber-50/70 p-3 text-xs">
+                      <div className="font-medium text-amber-900">{sentenceCase(reason)}</div>
+                      <div className="mt-1 leading-5 text-amber-800">{degradedReasonDescription(reason)}</div>
+                    </div>
                   ))}
                 </div>
               ) : null}

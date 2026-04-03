@@ -1,0 +1,64 @@
+[
+  {
+    "name": "education_question_returns_grounded_answer",
+    "query": "What is her education status?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "BSc in Software Engineering",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-education",
+        "text": "Education: BSc in Software Engineering at Addis Ababa Science and Technology University.",
+        "score": 0.92
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-awards",
+        "text": "Awarded for a Huawei Seeds for the Future project in China.",
+        "score": 0.75
+      }
+    ]
+  },
+  {
+    "name": "greeting_does_not_reuse_resume_content",
+    "query": "hi",
+    "expected_type": "generation_error",
+    "expected_error_contains": "meaningful query terms",
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-education",
+        "text": "Education: BSc in Software Engineering at Addis Ababa Science and Technology University.",
+        "score": 0.92
+      }
+    ]
+  },
+  {
+    "name": "award_question_ignores_irrelevant_education_chunk",
+    "query": "What awards are listed?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Huawei Seeds for the Future",
+      "[E002]"
+    ],
+    "expected_citation_ids": ["E002"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-education",
+        "text": "Education: BSc in Software Engineering at Addis Ababa Science and Technology University.",
+        "score": 0.88
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-awards",
+        "text": "Awards: Selected for Huawei Seeds for the Future and recognized on the Dean's List.",
+        "score": 0.91
+      }
+    ]
+  }
+]

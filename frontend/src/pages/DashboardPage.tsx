@@ -25,6 +25,7 @@ import {
 import { useAuth } from "@/lib/auth";
 import { formatDateTime, formatRelativeOrDate, sentenceCase } from "@/lib/format";
 import { workspacePath } from "@/lib/routes";
+import { confidenceBadgeVariant, confidenceLabelText } from "@/lib/trust";
 
 function WelcomeHero({
   workspaceName,
@@ -289,6 +290,9 @@ export default function DashboardPage() {
                     </Badge>
                     <Badge variant={run.verification_status === "passed" ? "success" : "warning"} className="text-[10px]">
                       {sentenceCase(run.verification_status)}
+                    </Badge>
+                    <Badge variant={confidenceBadgeVariant(run.confidence_label)} className="text-[10px]">
+                      {confidenceLabelText(run.confidence_label)}
                     </Badge>
                     <span className="text-xs text-muted-foreground ml-auto">{formatRelativeOrDate(run.created_at)}</span>
                   </div>
