@@ -580,6 +580,10 @@ export default function AgentChatPage() {
                   {sentenceCase(run.verification_status)}
                 </Badge>
               </div>
+              <div className="flex items-center justify-between gap-3 text-xs">
+                <span className="text-muted-foreground">Provider</span>
+                <span className="truncate text-right text-foreground">{run.generator_provider}</span>
+              </div>
             </div>
 
             <div className="border-b p-4">

@@ -49,9 +49,33 @@ def build_dense_embedding(text: str, *, dimensions: int) -> list[float]:
 
 
 async def embed_texts(texts: list[str]) -> list[DenseEmbedding]:
-    """Embed a batch of texts using the current local dense embedding backend."""
+    """Embed a batch of texts using the configured dense embedding backend."""
 
-    dimensions = get_settings().dense_embedding_dimensions
+    settings = get_settings()
+    dimensions = settings.dense_embedding_dimensions
+
+    if settings.embedding_backend == "gemini_v1":
+        from app.core.gemini_embeddings import (
+            GeminiEmbeddingError,
+            embed_texts_gemini,
+        )
+
+        try:
+            return await embed_texts_gemini(texts)
+        except GeminiEmbeddingError:
+            pass
+
+    if settings.embedding_backend == "openai_compatible_v1":
+        from app.core.openai_embeddings import (
+            OpenAICompatibleEmbeddingError,
+            embed_texts_openai_compatible,
+        )
+
+        try:
+            return await embed_texts_openai_compatible(texts)
+        except OpenAICompatibleEmbeddingError:
+            pass
+
     return [
         DenseEmbedding(text=text, vector=build_dense_embedding(text, dimensions=dimensions))
         for text in texts

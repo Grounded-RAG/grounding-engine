@@ -7,8 +7,10 @@ import uuid
 import pytest
 
 from app.core.llm_client import GroundedGenerationError, generate_grounded_draft
+from app.core.gemini_generator import GeminiGenerationError
+from app.core.openai_generator import OpenAICompatibleGenerationError
 from app.pipeline.contracts import EvidenceItem, EvidencePackage
-from app.services.generation import generate_answer_from_evidence
+from app.services.generation import GenerationBackend, generate_answer_from_evidence
 
 
 def _evidence_item(*, citation_id: str, chunk_id: str, text: str) -> EvidenceItem:
@@ -181,3 +183,89 @@ def test_generate_answer_from_evidence_delegates_to_generation_backend() -> None
     )
     assert draft.generator_provider == "local-grounded-v1"
     assert draft.support_coverage == 1.0
+
+
+def test_generate_answer_from_evidence_falls_back_from_openai_backend(monkeypatch) -> None:
+    """Provider-backed generation should fall back cleanly when the provider fails."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-1",
+                text="Grounded returns answers anchored in retrieved evidence.",
+            ),
+        ],
+    )
+
+    monkeypatch.setattr(
+        "app.services.generation.resolve_generation_backend",
+        lambda: GenerationBackend(
+            provider_name="openai_compatible_v1",
+            implementation="openai_compatible",
+        ),
+    )
+
+    def fake_generate_openai_compatible_draft(**kwargs):
+        del kwargs
+        raise OpenAICompatibleGenerationError("provider unavailable")
+
+    monkeypatch.setattr(
+        "app.services.generation.generate_openai_compatible_draft",
+        fake_generate_openai_compatible_draft,
+    )
+
+    draft = generate_answer_from_evidence(
+        query_text="What does grounded return?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text == (
+        "Grounded returns answers anchored in retrieved evidence. [E001]"
+    )
+    assert draft.generator_provider == "local-grounded-v1:fallback_from_openai_compatible_v1"
+
+
+def test_generate_answer_from_evidence_falls_back_from_gemini_backend(monkeypatch) -> None:
+    """Gemini-backed generation should also fall back cleanly when unavailable."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-1",
+                text="Grounded returns answers anchored in retrieved evidence.",
+            ),
+        ],
+    )
+
+    monkeypatch.setattr(
+        "app.services.generation.resolve_generation_backend",
+        lambda: GenerationBackend(
+            provider_name="gemini_v1",
+            implementation="gemini",
+        ),
+    )
+
+    def fake_generate_gemini_draft(**kwargs):
+        del kwargs
+        raise GeminiGenerationError("provider unavailable")
+
+    monkeypatch.setattr(
+        "app.services.generation.generate_gemini_draft",
+        fake_generate_gemini_draft,
+    )
+
+    draft = generate_answer_from_evidence(
+        query_text="What does grounded return?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text == (
+        "Grounded returns answers anchored in retrieved evidence. [E001]"
+    )
+    assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"

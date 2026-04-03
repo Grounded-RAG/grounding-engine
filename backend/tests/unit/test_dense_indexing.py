@@ -7,7 +7,9 @@ import uuid
 
 import pytest
 
-from app.core.embeddings import build_dense_embedding
+from app.core.embeddings import build_dense_embedding, embed_texts
+from app.core.gemini_embeddings import GeminiEmbeddingError
+from app.core.openai_embeddings import OpenAICompatibleEmbeddingError
 from app.pipeline.contracts import ChunkManifest
 from app.services.dense_indexing import _dense_point_id, dense_index_document
 from app.services.ingestion import IngestionJobContext, IngestionProcessorError
@@ -21,6 +23,64 @@ def test_build_dense_embedding_is_deterministic() -> None:
 
     assert vector_one == vector_two
     assert len(vector_one) == 16
+
+
+@pytest.mark.asyncio()
+async def test_embed_texts_falls_back_from_openai_backend(monkeypatch) -> None:
+    """Provider-backed embeddings should fall back to the local deterministic backend."""
+
+    monkeypatch.setenv("EMBEDDING_BACKEND", "openai_compatible_v1")
+    monkeypatch.setenv("DENSE_EMBEDDING_DIMENSIONS", "8")
+
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        async def fake_embed_texts_openai_compatible(texts: list[str]):
+            del texts
+            raise OpenAICompatibleEmbeddingError("provider unavailable")
+
+        monkeypatch.setattr(
+            "app.core.openai_embeddings.embed_texts_openai_compatible",
+            fake_embed_texts_openai_compatible,
+        )
+
+        embeddings = await embed_texts(["alpha beta"])
+    finally:
+        get_settings.cache_clear()
+
+    assert len(embeddings) == 1
+    assert embeddings[0].text == "alpha beta"
+    assert len(embeddings[0].vector) == 8
+
+
+@pytest.mark.asyncio()
+async def test_embed_texts_falls_back_from_gemini_backend(monkeypatch) -> None:
+    """Gemini-backed embeddings should fall back to the local deterministic backend."""
+
+    monkeypatch.setenv("EMBEDDING_BACKEND", "gemini_v1")
+    monkeypatch.setenv("DENSE_EMBEDDING_DIMENSIONS", "8")
+
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        async def fake_embed_texts_gemini(texts: list[str]):
+            del texts
+            raise GeminiEmbeddingError("provider unavailable")
+
+        monkeypatch.setattr(
+            "app.core.gemini_embeddings.embed_texts_gemini",
+            fake_embed_texts_gemini,
+        )
+
+        embeddings = await embed_texts(["alpha beta"])
+    finally:
+        get_settings.cache_clear()
+
+    assert len(embeddings) == 1
+    assert embeddings[0].text == "alpha beta"
+    assert len(embeddings[0].vector) == 8
 
 
 def test_dense_point_id_is_stable_uuid() -> None:

@@ -14,7 +14,8 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 AppEnv = Literal["development", "test", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-GeneratorBackend = Literal["local_grounded_v1"]
+GeneratorBackend = Literal["local_grounded_v1", "gemini_v1", "openai_compatible_v1"]
+EmbeddingBackend = Literal["local_hash_v1", "gemini_v1", "openai_compatible_v1"]
 
 
 class Settings(BaseSettings):
@@ -43,9 +44,19 @@ class Settings(BaseSettings):
     chunk_max_tokens: int = 256
     chunk_overlap_tokens: int = 40
     generator_backend: GeneratorBackend = "local_grounded_v1"
+    gemini_api_key: str | None = None
+    gemini_base_url: AnyHttpUrl = "https://generativelanguage.googleapis.com/v1beta"
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_embedding_model: str = "models/gemini-embedding-001"
+    openai_api_key: str | None = None
+    openai_base_url: AnyHttpUrl = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4.1-mini"
+    openai_timeout_seconds: int = 30
     qdrant_url: AnyHttpUrl = "http://localhost:6333"
     qdrant_collection: str = "grounded_chunks"
+    embedding_backend: EmbeddingBackend = "local_hash_v1"
     dense_embedding_dimensions: int = 128
+    openai_embedding_model: str = "text-embedding-3-small"
     retrieval_candidate_limit: int = 8
     rrf_smoothing_constant: int = 60
     evidence_package_limit: int = 3
@@ -131,6 +142,16 @@ class Settings(BaseSettings):
             raise ValueError("GENERATOR_BACKEND must not be empty.")
         return normalized
 
+    @field_validator("gemini_api_key", "openai_api_key")
+    @classmethod
+    def normalize_optional_secret(cls, value: str | None) -> str | None:
+        """Normalize optional provider secrets."""
+
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
     @field_validator("chunk_overlap_tokens")
     @classmethod
     def validate_chunk_overlap_tokens(cls, value: int, info: ValidationInfo) -> int:
@@ -153,6 +174,16 @@ class Settings(BaseSettings):
         normalized = value.strip()
         if not normalized:
             raise ValueError("QDRANT_COLLECTION must not be empty.")
+        return normalized
+
+    @field_validator("embedding_backend")
+    @classmethod
+    def validate_embedding_backend(cls, value: str) -> str:
+        """Ensure the embedding backend name is non-empty."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("EMBEDDING_BACKEND must not be empty.")
         return normalized
 
     @field_validator("dense_embedding_dimensions")
