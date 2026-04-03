@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -34,6 +35,19 @@ class QueryServiceError(RuntimeError):
         self.status_code = status_code
 
 
+_SMALLTALK_QUERIES = {
+    "hi",
+    "hello",
+    "hey",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "how are you",
+    "thanks",
+    "thank you",
+}
+
+
 def _degraded_reason_for_generation_exception(exc: Exception) -> tuple[str, str]:
     """Map generator/shaping failures to clearer Standard degraded outcomes."""
 
@@ -51,6 +65,27 @@ def _degraded_reason_for_generation_exception(exc: Exception) -> tuple[str, str]
     return (
         "INSUFFICIENT_SUPPORT",
         "I found some related material, but not enough grounded evidence to answer confidently.",
+    )
+
+
+def _is_smalltalk_query(query_text: str) -> bool:
+    """Detect greetings and conversational filler that should clarify scope."""
+
+    normalized = re.sub(r"\s+", " ", query_text.strip().casefold())
+    if not normalized:
+        return False
+    return normalized in _SMALLTALK_QUERIES
+
+
+def _smalltalk_response() -> GroundedAnswerResponse:
+    """Return a friendly scoped reply for greetings and conversational filler."""
+
+    return shape_degraded_response(
+        reason="QUERY_REQUIRES_CLARIFICATION",
+        answer_text=(
+            "Hi. I am ready to help with the attached dataset. "
+            "Ask me a question about the uploaded documents and I will answer with citations when grounded evidence is available."
+        ),
     )
 
 
@@ -186,6 +221,43 @@ async def execute_standard_query(
         )
 
     started_at = time.perf_counter()
+
+    if _is_smalltalk_query(query_request.query):
+        retrieval_bundle = RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
+        response = _smalltalk_response()
+        stage_latencies_ms = {
+            "retrieval_ms": 0,
+            "evidence_packaging_ms": 0,
+            "answering_ms": 0,
+        }
+        trace_started = time.perf_counter()
+        trace = await _persist_query_trace(
+            session=session,
+            tenant_context=tenant_context,
+            query_request=query_request,
+            response=response,
+            retrieval_bundle=retrieval_bundle,
+            stage_latencies_ms=stage_latencies_ms,
+            total_latency_ms=int((time.perf_counter() - started_at) * 1000),
+            generator_provider="clarification-handler-v1",
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            selected_mode=selected_mode,
+        )
+        trace_ms = int((time.perf_counter() - trace_started) * 1000)
+        await _update_query_trace_timings(
+            session=session,
+            trace=trace,
+            stage_latencies_ms={
+                **stage_latencies_ms,
+                "trace_persistence_ms": trace_ms,
+            },
+            total_latency_ms=int((time.perf_counter() - started_at) * 1000),
+        )
+        return QueryExecutionResult(
+            response=response,
+            trace_id=trace.trace_id,
+        )
 
     retrieval_started = time.perf_counter()
     try:

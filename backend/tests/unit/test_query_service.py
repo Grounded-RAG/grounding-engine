@@ -248,20 +248,13 @@ async def test_execute_standard_query_requests_clarification_for_vague_query(mon
     )()
     session = FakeAsyncSession(namespace=namespace)
 
-    async def fake_retrieve_hybrid_candidates(**kwargs):
+    async def fail_retrieve_hybrid_candidates(**kwargs):
         del kwargs
-        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+        raise AssertionError("Small-talk clarification should bypass retrieval.")
 
     monkeypatch.setattr(
         "app.services.query.retrieve_hybrid_candidates",
-        fake_retrieve_hybrid_candidates,
-    )
-    monkeypatch.setattr(
-        "app.services.generation.resolve_generation_backend",
-        lambda: GenerationBackend(
-            provider_name="local_grounded_v1",
-            implementation="local",
-        ),
+        fail_retrieve_hybrid_candidates,
     )
 
     result = await execute_standard_query(
@@ -272,7 +265,7 @@ async def test_execute_standard_query_requests_clarification_for_vague_query(mon
 
     assert result.response.verification_status == "degraded"
     assert result.response.degraded_reasons == ["QUERY_REQUIRES_CLARIFICATION"]
-    assert "more specific grounded question" in result.response.answer
+    assert "Ask me a question about the uploaded documents" in result.response.answer
 
 
 @pytest.mark.asyncio()

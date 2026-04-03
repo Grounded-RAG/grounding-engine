@@ -57,6 +57,8 @@ def provider_metadata(generator_provider: str) -> dict[str, str | bool | None]:
         provider_backend = "local_grounded_v1"
     elif base_provider == "degraded-handler-v1":
         provider_backend = "degraded_handler_v1"
+    elif base_provider == "clarification-handler-v1":
+        provider_backend = "clarification_handler_v1"
     elif base_provider.startswith("gemini:"):
         provider_backend = "gemini_v1"
         provider_model = base_provider.split(":", 1)[1].strip() or None
