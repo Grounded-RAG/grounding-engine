@@ -68,6 +68,39 @@ def upsert_dense_points(
     return len(points)
 
 
+def delete_dense_points_for_document(
+    *,
+    tenant_id: UUID,
+    document_id: UUID,
+) -> None:
+    """Delete all dense points currently stored for one tenant-scoped document."""
+
+    client = get_qdrant_client()
+    collection_name = get_settings().qdrant_collection
+    query_filter = qdrant_models.Filter(
+        must=[
+            qdrant_models.FieldCondition(
+                key="tenant_id",
+                match=qdrant_models.MatchValue(value=str(tenant_id)),
+            ),
+            qdrant_models.FieldCondition(
+                key="document_id",
+                match=qdrant_models.MatchValue(value=str(document_id)),
+            ),
+        ]
+    )
+    try:
+        client.delete(
+            collection_name=collection_name,
+            points_selector=qdrant_models.FilterSelector(filter=query_filter),
+            wait=True,
+        )
+    except Exception as exc:  # pragma: no cover - defensive wrapper for client errors
+        raise VectorStoreError(
+            "Failed to delete existing dense points for the document."
+        ) from exc
+
+
 def search_dense_points(
     *,
     query_vector: list[float],

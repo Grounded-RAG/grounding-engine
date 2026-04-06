@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     dense_embedding_dimensions: int = 128
     openai_embedding_model: str = "text-embedding-3-small"
     retrieval_candidate_limit: int = 8
+    retrieval_overfetch_factor: int = 4
     rrf_smoothing_constant: int = 60
     evidence_package_limit: int = 3
     api_key_salt: str = "replace-in-local-env"
@@ -200,6 +201,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "retrieval_candidate_limit",
+        "retrieval_overfetch_factor",
         "rrf_smoothing_constant",
         "evidence_package_limit",
         "provider_max_retries",

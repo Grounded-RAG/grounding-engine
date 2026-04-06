@@ -9,6 +9,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from app.config import get_settings
+from app.core.query_analysis import build_query_profile, query_focus_hints
 from app.pipeline.contracts import EvidencePackage, GroundedAnswerDraft
 from app.core.provider_retry import run_with_retries
 
@@ -33,6 +34,9 @@ def _build_system_prompt() -> str:
         "You are a grounded answer generator. "
         "Answer only from the supplied evidence. "
         "Do not invent claims or use outside knowledge. "
+        "Answer only the user's actual question, not every retrieved fact. "
+        "If the question asks for a specific field like a name, degree, skill set, role, company, email, phone, or date, extract only that field. "
+        "Do not concatenate unrelated evidence. "
         "If the evidence is insufficient, return a short answer that says so. "
         "Return strict JSON with keys: answer_text, cited_evidence_ids, citation_snippets. "
         "Each cited_evidence_id must be one of the provided chunk ids. "
@@ -43,6 +47,7 @@ def _build_system_prompt() -> str:
 def _build_user_prompt(*, query_text: str, evidence_package: EvidencePackage) -> str:
     """Render the grounded evidence payload for the OpenAI-compatible backend."""
 
+    profile = build_query_profile(query_text)
     evidence_lines: list[str] = []
     for item in evidence_package.items:
         evidence_lines.append(
@@ -61,6 +66,9 @@ def _build_user_prompt(*, query_text: str, evidence_package: EvidencePackage) ->
     return "\n\n".join(
         [
             f"query={query_text}",
+            f"detected_intents={','.join(sorted(profile.intents)) or 'none'}",
+            "focus_hints:",
+            "\n".join(query_focus_hints(profile)) or "none",
             "evidence:",
             "\n\n".join(evidence_lines),
         ]

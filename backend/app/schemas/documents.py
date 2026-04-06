@@ -39,3 +39,13 @@ class IngestionJobStatusResponse(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     created_at: datetime
+
+
+class DocumentReindexResponse(BaseModel):
+    """Response returned after a document is queued for reindexing."""
+
+    document_id: UUID
+    namespace_id: UUID
+    job_id: UUID
+    document_status: DocumentStatus
+    job_status: IngestionJobStatus

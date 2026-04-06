@@ -10,6 +10,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from app.config import get_settings
+from app.core.query_analysis import build_query_profile, query_focus_hints
 from app.pipeline.contracts import EvidencePackage, GroundedAnswerDraft
 from app.core.provider_retry import run_with_retries
 
@@ -54,6 +55,7 @@ def _build_schema() -> dict[str, object]:
 def _build_prompt(*, query_text: str, evidence_package: EvidencePackage) -> str:
     """Render a grounded instruction block for Gemini."""
 
+    profile = build_query_profile(query_text)
     evidence_sections: list[str] = []
     for item in evidence_package.items:
         evidence_sections.append(
@@ -74,9 +76,16 @@ def _build_prompt(*, query_text: str, evidence_package: EvidencePackage) -> str:
             "You are a grounded answer generator.",
             "Use only the supplied evidence.",
             "Do not use outside knowledge.",
+            "Answer only the user's actual question, not every retrieved fact.",
+            "Prefer the single chunk or small set of chunks that directly answer the question.",
+            "If the question asks for a specific field like a name, degree, skill set, role, company, email, or date, extract only that field.",
+            "Do not concatenate unrelated bullets just because they were retrieved.",
             "If support is weak, say that briefly but still remain grounded.",
             "Return strict JSON only.",
             f"query={query_text}",
+            f"detected_intents={','.join(sorted(profile.intents)) or 'none'}",
+            "focus_hints:",
+            "\n".join(query_focus_hints(profile)) or "none",
             "evidence:",
             "\n\n".join(evidence_sections),
         ]

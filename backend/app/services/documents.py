@@ -59,6 +59,15 @@ class DocumentUploadResult:
     should_schedule_ingestion: bool = False
 
 
+@dataclass(frozen=True)
+class DocumentReindexResult:
+    """Domain result returned after queueing one document for reindexing."""
+
+    document: Document
+    ingestion_job: IngestionJob
+    should_schedule_ingestion: bool = False
+
+
 def _normalize_filename(filename: str | None) -> tuple[str, str, str]:
     """Validate and normalize the uploaded filename."""
 
@@ -160,6 +169,28 @@ async def _get_latest_ingestion_job_for_document(
     )
     result = await session.execute(statement)
     return result.scalars().first()
+
+
+async def _get_document_for_tenant(
+    *,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    document_id: uuid.UUID,
+) -> Document:
+    """Return one tenant-scoped document or raise if it does not exist."""
+
+    statement = select(Document).where(
+        Document.tenant_id == tenant_id,
+        Document.doc_id == document_id,
+    )
+    result = await session.execute(statement)
+    document = result.scalar_one_or_none()
+    if document is None:
+        raise DocumentServiceError(
+            "Document not found for tenant.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    return document
 
 
 async def _get_existing_document_upload(
@@ -378,3 +409,64 @@ async def get_ingestion_job_for_tenant(
         )
 
     return ingestion_job
+
+
+async def reindex_document_for_tenant(
+    *,
+    session: AsyncSession,
+    tenant_context: TenantContext,
+    document_id: uuid.UUID,
+) -> DocumentReindexResult:
+    """Queue one existing tenant-scoped document for a fresh ingestion run."""
+
+    document = await _get_document_for_tenant(
+        session=session,
+        tenant_id=tenant_context.tenant_id,
+        document_id=document_id,
+    )
+    await _get_namespace_for_tenant(
+        session=session,
+        tenant_id=tenant_context.tenant_id,
+        namespace_id=document.namespace_id,
+    )
+
+    latest_job = await _get_latest_ingestion_job_for_document(
+        session=session,
+        tenant_id=tenant_context.tenant_id,
+        document_id=document_id,
+    )
+    if latest_job is not None and latest_job.status in {
+        IngestionJobStatus.QUEUED,
+        IngestionJobStatus.RUNNING,
+    }:
+        return DocumentReindexResult(
+            document=document,
+            ingestion_job=latest_job,
+            should_schedule_ingestion=False,
+        )
+
+    ingestion_job = IngestionJob(
+        job_id=uuid.uuid4(),
+        tenant_id=tenant_context.tenant_id,
+        doc_id=document.doc_id,
+        status=IngestionJobStatus.QUEUED,
+    )
+    document.status = DocumentStatus.UPLOADED
+    session.add(ingestion_job)
+
+    try:
+        await session.commit()
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise DocumentServiceError(
+            "Failed to queue document reindexing.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ) from exc
+
+    await session.refresh(document)
+    await session.refresh(ingestion_job)
+    return DocumentReindexResult(
+        document=document,
+        ingestion_job=ingestion_job,
+        should_schedule_ingestion=True,
+    )

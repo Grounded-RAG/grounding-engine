@@ -10,7 +10,11 @@ from qdrant_client.http import models as qdrant_models
 
 from app.config import get_settings
 from app.core.embeddings import DenseEmbedding, EmbeddingError, embed_texts
-from app.core.qdrant_client import VectorStoreError, upsert_dense_points
+from app.core.qdrant_client import (
+    VectorStoreError,
+    delete_dense_points_for_document,
+    upsert_dense_points,
+)
 from app.core.storage import StorageError, download_bytes
 from app.pipeline.contracts import ChunkManifest
 from app.services.chunking import derive_chunk_manifest_key
@@ -114,6 +118,10 @@ async def dense_index_document(
     ]
 
     try:
+        delete_dense_points_for_document(
+            tenant_id=context.tenant_id,
+            document_id=context.document_id,
+        )
         points_indexed = upsert_dense_points(
             points=points,
             vector_size=vector_dimensions,

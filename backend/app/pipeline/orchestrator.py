@@ -30,6 +30,7 @@ class _ChunkSpan:
     end_char: int
     start_token: int
     end_token: int
+    starts_with_heading: bool = False
 
     @property
     def token_count(self) -> int:
@@ -58,6 +59,39 @@ def _span_from_token_window(
     )
 
 
+def _normalize_chunk_text(raw_text: str) -> str:
+    """Normalize chunk text while preserving meaningful line structure."""
+
+    normalized_source = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized_lines = [
+        re.sub(r"[ \t]+", " ", line).strip()
+        for line in normalized_source.split("\n")
+    ]
+
+    compact_lines: list[str] = []
+    previous_blank = False
+    for line in normalized_lines:
+        if not line:
+            if compact_lines and not previous_blank:
+                compact_lines.append("")
+            previous_blank = True
+            continue
+        compact_lines.append(line)
+        previous_blank = False
+
+    return "\n".join(compact_lines).strip()
+
+
+def _starts_with_heading(text: str, *, start_char: int, end_char: int) -> bool:
+    """Return whether a span begins with a heading-like line."""
+
+    candidate = text[start_char:end_char].lstrip()
+    if not candidate:
+        return False
+    first_line = candidate.splitlines()[0].strip()
+    return bool(first_line and _HEADING_LINE_PATTERN.fullmatch(first_line))
+
+
 def _emit_chunk(
     *,
     chunks: list[DocumentChunk],
@@ -67,7 +101,7 @@ def _emit_chunk(
 ) -> None:
     """Create one persisted chunk from an absolute token span."""
 
-    chunk_text = re.sub(r"\s+", " ", text[span.start_char:span.end_char]).strip()
+    chunk_text = _normalize_chunk_text(text[span.start_char:span.end_char])
     chunk_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()[:12]
     chunks.append(
         DocumentChunk(
@@ -170,6 +204,11 @@ def _char_spans_to_token_spans(
                 end_char=token_spans[end_token][1],
                 start_token=start_token,
                 end_token=end_token,
+                starts_with_heading=_starts_with_heading(
+                    text,
+                    start_char=raw_start,
+                    end_char=raw_end,
+                ),
             )
         )
 
@@ -231,6 +270,9 @@ def _split_oversized_span(
                 end_char=token_spans[end_token][1],
                 start_token=start_token,
                 end_token=end_token,
+                starts_with_heading=(
+                    span.starts_with_heading and absolute_start == span.start_char
+                ),
             )
         )
 
@@ -259,6 +301,7 @@ def _split_oversized_span(
                 end_char=sentence_span.end_char,
                 start_token=current.start_token,
                 end_token=sentence_span.end_token,
+                starts_with_heading=current.starts_with_heading,
             )
             continue
 
@@ -282,7 +325,7 @@ def _apply_overlap(
 
     overlapped: list[_ChunkSpan] = []
     for index, span in enumerate(base_spans):
-        if index == 0:
+        if index == 0 or span.starts_with_heading:
             overlapped.append(span)
             continue
         start_token = max(0, span.start_token - overlap_tokens)
@@ -292,6 +335,7 @@ def _apply_overlap(
                 end_char=span.end_char,
                 start_token=start_token,
                 end_token=span.end_token,
+                starts_with_heading=False,
             )
         )
     return overlapped
@@ -329,6 +373,10 @@ def _build_structure_aware_chunks(
     grouped_spans: list[_ChunkSpan] = []
     current = normalized_spans[0]
     for span in normalized_spans[1:]:
+        if span.starts_with_heading:
+            grouped_spans.append(current)
+            current = span
+            continue
         merged_token_count = span.end_token - current.start_token + 1
         if merged_token_count <= config.max_tokens:
             current = _ChunkSpan(
@@ -336,6 +384,7 @@ def _build_structure_aware_chunks(
                 end_char=span.end_char,
                 start_token=current.start_token,
                 end_token=span.end_token,
+                starts_with_heading=current.starts_with_heading,
             )
             continue
 

@@ -1,5 +1,53 @@
 [
   {
+    "name": "name_question_returns_profile_header",
+    "query": "What is the name of the resume owner?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Samrawit Gebremaryam Bahta",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-profile",
+        "text": "Samrawit Gebremaryam Bahta\nsamrawitgebremaryam121@gmail.com\n+251-989-985-456",
+        "score": 0.84
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-experience",
+        "text": "Professional experience: AI Engineer at iCog Labs working on grounded retrieval systems.",
+        "score": 0.91
+      }
+    ]
+  },
+  {
+    "name": "skills_question_prefers_skills_section",
+    "query": "What are her technical skills?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "PyTorch",
+      "[E002]"
+    ],
+    "expected_citation_ids": ["E002"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-awards",
+        "text": "Enhanced skills in advanced ICT and Artificial intelligence through targeted courses and workshops.",
+        "score": 0.9
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-skills",
+        "text": "TECHNICAL SKILLS\nAI & Machine Learning: PyTorch, Scikit-learn, Hugging Face, RAG.",
+        "score": 0.82
+      }
+    ]
+  },
+  {
     "name": "education_question_returns_grounded_answer",
     "query": "What is her education status?",
     "expected_type": "grounded",

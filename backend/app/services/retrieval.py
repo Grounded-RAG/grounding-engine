@@ -6,12 +6,19 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.query_analysis import (
+    build_query_profile,
+    build_retrieval_query_text,
+    is_field_extraction_query,
+    score_text_against_query,
+)
 from app.core.embeddings import EmbeddingError, embed_texts
+from app.models import DocumentChunkRecord
 from app.core.qdrant_client import VectorStoreError, search_dense_points
 from app.pipeline.contracts import FusedRetrievedChunk, RetrievedChunk
 
@@ -45,6 +52,8 @@ async def sparse_retrieve_chunks(
 ) -> list[RetrievedChunk]:
     """Retrieve lexical candidates from PostgreSQL full-text search."""
 
+    profile = build_query_profile(query_text)
+    retrieval_query_text = build_retrieval_query_text(profile)
     candidate_limit = limit or get_settings().retrieval_candidate_limit
     statement = text(
         """
@@ -55,11 +64,11 @@ async def sparse_retrieve_chunks(
             doc_id,
             chunk_index,
             chunk_text,
-            ts_rank_cd(search_vector, plainto_tsquery('english', :query_text)) as score
+            ts_rank_cd(search_vector, websearch_to_tsquery('english', :query_text)) as score
         from document_chunks
         where tenant_id = :tenant_id
           and namespace_id = :namespace_id
-          and search_vector @@ plainto_tsquery('english', :query_text)
+          and search_vector @@ websearch_to_tsquery('english', :query_text)
         order by score desc, chunk_index asc
         limit :limit
         """
@@ -71,7 +80,7 @@ async def sparse_retrieve_chunks(
             {
                 "tenant_id": tenant_id,
                 "namespace_id": namespace_id,
-                "query_text": query_text,
+                "query_text": retrieval_query_text,
                 "limit": candidate_limit,
             },
         )
@@ -106,9 +115,11 @@ async def dense_retrieve_chunks(
 ) -> list[RetrievedChunk]:
     """Retrieve semantic candidates from Qdrant."""
 
+    profile = build_query_profile(query_text)
+    retrieval_query_text = build_retrieval_query_text(profile)
     candidate_limit = limit or get_settings().retrieval_candidate_limit
     try:
-        query_embedding = (await embed_texts([query_text]))[0]
+        query_embedding = (await embed_texts([retrieval_query_text]))[0]
         points = search_dense_points(
             query_vector=query_embedding.vector,
             tenant_id=tenant_id,
@@ -191,6 +202,126 @@ def fuse_retrieval_hits(
     return fused_hits[:limit]
 
 
+def _rerank_fused_hits_for_query(
+    fused_hits: list[FusedRetrievedChunk],
+    *,
+    query_text: str,
+    limit: int,
+) -> list[FusedRetrievedChunk]:
+    """Rerank fused hits by query answerability before the final top-k cut."""
+
+    if not fused_hits:
+        return []
+
+    profile = build_query_profile(query_text)
+    top_fused_score = max(hit.fused_score for hit in fused_hits) or 1.0
+
+    reranked = sorted(
+        fused_hits,
+        key=lambda hit: (
+            -(
+                (hit.fused_score / top_fused_score) * 10.0
+                + score_text_against_query(
+                    hit.text,
+                    profile=profile,
+                    chunk_index=hit.chunk_index,
+                )
+                + len(hit.sources) * 1.25
+            ),
+            hit.chunk_index,
+            hit.chunk_id,
+        ),
+    )
+    return reranked[:limit]
+
+
+async def _fetch_supporting_context_hits(
+    *,
+    session: AsyncSession,
+    tenant_id: UUID,
+    namespace_id: UUID,
+    query_text: str,
+    fused_hits: list[FusedRetrievedChunk],
+) -> list[FusedRetrievedChunk]:
+    """Recover nearby/header chunks from already-relevant documents."""
+
+    if not fused_hits:
+        return []
+
+    profile = build_query_profile(query_text)
+    target_indexes_by_doc: dict[UUID, set[int]] = {}
+    doc_priority_scores: dict[UUID, float] = {}
+
+    for hit in fused_hits[:5]:
+        doc_priority_scores[hit.document_id] = max(
+            doc_priority_scores.get(hit.document_id, 0.0),
+            hit.fused_score,
+        )
+        target_indexes = target_indexes_by_doc.setdefault(hit.document_id, set())
+        target_indexes.update(
+            index
+            for index in (hit.chunk_index - 1, hit.chunk_index, hit.chunk_index + 1)
+            if index >= 0
+        )
+
+    if is_field_extraction_query(profile):
+        for document_id in list(target_indexes_by_doc)[:3]:
+            target_indexes_by_doc[document_id].update({0, 1})
+
+    clauses = [
+        (
+            (DocumentChunkRecord.doc_id == document_id)
+            & (DocumentChunkRecord.chunk_index.in_(sorted(indexes)))
+        )
+        for document_id, indexes in target_indexes_by_doc.items()
+        if indexes
+    ]
+    if not clauses:
+        return []
+
+    statement = (
+        select(DocumentChunkRecord)
+        .where(
+            DocumentChunkRecord.tenant_id == tenant_id,
+            DocumentChunkRecord.namespace_id == namespace_id,
+            or_(*clauses),
+        )
+        .order_by(DocumentChunkRecord.doc_id.asc(), DocumentChunkRecord.chunk_index.asc())
+    )
+
+    try:
+        result = await session.execute(statement)
+    except SQLAlchemyError as exc:
+        raise RetrievalError("Supporting context retrieval failed.") from exc
+
+    existing_chunk_ids = {hit.chunk_id for hit in fused_hits}
+    supplemental_hits: list[FusedRetrievedChunk] = []
+    rows = result.scalars() if hasattr(result, "scalars") else []
+    for row in rows:
+        if row.chunk_id in existing_chunk_ids:
+            continue
+
+        doc_score = doc_priority_scores.get(row.doc_id, 0.0)
+        proximity_score = 0.72
+        if row.chunk_index <= 1 and is_field_extraction_query(profile):
+            proximity_score = 0.9
+
+        supplemental_hits.append(
+            FusedRetrievedChunk(
+                chunk_id=row.chunk_id,
+                tenant_id=row.tenant_id,
+                namespace_id=row.namespace_id,
+                document_id=row.doc_id,
+                chunk_index=row.chunk_index,
+                text=row.chunk_text,
+                fused_score=max(doc_score * proximity_score, 0.0001),
+                sources=("context",),
+            )
+        )
+
+    return supplemental_hits
+
+
 async def retrieve_hybrid_candidates(
     *,
     session: AsyncSession,
@@ -201,23 +332,44 @@ async def retrieve_hybrid_candidates(
 ) -> RetrievalBundle:
     """Run sparse and dense retrieval, then merge candidates with RRF."""
 
+    settings = get_settings()
+    final_limit = limit or settings.retrieval_candidate_limit
+    overfetch_limit = max(
+        final_limit,
+        final_limit * settings.retrieval_overfetch_factor,
+    )
+
     sparse_hits = await sparse_retrieve_chunks(
         session=session,
         tenant_id=tenant_id,
         namespace_id=namespace_id,
         query_text=query_text,
-        limit=limit,
+        limit=overfetch_limit,
     )
     dense_hits = await dense_retrieve_chunks(
         tenant_id=tenant_id,
         namespace_id=namespace_id,
         query_text=query_text,
-        limit=limit,
+        limit=overfetch_limit,
     )
     fused_hits = fuse_retrieval_hits(
         sparse_hits,
         dense_hits,
-        limit=limit or get_settings().retrieval_candidate_limit,
+        rrf_k=settings.rrf_smoothing_constant,
+    )
+    supporting_hits = await _fetch_supporting_context_hits(
+        session=session,
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text=query_text,
+        fused_hits=fused_hits,
+    )
+    if supporting_hits:
+        fused_hits = list(fused_hits) + supporting_hits
+    fused_hits = _rerank_fused_hits_for_query(
+        fused_hits,
+        query_text=query_text,
+        limit=final_limit,
     )
     return RetrievalBundle(
         sparse_hits=sparse_hits,

@@ -59,6 +59,8 @@ _SMALLTALK_QUERIES = {
     "thank you so much",
 }
 
+_GREETING_PREFIXES = ("hi", "hello", "hey", "hiya", "yo")
+
 
 def _degraded_reason_for_generation_exception(exc: Exception) -> tuple[str, str]:
     """Map generator/shaping failures to clearer Standard degraded outcomes."""
@@ -89,6 +91,22 @@ def _is_smalltalk_query(query_text: str) -> bool:
         return False
     if normalized in _SMALLTALK_QUERIES:
         return True
+
+    for prefix in _GREETING_PREFIXES:
+        if normalized.startswith(f"{prefix} "):
+            remainder = normalized[len(prefix) :].strip()
+            if (
+                remainder in _SMALLTALK_QUERIES
+                or remainder in {"there", "there there"}
+                or remainder.startswith("how are you")
+                or remainder.startswith("can you help me")
+                or remainder.startswith("help me")
+                or remainder.startswith("what can you do")
+                or remainder.startswith("who are you")
+                or remainder.startswith("nice to meet you")
+            ):
+                return True
+
     tokens = normalized.split()
     return len(tokens) <= 4 and all(
         token in {"hi", "hello", "hey", "hiya", "yo", "thanks", "thank", "okay", "ok"}
@@ -294,7 +312,10 @@ async def execute_standard_query(
     retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
 
     evidence_started = time.perf_counter()
-    evidence_package = package_evidence(retrieval_bundle)
+    evidence_package = package_evidence(
+        retrieval_bundle,
+        query_text=query_request.query,
+    )
     evidence_ms = int((time.perf_counter() - evidence_started) * 1000)
 
     answering_started = time.perf_counter()
