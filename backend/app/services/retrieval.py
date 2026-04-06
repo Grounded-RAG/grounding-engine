@@ -14,9 +14,12 @@ from app.config import get_settings
 from app.core.query_analysis import (
     QueryPlan,
     build_query_plan,
+    has_strong_intent_signal,
+    is_collection_query,
     is_dataset_summary_query,
     is_field_extraction_query,
     score_text_against_query,
+    tokenize_meaningful_terms,
 )
 from app.core.embeddings import EmbeddingError, embed_texts
 from app.models import DocumentChunkRecord
@@ -35,6 +38,49 @@ class RetrievalBundle:
     sparse_hits: list[RetrievedChunk]
     dense_hits: list[RetrievedChunk]
     fused_hits: list[FusedRetrievedChunk]
+
+
+def _query_term_coverage_score(*, text: str, query_plan: QueryPlan) -> float:
+    """Reward chunks that cover more of the query's meaningful vocabulary."""
+
+    profile = query_plan.profile
+    text_terms = tokenize_meaningful_terms(text)
+    if not text_terms:
+        return 0.0
+
+    direct_overlap = len(set(profile.terms) & text_terms)
+    expanded_overlap = len(set(profile.expanded_terms) & text_terms)
+    score = direct_overlap * 3.5 + max(expanded_overlap - direct_overlap, 0) * 1.25
+
+    normalized_text = " ".join(text.lower().split())
+    for attribute in profile.attribute_terms:
+        if attribute in normalized_text:
+            score += 3.0
+    return score
+
+
+def _intent_bonus_for_hit(*, hit: FusedRetrievedChunk, query_plan: QueryPlan) -> float:
+    """Apply stronger intent-focused bonuses and penalties after hybrid fusion."""
+
+    profile = query_plan.profile
+    strong_intent = has_strong_intent_signal(hit.text, profile=profile)
+    line_count = len([line for line in hit.text.splitlines() if line.strip()])
+    structured = ":" in hit.text or line_count >= 2
+
+    if is_field_extraction_query(profile) and not is_collection_query(profile):
+        return 10.0 if strong_intent else -5.0
+    if is_collection_query(profile):
+        if strong_intent and structured:
+            return 8.0
+        if strong_intent:
+            return 3.0
+        return -6.0
+    if is_dataset_summary_query(profile):
+        if strong_intent:
+            return 4.0
+        if hit.chunk_index <= 1:
+            return 2.5
+    return 0.0
 
 
 def _coerce_uuid(value: UUID | str) -> UUID:
@@ -217,13 +263,15 @@ def _rerank_fused_hits_for_query(
         fused_hits,
         key=lambda hit: (
             -(
-                (hit.fused_score / top_fused_score) * 10.0
+                (hit.fused_score / top_fused_score) * 8.5
                 + score_text_against_query(
                     hit.text,
                     profile=profile,
                     chunk_index=hit.chunk_index,
                 )
-                + len(hit.sources) * 1.25
+                + _query_term_coverage_score(text=hit.text, query_plan=query_plan)
+                + _intent_bonus_for_hit(hit=hit, query_plan=query_plan)
+                + len(hit.sources) * 0.9
             ),
             hit.chunk_index,
             hit.chunk_id,

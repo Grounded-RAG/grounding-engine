@@ -108,6 +108,45 @@ def test_package_evidence_reranks_hits_by_query_answerability() -> None:
     assert package.selected_evidence_ids == ["chunk-name"]
 
 
+def test_package_evidence_keeps_single_best_hit_for_field_query_even_with_larger_limit() -> None:
+    """Focused field extraction should stay pure instead of packaging multiple distractor chunks."""
+
+    bundle = RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[
+            FusedRetrievedChunk(
+                chunk_id="chunk-name",
+                tenant_id=uuid.uuid4(),
+                namespace_id=uuid.uuid4(),
+                document_id=uuid.uuid4(),
+                chunk_index=0,
+                text="Samrawit Gebremaryam Bahta\nsamrawit@example.com",
+                fused_score=0.82,
+                sources=("dense", "sparse"),
+            ),
+            FusedRetrievedChunk(
+                chunk_id="chunk-experience",
+                tenant_id=uuid.uuid4(),
+                namespace_id=uuid.uuid4(),
+                document_id=uuid.uuid4(),
+                chunk_index=2,
+                text="PROFESSIONAL EXPERIENCE\nAI Engineer at iCog Labs.",
+                fused_score=0.91,
+                sources=("dense",),
+            ),
+        ],
+    )
+
+    package = package_evidence(
+        bundle,
+        query_text="What is the name of the person?",
+        limit=3,
+    )
+
+    assert package.selected_evidence_ids == ["chunk-name"]
+
+
 def test_package_evidence_renders_stable_prompt_context() -> None:
     """Evidence packages should render a stable prompt context for generation."""
 
@@ -246,3 +285,49 @@ def test_package_evidence_keeps_complementary_list_chunks() -> None:
     )
 
     assert package.selected_evidence_ids == ["skills-primary", "skills-adjacent"]
+
+
+def test_package_evidence_filters_incidental_collection_mentions_when_section_exists() -> None:
+    """Collection questions should prefer real sections over incidental sentence-level mentions."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    bundle = RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[
+            FusedRetrievedChunk(
+                chunk_id="awards-narrative",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=6,
+                text="Enhanced skills in advanced ICT and Artificial intelligence through targeted workshops.",
+                fused_score=0.98,
+                sources=("dense", "sparse"),
+            ),
+            FusedRetrievedChunk(
+                chunk_id="skills-section",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=8,
+                text=(
+                    "TECHNICAL SKILLS\n"
+                    "Programming Languages: Python, Go, TypeScript\n"
+                    "Frameworks: FastAPI, React, Next.js"
+                ),
+                fused_score=0.85,
+                sources=("dense",),
+            ),
+        ],
+    )
+
+    package = package_evidence(
+        bundle,
+        query_text="What is her skill?",
+        limit=2,
+    )
+
+    assert package.selected_evidence_ids == ["skills-section"]

@@ -29,6 +29,7 @@ class GroundedGenerationError(RuntimeError):
 
 _SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+|\n+|[\u2022\u00B7]+|(?<=;)\s+")
 _HEADING_ONLY_PATTERN = re.compile(r"^[A-Z][A-Z0-9/&,\- ]{2,}$")
+_SUMMARY_NAMEISH_PATTERN = re.compile(r"^[A-Z][A-Za-z'\u2019-]+(?:\s+[A-Z][A-Za-z'\u2019-]+){1,4}$")
 
 
 def _sentence_candidates(text: str) -> list[str]:
@@ -63,6 +64,19 @@ def _normalize_line(line: str) -> str:
 def _is_heading_only_line(line: str) -> bool:
     stripped = line.strip().rstrip(":")
     return bool(stripped and _HEADING_ONLY_PATTERN.fullmatch(stripped))
+
+
+def _looks_like_summary_subject_line(line: str) -> bool:
+    stripped = line.strip()
+    if (
+        not stripped
+        or stripped.isupper()
+        or _is_heading_only_line(stripped)
+        or any(char.isdigit() for char in stripped)
+        or "@" in stripped
+    ):
+        return False
+    return bool(_SUMMARY_NAMEISH_PATTERN.fullmatch(stripped))
 
 
 def _line_matches_query_focus(line: str, *, profile: QueryProfile) -> bool:
@@ -188,15 +202,18 @@ def _strip_attribute_prefix(line: str, *, profile: QueryProfile) -> str:
 def _format_collection_lines(lines: list[str], *, profile: QueryProfile) -> str:
     requested_label = requested_attribute_label(profile)
     filtered_lines = [
-        line
+        _strip_attribute_prefix(line, profile=profile).rstrip(".")
         for line in lines
         if line
         and not _is_heading_only_line(line)
         and not (requested_label and _normalize_line(line) == requested_label)
     ]
-    if filtered_lines and ":" in filtered_lines[0]:
-        filtered_lines[0] = _strip_attribute_prefix(filtered_lines[0], profile=profile)
-    return "; ".join(filtered_lines[:5]).strip()
+    structured_lines = [
+        line for line in filtered_lines if ":" in line or len(line.split()) <= 10
+    ]
+    if structured_lines:
+        return "; ".join(structured_lines[:5]).strip()
+    return "; ".join(filtered_lines[:3]).strip()
 
 
 def _clean_snippet_for_query(snippet: str, *, profile: QueryProfile) -> str:
@@ -219,7 +236,10 @@ def _clean_snippet_for_query(snippet: str, *, profile: QueryProfile) -> str:
         return " ".join((contact_lines or lines)[:2]).strip()
 
     if is_dataset_summary_query(profile):
-        return " ".join(lines[:3]).strip()
+        if _looks_like_summary_subject_line(lines[0]):
+            return lines[0]
+        non_heading_lines = [line for line in lines if not _is_heading_only_line(line)]
+        return " ".join(non_heading_lines[:2]).strip()
 
     if is_collection_query(profile):
         rendered = _format_collection_lines(lines, profile=profile)
@@ -237,6 +257,105 @@ def _clean_snippet_for_query(snippet: str, *, profile: QueryProfile) -> str:
 
 def _format_attribute_prefix(label: str) -> str:
     return label.replace("_", " ").strip()
+
+
+def _format_collection_label(label: str) -> str:
+    cleaned = _format_attribute_prefix(label)
+    return cleaned if cleaned.endswith("s") else f"{cleaned}s"
+
+
+def _human_join(values: list[str]) -> str:
+    if not values:
+        return ""
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        return f"{values[0]} and {values[1]}"
+    return f"{', '.join(values[:-1])}, and {values[-1]}"
+
+
+def _summary_heading_labels(text: str) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for raw_line in text.splitlines()[:10]:
+        line = raw_line.strip().rstrip(":")
+        if not line:
+            continue
+        if ":" in raw_line:
+            prefix = raw_line.split(":", 1)[0].strip().rstrip(":")
+            if prefix and len(prefix.split()) <= 4:
+                line = prefix
+        if not _is_heading_only_line(line) and ":" not in raw_line:
+            continue
+        normalized = _normalize_line(line)
+        if (
+            not normalized
+            or normalized in {"email", "phone", "github", "linkedin"}
+            or _looks_like_summary_subject_line(line)
+            or normalized in seen
+        ):
+            continue
+        seen.add(normalized)
+        labels.append(normalized)
+    return labels
+
+
+def _summary_subject_phrase(*, item: EvidenceItem, cleaned_snippet: str) -> str:
+    lines = _clean_lines(item.text)
+    if lines and _looks_like_summary_subject_line(lines[0]):
+        return f"a profile for {lines[0]}"
+    return cleaned_snippet.rstrip(".")
+
+
+def _render_summary_answer(
+    *,
+    top_support: list[tuple[float, EvidenceItem, str]],
+    cleaned_snippets: dict[str, str],
+) -> str:
+    primary_item = next(
+        (
+            item
+            for _, item, _ in top_support
+            if _looks_like_summary_subject_line(cleaned_snippets[item.chunk_id])
+            or (
+                _clean_lines(item.text)
+                and _looks_like_summary_subject_line(_clean_lines(item.text)[0])
+            )
+        ),
+        min((item for _, item, _ in top_support), key=lambda item: item.chunk_index),
+    )
+    primary_subject = _summary_subject_phrase(
+        item=primary_item,
+        cleaned_snippet=cleaned_snippets[primary_item.chunk_id],
+    )
+    sentences = [
+        f"The dataset contains {primary_subject} [{primary_item.citation_id}]."
+    ]
+
+    heading_labels: list[str] = []
+    heading_citation_id = primary_item.citation_id
+    for _, item, _ in top_support:
+        labels = _summary_heading_labels(item.text)
+        if labels and not heading_labels:
+            heading_citation_id = item.citation_id
+        for label in labels:
+            if label not in heading_labels:
+                heading_labels.append(label)
+
+    if heading_labels:
+        rendered_labels = _human_join(heading_labels[:5])
+        sentences.append(
+            f"It includes sections on {rendered_labels} [{heading_citation_id}]."
+        )
+    elif len(top_support) > 1:
+        secondary_item = top_support[1][1]
+        secondary_summary = cleaned_snippets[secondary_item.chunk_id].rstrip(".")
+        if secondary_summary:
+            sentences.append(
+                f"It also covers {secondary_summary} [{secondary_item.citation_id}]."
+            )
+
+    return " ".join(sentences).strip()
 
 
 def _render_boolean_answer(
@@ -274,7 +393,10 @@ def _render_grounded_answer(
         ), cleaned_snippets
 
     if is_dataset_summary_query(profile):
-        return " ".join(rendered_parts[:3]).strip(), cleaned_snippets
+        return _render_summary_answer(
+            top_support=top_support,
+            cleaned_snippets=cleaned_snippets,
+        ), cleaned_snippets
 
     if is_field_extraction_query(profile) and len(rendered_parts) == 1:
         label = requested_attribute_label(profile)
@@ -287,7 +409,10 @@ def _render_grounded_answer(
             if label == "contact":
                 return f"The contact information is {cleaned} [{citation}]".strip(), cleaned_snippets
             if is_collection_query(profile):
-                return f"The listed {formatted_label} are {cleaned} [{citation}]".strip(), cleaned_snippets
+                return (
+                    f"The listed {_format_collection_label(formatted_label)} are {cleaned} [{citation}]".strip(),
+                    cleaned_snippets,
+                )
             return f"The {formatted_label} is {cleaned} [{citation}]".strip(), cleaned_snippets
 
     return " ".join(rendered_parts).strip(), cleaned_snippets

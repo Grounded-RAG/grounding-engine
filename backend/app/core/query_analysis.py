@@ -166,6 +166,151 @@ _COLLECTION_ATTRIBUTE_HINTS = {
     "tools",
 }
 
+_GENERIC_QUERY_VOCABULARY = {
+    "about",
+    "achievement",
+    "achievements",
+    "address",
+    "answer",
+    "attribute",
+    "attributes",
+    "award",
+    "awards",
+    "boolean",
+    "candidate",
+    "categories",
+    "category",
+    "contact",
+    "contain",
+    "contains",
+    "content",
+    "cover",
+    "covers",
+    "dataset",
+    "datasets",
+    "date",
+    "definition",
+    "details",
+    "document",
+    "documents",
+    "education",
+    "email",
+    "employment",
+    "experience",
+    "feature",
+    "features",
+    "field",
+    "fields",
+    "file",
+    "files",
+    "framework",
+    "frameworks",
+    "full",
+    "fullname",
+    "github",
+    "history",
+    "identity",
+    "include",
+    "includes",
+    "information",
+    "introduction",
+    "item",
+    "items",
+    "language",
+    "languages",
+    "list",
+    "location",
+    "mail",
+    "meaning",
+    "model",
+    "name",
+    "number",
+    "overview",
+    "owner",
+    "pattern",
+    "person",
+    "people",
+    "phone",
+    "pricing",
+    "professional",
+    "profile",
+    "project",
+    "projects",
+    "query",
+    "record",
+    "records",
+    "recognition",
+    "refers",
+    "responsibilities",
+    "responsibility",
+    "resume",
+    "role",
+    "roles",
+    "section",
+    "sections",
+    "service",
+    "services",
+    "skill",
+    "skills",
+    "stack",
+    "subject",
+    "summarize",
+    "summary",
+    "support",
+    "supported",
+    "supports",
+    "technical",
+    "technology",
+    "technologies",
+    "title",
+    "tool",
+    "tools",
+    "website",
+    "work",
+    "worked",
+}
+
+_ATTRIBUTE_EXPANSION_HINTS = {
+    "award": {"achievement", "recognition", "honor"},
+    "awards": {"achievement", "recognition", "honor"},
+    "contact": {"email", "phone", "address"},
+    "experience": {"employment", "professional", "role", "work"},
+    "history": {"employment", "experience", "timeline"},
+    "name": {"full name", "identity", "title"},
+    "pricing": {"cost", "plan", "subscription"},
+    "project": {"build", "portfolio"},
+    "projects": {"build", "portfolio"},
+    "role": {"responsibility", "responsibilities"},
+    "roles": {"responsibility", "responsibilities"},
+    "skill": {"capabilities", "frameworks", "languages", "technical", "tools"},
+    "skills": {"capabilities", "frameworks", "languages", "technical", "tools"},
+    "summary": {"introduction", "overview"},
+}
+
+_SUMMARY_QUERY_NOISE = {
+    "attached",
+    "contain",
+    "contains",
+    "cover",
+    "covers",
+    "data",
+    "dataset",
+    "datasets",
+    "document",
+    "documents",
+    "file",
+    "files",
+    "include",
+    "includes",
+    "information",
+    "item",
+    "items",
+    "overview",
+    "record",
+    "records",
+    "summary",
+}
+
 _SUMMARY_QUERY_PATTERN = re.compile(
     r"^(?:"
     r"what\s+is\s+(?:the\s+)?(?:dataset|document|file|record|profile|resume)\s+about|"
@@ -253,14 +398,20 @@ class QueryPlan:
 
 def _normalize_token(token: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "", token.casefold())
+    if normalized and normalized.isalpha():
+        normalized = _correct_query_token(normalized)
     if normalized.endswith("s") and len(normalized) > 4:
         normalized = normalized[:-1]
     return normalized
 
 
 def _normalize_text(text: str) -> str:
-    normalized = re.sub(r"[^a-z0-9\s]+", " ", text.casefold())
-    return re.sub(r"\s+", " ", normalized).strip()
+    normalized_tokens: list[str] = []
+    for token in re.findall(r"[A-Za-z0-9]+", text):
+        normalized = _normalize_token(token)
+        if normalized:
+            normalized_tokens.append(normalized)
+    return " ".join(normalized_tokens).strip()
 
 
 def _dedupe_texts(values: list[str]) -> tuple[str, ...]:
@@ -292,6 +443,63 @@ def _fuzzy_token_match(
     return (
         SequenceMatcher(a=normalized_candidate, b=normalized_target).ratio() >= threshold
     )
+
+
+def _correct_query_token(token: str) -> str:
+    """Apply conservative typo correction for generic query vocabulary."""
+
+    normalized = re.sub(r"[^a-z0-9]+", "", token.casefold())
+    if (
+        not normalized
+        or normalized in _GENERIC_QUERY_VOCABULARY
+        or normalized.isdigit()
+        or len(normalized) < 5
+    ):
+        return normalized
+
+    best_match = normalized
+    best_score = 0.0
+    for candidate in _GENERIC_QUERY_VOCABULARY:
+        if abs(len(candidate) - len(normalized)) > 2:
+            continue
+        if candidate[:1] != normalized[:1]:
+            continue
+        score = SequenceMatcher(a=normalized, b=candidate).ratio()
+        if score > best_score:
+            best_score = score
+            best_match = candidate
+
+    return best_match if best_score >= 0.86 else normalized
+
+
+def _token_expansion_forms(token: str) -> set[str]:
+    """Return conservative morphological variants for retrieval and matching."""
+
+    normalized = _normalize_token(token)
+    if not normalized or len(normalized) < 4:
+        return set()
+
+    variants = {normalized}
+    if normalized.endswith("ing") and len(normalized) > 5:
+        stem = normalized[:-3]
+        if len(stem) >= 3:
+            variants.add(stem)
+            variants.add(f"{stem}e")
+            variants.add(f"{stem}er")
+    elif normalized.endswith(("er", "or", "ed")) and len(normalized) > 4:
+        stem = normalized[:-2]
+        if len(stem) >= 3:
+            variants.add(stem)
+            variants.add(f"{stem}e")
+            variants.add(f"{stem}ing")
+
+    for token_variant in list(variants):
+        hints = _ATTRIBUTE_EXPANSION_HINTS.get(token_variant)
+        if hints:
+            for hint in hints:
+                variants.add(_normalize_token(hint))
+
+    return {variant for variant in variants if len(variant) >= 4}
 
 
 def _terms_contain_token(terms: set[str], token: str) -> bool:
@@ -333,16 +541,24 @@ def _looks_like_name_line(line: str) -> bool:
     return bool(_NAME_LINE_PATTERN.match(candidate))
 
 
+def _is_heading_only_line(line: str) -> bool:
+    """Return whether one short line looks like a heading rather than body text."""
+
+    candidate = line.strip().rstrip(":")
+    return bool(candidate and _HEADING_CANDIDATE_PATTERN.fullmatch(candidate))
+
+
 def tokenize_meaningful_terms(text: str) -> set[str]:
     """Return normalized non-trivial terms from free text."""
 
-    return {
-        normalized
-        for token in re.findall(r"[A-Za-z0-9]+", text)
-        if (normalized := _normalize_token(token))
-        and len(normalized) >= 3
-        and normalized not in _STOPWORDS
-    }
+    normalized_terms: set[str] = set()
+    for token in re.findall(r"[A-Za-z0-9]+", text):
+        normalized = _normalize_token(token)
+        if not normalized or len(normalized) < 3 or normalized in _STOPWORDS:
+            continue
+        normalized_terms.add(normalized)
+        normalized_terms.update(_token_expansion_forms(normalized))
+    return normalized_terms
 
 
 def _extract_attribute_terms(*, normalized_text: str, terms: set[str]) -> set[str]:
@@ -508,11 +724,15 @@ def build_query_profile(query_text: str) -> QueryProfile:
     expanded_terms = set(terms)
     for attribute in attribute_terms:
         expanded_terms.update(tokenize_meaningful_terms(attribute))
+        for token in attribute.split():
+            expanded_terms.update(_token_expansion_forms(token))
 
     for semantic_tag in semantic_tags:
         expanded_terms.update(
             tokenize_meaningful_terms(" ".join(_CANONICAL_ATTRIBUTE_SYNONYMS[semantic_tag]))
         )
+    for term in list(terms):
+        expanded_terms.update(_token_expansion_forms(term))
 
     if query_kind == "summary":
         expanded_terms.update({"overview", "summary", "introduction", "profile"})
@@ -747,6 +967,9 @@ def score_text_against_query(
             ]
         )
         score += heading_matches * 2.0
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if lines and _looks_like_name_line(lines[0]):
+            score += 4.0
 
     if "name" in profile.semantic_tags:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -774,6 +997,13 @@ def score_text_against_query(
         text.count(":") >= 2 or text.count("*") >= 2 or text.count("\n") >= 2
     ):
         score += 2.5
+    if profile.attribute_terms:
+        if has_strong_intent_signal(text, profile=profile):
+            score += 5.5 if is_field_extraction_query(profile) else 3.5
+        elif is_collection_query(profile):
+            score -= 4.0
+        elif is_field_extraction_query(profile):
+            score -= 1.5
 
     if is_boolean_query(profile) and re.search(
         r"\b(yes|no|has|have|had|includes?|contains?|supports?|works?|worked)\b",
@@ -812,18 +1042,51 @@ def has_strong_intent_signal(text: str, *, profile: QueryProfile) -> bool:
 
     normalized_text = _normalize_text(text)
     intent = primary_intent(profile)
-    heading_candidates = _heading_lines(text)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    early_lines = lines[:5]
+    heading_like_lines = [line for line in early_lines if _is_heading_only_line(line)]
+    normalized_early_lines = [_normalize_text(line) for line in early_lines]
+    attribute_in_heading = any(
+        attribute in _normalize_text(candidate)
+        for candidate in heading_like_lines
+        for attribute in profile.attribute_terms
+    )
+    attribute_in_early_lines = any(
+        attribute in normalized_line
+        for normalized_line in normalized_early_lines[:3]
+        for attribute in profile.attribute_terms
+    )
+    structured_lines = [
+        line
+        for line in early_lines
+        if ":" in line
+        or line.lstrip().startswith(("-", "*"))
+        or (line and line[0].isdigit() and "." in line[:4])
+    ]
 
     if intent == "name":
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
         return any(_looks_like_name_line(line) for line in lines[:3])
     if intent == "contact":
         return bool(_EMAIL_PATTERN.search(text) or _PHONE_PATTERN.search(text))
     if intent == "date":
         return bool(_DATE_PATTERN.search(text))
-    if intent and any(intent in _normalize_text(candidate) for candidate in heading_candidates):
+    if is_collection_query(profile):
+        if attribute_in_heading:
+            return True
+        return attribute_in_early_lines and bool(structured_lines or len(early_lines) >= 2)
+    if intent and any(intent in _normalize_text(candidate) for candidate in heading_like_lines):
+        return True
+    if attribute_in_heading:
+        return True
+    if attribute_in_early_lines and (
+        structured_lines
+        or any(":" in line for line in early_lines[:2])
+        or len(early_lines) >= 2
+    ):
         return True
     if profile.attribute_terms and any(attribute in normalized_text for attribute in profile.attribute_terms):
+        if is_field_extraction_query(profile):
+            return any(":" in line for line in early_lines[:2]) or bool(heading_like_lines)
         return True
     if is_collection_query(profile) and (
         text.count(":") >= 2 or text.count("*") >= 2 or text.count("\n") >= 2
@@ -835,12 +1098,20 @@ def has_strong_intent_signal(text: str, *, profile: QueryProfile) -> bool:
 def build_retrieval_query_text(profile: QueryProfile) -> str:
     """Expand a user query into a retrieval-oriented query string."""
 
-    supplemental_terms: list[str] = []
+    supplemental_terms: list[str] = [profile.normalized_text]
     supplemental_terms.extend(sorted(profile.attribute_terms))
 
     for semantic_tag in sorted(profile.semantic_tags):
         synonyms = sorted(_CANONICAL_ATTRIBUTE_SYNONYMS.get(semantic_tag, set()))
         supplemental_terms.extend(synonyms[:3])
+
+    query_tokens = set(profile.normalized_text.split())
+    expanded_only_terms = [
+        term
+        for term in sorted(profile.expanded_terms)
+        if term not in query_tokens and term not in _SUMMARY_QUERY_NOISE
+    ]
+    supplemental_terms.extend(expanded_only_terms[:4])
 
     if is_dataset_summary_query(profile):
         supplemental_terms.extend(["overview", "summary", "introduction"])
@@ -851,7 +1122,7 @@ def build_retrieval_query_text(profile: QueryProfile) -> str:
 
     deduped_terms: list[str] = []
     seen: set[str] = set()
-    for term in [profile.raw_text, *supplemental_terms]:
+    for term in supplemental_terms:
         normalized = _normalize_text(term)
         if not normalized or normalized in seen:
             continue

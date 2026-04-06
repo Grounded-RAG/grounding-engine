@@ -93,6 +93,45 @@ def test_generate_grounded_draft_prefers_query_aligned_sentence() -> None:
     assert draft.citation_snippets["chunk-1"] == "Hybrid retrieval merges sparse and dense search results."
 
 
+def test_generate_grounded_draft_synthesizes_dataset_summary_from_structure() -> None:
+    """Dataset summaries should synthesize a high-level overview instead of echoing a fragment."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-header", "chunk-sections"],
+        selected_evidence_ids=["chunk-header", "chunk-sections"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-header",
+                text=(
+                    "Samrawit Gebremaryam Bahta\n"
+                    "samrawitgebremaryam121@gmail.com\n"
+                    "EDUCATION\nBSc in Software Engineering"
+                ),
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-sections",
+                text=(
+                    "PROFESSIONAL EXPERIENCE\nAI Engineer at iCog Labs\n"
+                    "TECHNICAL SKILLS\nPython, Go, TypeScript\n"
+                    "AWARDS\nHuawei Seeds for the Future"
+                ),
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What is this dataset about?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text.startswith("The dataset contains")
+    assert "Samrawit Gebremaryam Bahta" in draft.answer_text
+    assert "professional experience" in draft.answer_text.lower()
+    assert "[E001]" in draft.answer_text
+
+
 def test_generate_grounded_draft_rejects_empty_evidence() -> None:
     """Grounded generation should fail cleanly without evidence."""
 
@@ -463,4 +502,68 @@ async def test_generate_answer_from_evidence_rejects_weak_provider_field_answer(
     )
 
     assert draft.answer_text.startswith("The person's name is Samrawit Gebremaryam Bahta")
+    assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
+
+
+@pytest.mark.asyncio()
+async def test_generate_answer_from_evidence_rejects_weak_provider_summary_answer(monkeypatch) -> None:
+    """Fragmentary provider summaries should fall back to deterministic summary synthesis."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-header", "chunk-sections"],
+        selected_evidence_ids=["chunk-header", "chunk-sections"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-header",
+                text=(
+                    "Samrawit Gebremaryam Bahta\n"
+                    "EDUCATION\nBSc in Software Engineering"
+                ),
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-sections",
+                text=(
+                    "PROFESSIONAL EXPERIENCE\nAI Engineer at iCog Labs\n"
+                    "TECHNICAL SKILLS\nPython, Go, TypeScript"
+                ),
+            ),
+        ],
+    )
+
+    monkeypatch.setattr(
+        "app.services.generation.resolve_generation_backend",
+        lambda: GenerationBackend(
+            provider_name="gemini_v1",
+            implementation="gemini",
+        ),
+    )
+
+    async def fake_generate_gemini_draft(**kwargs):
+        del kwargs
+        from app.pipeline.contracts import GroundedAnswerDraft
+
+        return GroundedAnswerDraft(
+            answer_text="across heterogeneous datasets. [E001]",
+            cited_evidence_ids=["chunk-header"],
+            citation_snippets={
+                "chunk-header": "across heterogeneous datasets.",
+            },
+            generator_provider="gemini:gemini-2.5-flash",
+            support_coverage=0.5,
+            source_diversity=1,
+        )
+
+    monkeypatch.setattr(
+        "app.services.generation.generate_gemini_draft",
+        fake_generate_gemini_draft,
+    )
+
+    draft = await generate_answer_from_evidence(
+        query_text="What is this dataset about?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text.startswith("The dataset contains")
     assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"

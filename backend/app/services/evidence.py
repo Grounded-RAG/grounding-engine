@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from app.config import get_settings
 from app.core.query_analysis import (
     build_query_profile,
+    has_strong_intent_signal,
     is_collection_query,
     is_dataset_summary_query,
     is_field_extraction_query,
@@ -34,7 +35,17 @@ def package_evidence(
 ) -> EvidencePackage:
     """Select the top fused hits and normalize them into evidence items."""
 
-    selection_limit = limit or get_settings().evidence_package_limit
+    requested_limit = limit or get_settings().evidence_package_limit
+    if query_text:
+        profile = build_query_profile(query_text)
+        if is_field_extraction_query(profile) and not is_collection_query(profile):
+            selection_limit = 1
+        elif is_collection_query(profile):
+            selection_limit = min(requested_limit, 2)
+        else:
+            selection_limit = requested_limit
+    else:
+        selection_limit = requested_limit
     selected_hits = _select_hits_for_query(
         retrieval_bundle,
         query_text=query_text,
@@ -89,6 +100,25 @@ def _select_hits_for_query(
                     profile=profile,
                     chunk_index=hit.chunk_index,
                 )
+                + (
+                    (4.0 - min(hit.chunk_index, 3)) * 1.5
+                    if is_dataset_summary_query(profile)
+                    else 0.0
+                )
+                + (
+                    4.5
+                    if is_dataset_summary_query(profile)
+                    and any(
+                        token in hit.text.casefold()
+                        for token in ("overview", "introduction", "summary")
+                    )
+                    else 0.0
+                )
+                + (
+                    7.0
+                    if has_strong_intent_signal(hit.text, profile=profile)
+                    else (-5.0 if is_collection_query(profile) else 0.0)
+                )
                 + len(hit.sources) * 1.5
             ),
             terms=frozenset(tokenize_meaningful_terms(hit.text)),
@@ -103,12 +133,78 @@ def _select_hits_for_query(
             entry.hit.chunk_id,
         ),
     )
+    if is_field_extraction_query(profile):
+        strong_intent_hits = [
+            entry
+            for entry in ranked_hits
+            if has_strong_intent_signal(entry.hit.text, profile=profile)
+        ]
+        if strong_intent_hits:
+            ranked_hits = strong_intent_hits
     if is_field_extraction_query(profile) and not is_collection_query(profile):
-        return [entry.hit for entry in ranked_hits[:limit]]
+        return [ranked_hits[0].hit]
+    if is_dataset_summary_query(profile):
+        ranked_hits = _collapse_to_document_representatives(ranked_hits)
+        selected_hits = _select_diverse_hits(
+            ranked_hits,
+            limit=limit,
+            prefer_document_diversity=True,
+        )
+        return sorted(
+            selected_hits,
+            key=lambda hit: (
+                -(
+                    hit.fused_score
+                    + (
+                        4.0
+                        if any(
+                            token in hit.text.casefold()
+                            for token in ("overview", "introduction", "summary")
+                        )
+                        else 0.0
+                    )
+                    + max(0, 2 - hit.chunk_index) * 0.75
+                ),
+                hit.chunk_index,
+                hit.chunk_id,
+            ),
+        )
     return _select_diverse_hits(
         ranked_hits,
         limit=limit,
-        prefer_document_diversity=is_dataset_summary_query(profile) or is_collection_query(profile),
+        prefer_document_diversity=False,
+    )
+
+
+def _collapse_to_document_representatives(
+    ranked_hits: list[_ScoredHit],
+) -> list[_ScoredHit]:
+    """Keep the single best summary seed per document before diversity selection."""
+
+    def representative_score(entry: _ScoredHit) -> float:
+        lead_bonus = (4.0 - min(entry.hit.chunk_index, 3)) * 2.0
+        overview_bonus = (
+            4.0
+            if any(
+                token in entry.hit.text.casefold()
+                for token in ("overview", "introduction", "summary")
+            )
+            else 0.0
+        )
+        return entry.score + lead_bonus + overview_bonus
+
+    by_document: dict[object, _ScoredHit] = {}
+    for entry in ranked_hits:
+        current = by_document.get(entry.hit.document_id)
+        if current is None or representative_score(entry) > representative_score(current):
+            by_document[entry.hit.document_id] = entry
+    return sorted(
+        by_document.values(),
+        key=lambda entry: (
+            -representative_score(entry),
+            entry.hit.chunk_index,
+            entry.hit.chunk_id,
+        ),
     )
 
 

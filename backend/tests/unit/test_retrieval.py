@@ -514,3 +514,75 @@ async def test_retrieve_hybrid_candidates_supports_dataset_summary_queries(monke
     )
 
     assert [hit.chunk_id for hit in bundle.fused_hits[:2]] == ["chunk-header", "chunk-skills"]
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_handles_typoed_experience_query(monkeypatch) -> None:
+    """Typos in focused field questions should still surface the best experience chunk."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-name",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="Samrawit Gebremaryam Bahta\nsamrawit@example.com",
+            score=0.84,
+            rank=1,
+            source="sparse",
+        ),
+        RetrievedChunk(
+            chunk_id="chunk-experience",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=2,
+            text="PROFESSIONAL EXPERIENCE\nAI Engineer at iCog Labs building grounded systems.",
+            score=0.41,
+            rank=5,
+            source="sparse",
+        ),
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-experience",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=2,
+            text="PROFESSIONAL EXPERIENCE\nAI Engineer at iCog Labs building grounded systems.",
+            score=0.91,
+            rank=1,
+            source="dense",
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        return dense_hits
+
+    monkeypatch.setattr(
+        "app.services.retrieval.sparse_retrieve_chunks",
+        fake_sparse_retrieve_chunks,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="what is her work experiance",
+        limit=4,
+    )
+
+    assert bundle.fused_hits[0].chunk_id == "chunk-experience"

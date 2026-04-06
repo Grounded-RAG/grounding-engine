@@ -19,12 +19,50 @@ from app.core.query_analysis import (
     is_definition_query,
     is_field_extraction_query,
     score_text_against_query,
+    tokenize_meaningful_terms,
 )
 from app.pipeline.contracts import EvidencePackage, GroundedAnswerDraft
 from app.core.telemetry import get_logger
 
 
 logger = get_logger("app.generation")
+
+_SUMMARY_ANSWER_NOISE = {
+    "about",
+    "attached",
+    "contain",
+    "contains",
+    "cover",
+    "covers",
+    "data",
+    "dataset",
+    "datasets",
+    "document",
+    "documents",
+    "file",
+    "files",
+    "include",
+    "includes",
+    "information",
+    "item",
+    "items",
+    "section",
+    "sections",
+    "summary",
+}
+
+_FIELD_ANSWER_NOISE = {
+    "answer",
+    "contact",
+    "details",
+    "field",
+    "information",
+    "is",
+    "listed",
+    "name",
+    "person",
+    "the",
+}
 
 
 @dataclass(frozen=True)
@@ -100,7 +138,11 @@ def _provider_draft_is_query_aligned(
         return False
 
     if is_dataset_summary_query(profile):
-        return len(cited_items) >= 1
+        return _provider_summary_is_query_aligned(
+            evidence_package=evidence_package,
+            cited_items=cited_items,
+            draft=draft,
+        )
 
     if (
         is_field_extraction_query(profile)
@@ -125,12 +167,80 @@ def _provider_draft_is_query_aligned(
             aligned_count += 1
 
     if is_field_extraction_query(profile) and not is_collection_query(profile):
-        return aligned_count == len(cited_items)
+        if aligned_count != len(cited_items):
+            return False
+        return not _field_answer_has_unsupported_terms(
+            query_text=query_text,
+            cited_items=cited_items,
+            draft=draft,
+        )
 
     if is_definition_query(profile):
         return aligned_count >= 1
 
     return aligned_count >= 1
+
+
+def _significant_terms(text: str, *, noise_terms: set[str]) -> set[str]:
+    return {
+        term
+        for term in tokenize_meaningful_terms(text)
+        if term not in noise_terms
+    }
+
+
+def _provider_summary_is_query_aligned(
+    *,
+    evidence_package: EvidencePackage,
+    cited_items: list,
+    draft: GroundedAnswerDraft,
+) -> bool:
+    """Require provider summaries to cover more than one shallow fragment."""
+
+    answer_terms = _significant_terms(
+        draft.answer_text,
+        noise_terms=_SUMMARY_ANSWER_NOISE,
+    )
+    if len(draft.answer_text.split()) < 8 or len(answer_terms) < 2:
+        return False
+
+    if len(evidence_package.items) > 1 and len(cited_items) < 2:
+        return False
+
+    evidence_terms: set[str] = set()
+    for item in cited_items:
+        evidence_terms.update(
+            _significant_terms(item.text, noise_terms=_SUMMARY_ANSWER_NOISE)
+        )
+
+    return len(answer_terms & evidence_terms) >= 2
+
+
+def _field_answer_has_unsupported_terms(
+    *,
+    query_text: str,
+    cited_items: list,
+    draft: GroundedAnswerDraft,
+) -> bool:
+    """Reject provider field answers that add extra unsupported content."""
+
+    profile = build_query_profile(query_text)
+    answer_terms = _significant_terms(
+        draft.answer_text,
+        noise_terms=_FIELD_ANSWER_NOISE,
+    )
+    allowed_terms = set()
+    for item in cited_items:
+        allowed_terms.update(_significant_terms(item.text, noise_terms=set()))
+    if profile.attribute_terms:
+        for attribute in profile.attribute_terms:
+            allowed_terms.update(tokenize_meaningful_terms(attribute))
+    allowed_terms.update(profile.semantic_tags)
+
+    unsupported_terms = {
+        term for term in answer_terms if term not in allowed_terms
+    }
+    return len(unsupported_terms) > 1
 
 
 async def generate_answer_from_evidence(

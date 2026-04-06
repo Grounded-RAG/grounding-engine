@@ -29,6 +29,15 @@ def test_build_query_profile_extracts_generic_attribute_phrase() -> None:
     assert profile.query_kind == "lookup"
 
 
+def test_build_query_profile_corrects_common_attribute_typo() -> None:
+    """Common misspellings in focused attribute questions should still resolve cleanly."""
+
+    profile = build_query_profile("what is her work experiance")
+
+    assert profile.query_kind == "lookup"
+    assert "work experience" in profile.attribute_terms
+
+
 def test_build_query_profile_marks_collection_queries_generically() -> None:
     """Collection-style questions should be recognized from generic attribute wording."""
 
@@ -56,6 +65,14 @@ def test_build_query_plan_creates_retrieval_rewrites_for_lookup_query() -> None:
     assert len(plan.retrieval_queries) >= 2
     assert any("pricing model" in query.casefold() for query in plan.retrieval_queries)
     assert "kind=lookup" in plan.explanation
+
+
+def test_build_query_plan_expands_morphological_aliases_for_retrieval() -> None:
+    """Retrieval rewrites should bridge small wording differences like miner vs mining."""
+
+    plan = build_query_plan("Did she work in pattern miner?")
+
+    assert any("mining" in query.casefold() for query in plan.retrieval_queries)
 
 
 def test_build_query_plan_uses_previous_user_query_for_underspecified_follow_up() -> None:
