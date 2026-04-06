@@ -216,5 +216,5 @@ def test_shape_grounded_response_trims_long_citation_quotes() -> None:
 
     assert response.provider_fallback_used is True
     assert response.provider_fallback_from == "gemini_v1"
-    assert response.citations[0].quote.endswith("…")
+    assert response.citations[0].quote.endswith("...")
     assert len(response.citations[0].quote) <= 220

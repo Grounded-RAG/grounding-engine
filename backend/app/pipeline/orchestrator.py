@@ -18,7 +18,7 @@ _HEADING_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?m)^(?:[A-Z][A-Z0-9/&,\- ]{2,}|[A-Z][A-Za-z0-9/&,\- ]{1,48}:)\s*$"
 )
 _BULLET_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(?m)^(?:\s*[-*•]\s+|\s*\d+[\.\)]\s+)"
+    r"(?m)^(?:\s*[-*\u2022]\s+|\s*\d+[\.\)]\s+)"
 )
 
 

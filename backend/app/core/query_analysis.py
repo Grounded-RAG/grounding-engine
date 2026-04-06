@@ -211,7 +211,9 @@ _REFERENCE_ONLY_PATTERN = re.compile(
     r"^(?:and\s+)?(?:what\s+about\s+)?(?:it|that|this|those|these|them|there|here)\b"
 )
 
-_NAME_LINE_PATTERN = re.compile(r"^[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,4}$")
+_NAME_LINE_PATTERN = re.compile(
+    r"^[A-Z][A-Za-z'\u2019-]+(?:\s+[A-Z][A-Za-z'\u2019-]+){1,4}$"
+)
 _EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 _PHONE_PATTERN = re.compile(r"(?:\+?\d[\d\s().-]{6,}\d)")
 _DATE_PATTERN = re.compile(

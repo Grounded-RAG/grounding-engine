@@ -31,7 +31,7 @@ def _normalize_quote(quote: str, *, max_length: int = 180) -> str:
     truncated = normalized[: max_length - 1].rsplit(" ", 1)[0].strip()
     if not truncated:
         truncated = normalized[: max_length - 1].strip()
-    return f"{truncated}…"
+    return f"{truncated}..."
 
 
 def _calculate_confidence(

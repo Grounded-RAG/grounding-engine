@@ -140,3 +140,109 @@ def test_package_evidence_handles_empty_retrieval_bundle() -> None:
     assert package.selected_evidence_ids == []
     assert package.items == []
     assert package.to_prompt_context() == ""
+
+
+def test_package_evidence_prefers_diverse_chunks_for_dataset_summary() -> None:
+    """Dataset summaries should keep complementary chunks instead of adjacent near-duplicates."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    doc_a = uuid.uuid4()
+    doc_b = uuid.uuid4()
+    bundle = RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[
+            FusedRetrievedChunk(
+                chunk_id="doc-a-header",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=doc_a,
+                chunk_index=0,
+                text="Dataset A overview and introduction.",
+                fused_score=0.95,
+                sources=("dense", "sparse"),
+            ),
+            FusedRetrievedChunk(
+                chunk_id="doc-a-next",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=doc_a,
+                chunk_index=1,
+                text="Dataset A second chunk with similar overview wording.",
+                fused_score=0.92,
+                sources=("dense",),
+            ),
+            FusedRetrievedChunk(
+                chunk_id="doc-b-header",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=doc_b,
+                chunk_index=0,
+                text="Dataset B introduction with skills and experience sections.",
+                fused_score=0.81,
+                sources=("sparse",),
+            ),
+        ],
+    )
+
+    package = package_evidence(
+        bundle,
+        query_text="What is the dataset about?",
+        limit=2,
+    )
+
+    assert package.selected_evidence_ids == ["doc-a-header", "doc-b-header"]
+
+
+def test_package_evidence_keeps_complementary_list_chunks() -> None:
+    """List-style questions may keep adjacent chunks when they add complementary categories."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    other_document_id = uuid.uuid4()
+    bundle = RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[
+            FusedRetrievedChunk(
+                chunk_id="skills-primary",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=3,
+                text="TECHNICAL SKILLS\nProgramming Languages: Python, Go, TypeScript",
+                fused_score=0.94,
+                sources=("dense", "sparse"),
+            ),
+            FusedRetrievedChunk(
+                chunk_id="skills-adjacent",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=4,
+                text="TECHNICAL SKILLS\nFrameworks: FastAPI, React, Next.js",
+                fused_score=0.93,
+                sources=("dense",),
+            ),
+            FusedRetrievedChunk(
+                chunk_id="skills-other-doc",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=other_document_id,
+                chunk_index=1,
+                text="TOOLS\nDocker, GitHub, Elasticsearch",
+                fused_score=0.79,
+                sources=("sparse",),
+            ),
+        ],
+    )
+
+    package = package_evidence(
+        bundle,
+        query_text="What are the technical skills?",
+        limit=2,
+    )
+
+    assert package.selected_evidence_ids == ["skills-primary", "skills-adjacent"]

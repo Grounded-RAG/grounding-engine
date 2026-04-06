@@ -27,7 +27,7 @@ class GroundedGenerationError(RuntimeError):
     """Raised when grounded generation cannot produce a usable draft."""
 
 
-_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+|\n+|[•·]+|(?<=;)\s+")
+_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+|\n+|[\u2022\u00B7]+|(?<=;)\s+")
 _HEADING_ONLY_PATTERN = re.compile(r"^[A-Z][A-Z0-9/&,\- ]{2,}$")
 
 
@@ -163,7 +163,7 @@ def _definition_signal(text: str) -> bool:
 
 def _clean_lines(snippet: str) -> list[str]:
     return [
-        re.sub(r"^[\s:,\-*•·]+", "", line).strip()
+        re.sub(r"^[\s:,\-*\u2022\u00B7]+", "", line).strip()
         for line in snippet.splitlines()
         if line.strip()
     ]

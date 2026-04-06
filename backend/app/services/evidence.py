@@ -2,10 +2,28 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from app.config import get_settings
-from app.core.query_analysis import build_query_profile, score_text_against_query
+from app.core.query_analysis import (
+    build_query_profile,
+    is_collection_query,
+    is_dataset_summary_query,
+    is_field_extraction_query,
+    score_text_against_query,
+    tokenize_meaningful_terms,
+)
 from app.pipeline.contracts import EvidenceItem, EvidencePackage, FusedRetrievedChunk
 from app.services.retrieval import RetrievalBundle
+
+
+@dataclass(frozen=True)
+class _ScoredHit:
+    """Intermediate scored hit used during evidence selection."""
+
+    hit: FusedRetrievedChunk
+    score: float
+    terms: frozenset[str]
 
 
 def package_evidence(
@@ -61,10 +79,10 @@ def _select_hits_for_query(
     profile = build_query_profile(query_text)
     top_fused_score = max(hit.fused_score for hit in retrieval_bundle.fused_hits) or 1.0
 
-    ranked_hits = sorted(
-        retrieval_bundle.fused_hits,
-        key=lambda hit: (
-            -(
+    scored_hits = [
+        _ScoredHit(
+            hit=hit,
+            score=(
                 (hit.fused_score / top_fused_score) * 12.0
                 + score_text_against_query(
                     hit.text,
@@ -73,11 +91,72 @@ def _select_hits_for_query(
                 )
                 + len(hit.sources) * 1.5
             ),
-            hit.chunk_index,
-            hit.chunk_id,
+            terms=frozenset(tokenize_meaningful_terms(hit.text)),
+        )
+        for hit in retrieval_bundle.fused_hits
+    ]
+    ranked_hits = sorted(
+        scored_hits,
+        key=lambda entry: (
+            -entry.score,
+            entry.hit.chunk_index,
+            entry.hit.chunk_id,
         ),
     )
-    return ranked_hits[:limit]
+    if is_field_extraction_query(profile) and not is_collection_query(profile):
+        return [entry.hit for entry in ranked_hits[:limit]]
+    return _select_diverse_hits(
+        ranked_hits,
+        limit=limit,
+        prefer_document_diversity=is_dataset_summary_query(profile) or is_collection_query(profile),
+    )
+
+
+def _select_diverse_hits(
+    ranked_hits: list[_ScoredHit],
+    *,
+    limit: int,
+    prefer_document_diversity: bool,
+) -> list[FusedRetrievedChunk]:
+    """Greedily keep complementary evidence instead of flat top-k duplicates."""
+
+    if not ranked_hits:
+        return []
+
+    remaining = list(ranked_hits)
+    selected: list[_ScoredHit] = []
+    covered_terms: set[str] = set()
+    seen_documents: set[object] = set()
+
+    while remaining and len(selected) < limit:
+        best_index = 0
+        best_value = float("-inf")
+        for index, candidate in enumerate(remaining):
+            novelty = len(candidate.terms - covered_terms)
+            document_bonus = (
+                3.0
+                if prefer_document_diversity and candidate.hit.document_id not in seen_documents
+                else 0.0
+            )
+            adjacency_penalty = 0.0
+            if selected and any(
+                chosen.hit.document_id == candidate.hit.document_id
+                and abs(chosen.hit.chunk_index - candidate.hit.chunk_index) <= 1
+                for chosen in selected
+            ):
+                adjacency_penalty = 1.5 if prefer_document_diversity else 0.5
+
+            selection_value = candidate.score + novelty * 1.2 + document_bonus - adjacency_penalty
+            if selection_value > best_value:
+                best_value = selection_value
+                best_index = index
+
+        chosen = remaining.pop(best_index)
+        selected.append(chosen)
+        covered_terms.update(chosen.terms)
+        seen_documents.add(chosen.hit.document_id)
+
+    return [entry.hit for entry in selected]
 
 
 def _collect_retrieved_chunk_ids(retrieval_bundle: RetrievalBundle) -> list[str]:
