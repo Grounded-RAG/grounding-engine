@@ -62,6 +62,11 @@ async def test_sparse_index_document_rewrites_chunk_rows(monkeypatch) -> None:
                     "character_count": 10,
                     "start_token": 0,
                     "end_token": 1,
+                    "section_title": "OVERVIEW",
+                    "section_slug": "overview",
+                    "chunk_role": "section_header",
+                    "starts_with_heading": True,
+                    "is_list_block": False,
                 },
                 {
                     "chunk_id": "chunk-2",
@@ -71,6 +76,11 @@ async def test_sparse_index_document_rewrites_chunk_rows(monkeypatch) -> None:
                     "character_count": 11,
                     "start_token": 2,
                     "end_token": 3,
+                    "section_title": "OVERVIEW",
+                    "section_slug": "overview",
+                    "chunk_role": "section_body",
+                    "starts_with_heading": False,
+                    "is_list_block": False,
                 },
             ],
         }
@@ -95,6 +105,10 @@ async def test_sparse_index_document_rewrites_chunk_rows(monkeypatch) -> None:
     assert isinstance(inserted_rows, list)
     assert inserted_rows[0]["tenant_id"] == context.tenant_id
     assert inserted_rows[0]["chunk_text"] == "alpha beta"
+    assert inserted_rows[0]["section_title"] == "OVERVIEW"
+    assert inserted_rows[0]["section_slug"] == "overview"
+    assert inserted_rows[0]["chunk_role"] == "section_header"
+    assert inserted_rows[0]["starts_with_heading"] is True
     assert session.flush_called is True
 
 

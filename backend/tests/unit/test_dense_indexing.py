@@ -125,6 +125,11 @@ async def test_dense_index_document_reads_manifest_and_upserts_points(
                     "character_count": 10,
                     "start_token": 0,
                     "end_token": 1,
+                    "section_title": "OVERVIEW",
+                    "section_slug": "overview",
+                    "chunk_role": "section_header",
+                    "starts_with_heading": True,
+                    "is_list_block": False,
                 },
                 {
                     "chunk_id": "chunk-2",
@@ -134,6 +139,11 @@ async def test_dense_index_document_reads_manifest_and_upserts_points(
                     "character_count": 11,
                     "start_token": 2,
                     "end_token": 3,
+                    "section_title": "OVERVIEW",
+                    "section_slug": "overview",
+                    "chunk_role": "section_body",
+                    "starts_with_heading": False,
+                    "is_list_block": False,
                 },
             ],
         }
@@ -185,6 +195,9 @@ async def test_dense_index_document_reads_manifest_and_upserts_points(
     assert points[0].id == _dense_point_id("chunk-1")
     assert points[0].payload["tenant_id"] == str(context.tenant_id)
     assert points[0].payload["text"] == "alpha beta"
+    assert points[0].payload["section_title"] == "OVERVIEW"
+    assert points[0].payload["section_slug"] == "overview"
+    assert points[0].payload["chunk_role"] == "section_header"
 
 
 @pytest.mark.asyncio()

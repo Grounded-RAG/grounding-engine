@@ -151,6 +151,15 @@ def test_document_chunk_record_has_sparse_index_constraints() -> None:
         "ck_document_chunks_token_span",
     } <= check_constraints
 
+    column_names = set(DocumentChunkRecord.__table__.c.keys())
+    assert {
+        "section_title",
+        "section_slug",
+        "chunk_role",
+        "starts_with_heading",
+        "is_list_block",
+    } <= column_names
+
 
 def test_namespace_exposes_policy_columns() -> None:
     """Namespaces should carry explicit routing and policy fields."""

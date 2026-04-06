@@ -102,7 +102,14 @@ def test_build_chunk_manifest_respects_heading_and_bullet_boundaries() -> None:
     assert manifest.chunking_strategy == "structure_aware_v1"
     assert len(manifest.chunks) >= 3
     assert manifest.chunks[0].text.startswith("EDUCATION\nBSc in Software Engineering")
+    assert manifest.chunks[0].section_title == "EDUCATION"
+    assert manifest.chunks[0].chunk_role == "section_header"
     assert any("EXPERIENCE\n- AI Engineer at iCog Labs" in chunk.text for chunk in manifest.chunks)
+    experience_chunk = next(
+        chunk for chunk in manifest.chunks if "EXPERIENCE\n- AI Engineer at iCog Labs" in chunk.text
+    )
+    assert experience_chunk.section_title == "EXPERIENCE"
+    assert experience_chunk.is_list_block is True
     assert any("PROJECTS\nStyleCraft adaptive writing assistant." in chunk.text for chunk in manifest.chunks)
 
 
@@ -130,6 +137,11 @@ def test_build_chunk_manifest_keeps_distinct_sections_separate_when_headings_cha
     assert any(chunk.text.startswith("AWARDS\n") for chunk in manifest.chunks)
     assert any(chunk.text.startswith("TECHNICAL SKILLS\n") for chunk in manifest.chunks)
     assert any(chunk.text.startswith("CERTIFICATES\n") for chunk in manifest.chunks)
+    assert {
+        chunk.section_slug
+        for chunk in manifest.chunks
+        if chunk.section_slug is not None
+    } >= {"awards", "technical-skills", "certificates"}
     assert not any(
         "AWARDS" in chunk.text and "TECHNICAL SKILLS" in chunk.text
         for chunk in manifest.chunks

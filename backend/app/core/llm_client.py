@@ -422,7 +422,7 @@ def _field_query_support_limit(profile: QueryProfile) -> int:
     if not is_field_extraction_query(profile):
         return 3
     if is_collection_query(profile):
-        return 2
+        return 3
     return 1
 
 

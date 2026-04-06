@@ -59,6 +59,49 @@ def _query_term_coverage_score(*, text: str, query_plan: QueryPlan) -> float:
     return score
 
 
+def _section_match_bonus(
+    *,
+    section_title: str | None,
+    section_slug: str | None,
+    chunk_role: str,
+    chunk_index: int,
+    query_plan: QueryPlan,
+) -> float:
+    """Reward chunks whose structural metadata aligns with the query."""
+
+    profile = query_plan.profile
+    section_fragments = [
+        fragment
+        for fragment in (
+            section_title,
+            section_slug.replace("-", " ") if section_slug else None,
+            chunk_role.replace("_", " "),
+        )
+        if fragment
+    ]
+    if not section_fragments:
+        if is_dataset_summary_query(profile) and chunk_role == "document_header":
+            return 4.0
+        return 0.0
+
+    section_terms = tokenize_meaningful_terms(" ".join(section_fragments))
+    overlap = len(set(profile.expanded_terms) & section_terms)
+    score = overlap * 4.0
+
+    if is_collection_query(profile) and overlap > 0:
+        score += 6.5 if chunk_role == "section_header" else 4.5 if chunk_role == "section_list" else 2.5
+    elif is_field_extraction_query(profile) and overlap > 0:
+        score += 4.0
+    elif is_dataset_summary_query(profile) and chunk_role == "document_header":
+        score += 4.0
+
+    if chunk_role == "section_header":
+        score += 2.0
+    if section_title and chunk_index <= 1 and is_field_extraction_query(profile):
+        score += 1.0
+    return score
+
+
 def _intent_bonus_for_hit(*, hit: FusedRetrievedChunk, query_plan: QueryPlan) -> float:
     """Apply stronger intent-focused bonuses and penalties after hybrid fusion."""
 
@@ -109,6 +152,11 @@ async def sparse_retrieve_chunks(
             doc_id,
             chunk_index,
             chunk_text,
+            section_title,
+            section_slug,
+            chunk_role,
+            starts_with_heading,
+            is_list_block,
             ts_rank_cd(search_vector, websearch_to_tsquery('english', :query_text)) as score
         from document_chunks
         where tenant_id = :tenant_id
@@ -146,6 +194,19 @@ async def sparse_retrieve_chunks(
                 score=float(row["score"]),
                 rank=index,
                 source="sparse",
+                section_title=(
+                    str(row["section_title"])
+                    if row.get("section_title") is not None
+                    else None
+                ),
+                section_slug=(
+                    str(row["section_slug"])
+                    if row.get("section_slug") is not None
+                    else None
+                ),
+                chunk_role=str(row.get("chunk_role") or "body"),
+                starts_with_heading=bool(row.get("starts_with_heading", False)),
+                is_list_block=bool(row.get("is_list_block", False)),
             )
         )
     return hits
@@ -188,6 +249,19 @@ async def dense_retrieve_chunks(
                 score=float(point.score),
                 rank=index,
                 source="dense",
+                section_title=(
+                    str(payload["section_title"])
+                    if payload.get("section_title") is not None
+                    else None
+                ),
+                section_slug=(
+                    str(payload["section_slug"])
+                    if payload.get("section_slug") is not None
+                    else None
+                ),
+                chunk_role=str(payload.get("chunk_role") or "body"),
+                starts_with_heading=bool(payload.get("starts_with_heading", False)),
+                is_list_block=bool(payload.get("is_list_block", False)),
             )
         )
     return hits
@@ -230,6 +304,11 @@ def fuse_retrieval_hits(
             text=entry["hit"].text,
             fused_score=float(entry["score"]),
             sources=tuple(sorted(entry["sources"])),
+            section_title=entry["hit"].section_title,
+            section_slug=entry["hit"].section_slug,
+            chunk_role=entry["hit"].chunk_role,
+            starts_with_heading=entry["hit"].starts_with_heading,
+            is_list_block=entry["hit"].is_list_block,
         )
         for chunk_id, entry in fused_by_chunk.items()
     ]
@@ -270,6 +349,13 @@ def _rerank_fused_hits_for_query(
                     chunk_index=hit.chunk_index,
                 )
                 + _query_term_coverage_score(text=hit.text, query_plan=query_plan)
+                + _section_match_bonus(
+                    section_title=hit.section_title,
+                    section_slug=hit.section_slug,
+                    chunk_role=hit.chunk_role,
+                    chunk_index=hit.chunk_index,
+                    query_plan=query_plan,
+                )
                 + _intent_bonus_for_hit(hit=hit, query_plan=query_plan)
                 + len(hit.sources) * 0.9
             ),
@@ -295,6 +381,7 @@ async def _fetch_supporting_context_hits(
 
     profile = query_plan.profile
     target_indexes_by_doc: dict[UUID, set[int]] = {}
+    target_sections_by_doc: dict[UUID, set[str]] = {}
     doc_priority_scores: dict[UUID, float] = {}
 
     for hit in fused_hits[:5]:
@@ -308,6 +395,14 @@ async def _fetch_supporting_context_hits(
             for index in (hit.chunk_index - 1, hit.chunk_index, hit.chunk_index + 1)
             if index >= 0
         )
+        if hit.section_slug and (
+            is_collection_query(profile)
+            or (
+                is_field_extraction_query(profile)
+                and hit.chunk_role in {"section_header", "section_body", "section_list"}
+            )
+        ):
+            target_sections_by_doc.setdefault(hit.document_id, set()).add(hit.section_slug)
 
     if is_field_extraction_query(profile):
         for document_id in list(target_indexes_by_doc)[:3]:
@@ -321,6 +416,14 @@ async def _fetch_supporting_context_hits(
         for document_id, indexes in target_indexes_by_doc.items()
         if indexes
     ]
+    clauses.extend(
+        (
+            (DocumentChunkRecord.doc_id == document_id)
+            & (DocumentChunkRecord.section_slug.in_(sorted(section_slugs)))
+        )
+        for document_id, section_slugs in target_sections_by_doc.items()
+        if section_slugs
+    )
     if not clauses:
         return []
 
@@ -343,24 +446,46 @@ async def _fetch_supporting_context_hits(
     supplemental_hits: list[FusedRetrievedChunk] = []
     rows = result.scalars() if hasattr(result, "scalars") else []
     for row in rows:
-        if row.chunk_id in existing_chunk_ids:
+        row_chunk_id = getattr(row, "chunk_id")
+        if row_chunk_id in existing_chunk_ids:
             continue
 
-        doc_score = doc_priority_scores.get(row.doc_id, 0.0)
+        row_doc_id = getattr(row, "doc_id")
+        row_chunk_index = int(getattr(row, "chunk_index"))
+        row_section_slug = getattr(row, "section_slug", None)
+        row_section_title = getattr(row, "section_title", None)
+        row_chunk_role = getattr(row, "chunk_role", "body")
+        row_starts_with_heading = bool(getattr(row, "starts_with_heading", False))
+        row_is_list_block = bool(getattr(row, "is_list_block", False))
+        doc_score = doc_priority_scores.get(row_doc_id, 0.0)
         proximity_score = 0.72
-        if row.chunk_index <= 1 and is_field_extraction_query(profile):
+        if row_chunk_index <= 1 and is_field_extraction_query(profile):
             proximity_score = 0.9
+        if row_section_slug and row_section_slug in target_sections_by_doc.get(row_doc_id, set()):
+            proximity_score = max(proximity_score, 0.88)
+            if row_chunk_role in {"section_header", "section_list"}:
+                proximity_score = max(proximity_score, 0.94)
 
         supplemental_hits.append(
             FusedRetrievedChunk(
-                chunk_id=row.chunk_id,
-                tenant_id=row.tenant_id,
-                namespace_id=row.namespace_id,
-                document_id=row.doc_id,
-                chunk_index=row.chunk_index,
-                text=row.chunk_text,
+                chunk_id=row_chunk_id,
+                tenant_id=getattr(row, "tenant_id"),
+                namespace_id=getattr(row, "namespace_id"),
+                document_id=row_doc_id,
+                chunk_index=row_chunk_index,
+                text=getattr(row, "chunk_text"),
                 fused_score=max(doc_score * proximity_score, 0.0001),
-                sources=("context",),
+                sources=(
+                    ("section_context",)
+                    if row_section_slug
+                    and row_section_slug in target_sections_by_doc.get(row_doc_id, set())
+                    else ("context",)
+                ),
+                section_title=row_section_title,
+                section_slug=row_section_slug,
+                chunk_role=row_chunk_role,
+                starts_with_heading=row_starts_with_heading,
+                is_list_block=row_is_list_block,
             )
         )
 
@@ -395,14 +520,19 @@ async def _fetch_namespace_lead_chunks(
     rows = result.scalars() if hasattr(result, "scalars") else []
     return [
         FusedRetrievedChunk(
-            chunk_id=row.chunk_id,
-            tenant_id=row.tenant_id,
-            namespace_id=row.namespace_id,
-            document_id=row.doc_id,
-            chunk_index=row.chunk_index,
-            text=row.chunk_text,
-            fused_score=1.0 if row.chunk_index == 0 else 0.85,
+            chunk_id=getattr(row, "chunk_id"),
+            tenant_id=getattr(row, "tenant_id"),
+            namespace_id=getattr(row, "namespace_id"),
+            document_id=getattr(row, "doc_id"),
+            chunk_index=int(getattr(row, "chunk_index")),
+            text=getattr(row, "chunk_text"),
+            fused_score=1.0 if int(getattr(row, "chunk_index")) == 0 else 0.85,
             sources=("summary_context",),
+            section_title=getattr(row, "section_title", None),
+            section_slug=getattr(row, "section_slug", None),
+            chunk_role=getattr(row, "chunk_role", "body"),
+            starts_with_heading=bool(getattr(row, "starts_with_heading", False)),
+            is_list_block=bool(getattr(row, "is_list_block", False)),
         )
         for row in rows
     ]

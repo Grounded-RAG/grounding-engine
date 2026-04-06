@@ -92,16 +92,88 @@ def _starts_with_heading(text: str, *, start_char: int, end_char: int) -> bool:
     return bool(first_line and _HEADING_LINE_PATTERN.fullmatch(first_line))
 
 
+def _leading_heading_title(text: str) -> str | None:
+    """Extract a normalized leading heading title when one exists."""
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    first_line = lines[0]
+    if not _HEADING_LINE_PATTERN.fullmatch(first_line):
+        return None
+    return re.sub(r"\s+", " ", first_line.rstrip(":")).strip() or None
+
+
+def _slugify_section_title(section_title: str) -> str:
+    """Create a stable slug for one section title."""
+
+    slug = re.sub(r"[^a-z0-9]+", "-", section_title.casefold()).strip("-")
+    return slug or "section"
+
+
+def _looks_like_list_block(text: str) -> bool:
+    """Return whether a chunk looks like a list/category block."""
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+
+    bullet_lines = len(
+        [
+            line
+            for line in text.splitlines()
+            if _BULLET_LINE_PATTERN.match(line)
+        ]
+    )
+    colon_lines = len([line for line in lines if ":" in line])
+    short_lines = len([line for line in lines if len(line.split()) <= 10])
+    if bullet_lines >= 1 or colon_lines >= 2:
+        return True
+    return len(lines) >= 3 and short_lines >= 2
+
+
+def _chunk_role_for_metadata(
+    *,
+    chunk_index: int,
+    section_title: str | None,
+    starts_with_heading: bool,
+    is_list_block: bool,
+) -> str:
+    """Classify one chunk into a lightweight structural role."""
+
+    if section_title:
+        if starts_with_heading:
+            return "section_header"
+        if is_list_block:
+            return "section_list"
+        return "section_body"
+    if chunk_index == 0:
+        return "document_header"
+    if is_list_block:
+        return "list"
+    return "body"
+
+
 def _emit_chunk(
     *,
     chunks: list[DocumentChunk],
     text: str,
     document_id: UUID,
     span: _ChunkSpan,
+    section_title: str | None = None,
+    section_slug: str | None = None,
 ) -> None:
     """Create one persisted chunk from an absolute token span."""
 
     chunk_text = _normalize_chunk_text(text[span.start_char:span.end_char])
+    leading_heading_title = _leading_heading_title(chunk_text)
+    effective_section_title = leading_heading_title or section_title
+    effective_section_slug = (
+        _slugify_section_title(effective_section_title)
+        if effective_section_title
+        else section_slug
+    )
+    is_list_block = _looks_like_list_block(chunk_text)
     chunk_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()[:12]
     chunks.append(
         DocumentChunk(
@@ -112,6 +184,16 @@ def _emit_chunk(
             character_count=len(chunk_text),
             start_token=span.start_token,
             end_token=span.end_token,
+            section_title=effective_section_title,
+            section_slug=effective_section_slug,
+            chunk_role=_chunk_role_for_metadata(
+                chunk_index=len(chunks),
+                section_title=effective_section_title,
+                starts_with_heading=span.starts_with_heading,
+                is_list_block=is_list_block,
+            ),
+            starts_with_heading=span.starts_with_heading,
+            is_list_block=is_list_block,
         )
     )
 
@@ -393,16 +475,25 @@ def _build_structure_aware_chunks(
     grouped_spans.append(current)
 
     chunks: list[DocumentChunk] = []
+    current_section_title: str | None = None
+    current_section_slug: str | None = None
     for span in _apply_overlap(
         base_spans=grouped_spans,
         token_spans=token_spans,
         overlap_tokens=config.overlap_tokens,
     ):
+        span_text = _normalize_chunk_text(text[span.start_char:span.end_char])
+        detected_section_title = _leading_heading_title(span_text)
+        if detected_section_title:
+            current_section_title = detected_section_title
+            current_section_slug = _slugify_section_title(detected_section_title)
         _emit_chunk(
             chunks=chunks,
             text=text,
             document_id=document_id,
             span=span,
+            section_title=current_section_title,
+            section_slug=current_section_slug,
         )
     return chunks
 

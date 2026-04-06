@@ -164,6 +164,7 @@ def test_package_evidence_renders_stable_prompt_context() -> None:
     assert "[E001] chunk_id=chunk-9" in context
     assert "chunk_index=3" in context
     assert "sources=dense,sparse" in context
+    assert "chunk_role=body" in context
     assert "text for chunk-9" in context
 
 
@@ -254,6 +255,11 @@ def test_package_evidence_keeps_complementary_list_chunks() -> None:
                 text="TECHNICAL SKILLS\nProgramming Languages: Python, Go, TypeScript",
                 fused_score=0.94,
                 sources=("dense", "sparse"),
+                section_title="TECHNICAL SKILLS",
+                section_slug="technical-skills",
+                chunk_role="section_header",
+                starts_with_heading=True,
+                is_list_block=True,
             ),
             FusedRetrievedChunk(
                 chunk_id="skills-adjacent",
@@ -264,6 +270,10 @@ def test_package_evidence_keeps_complementary_list_chunks() -> None:
                 text="TECHNICAL SKILLS\nFrameworks: FastAPI, React, Next.js",
                 fused_score=0.93,
                 sources=("dense",),
+                section_title="TECHNICAL SKILLS",
+                section_slug="technical-skills",
+                chunk_role="section_list",
+                is_list_block=True,
             ),
             FusedRetrievedChunk(
                 chunk_id="skills-other-doc",
@@ -274,6 +284,11 @@ def test_package_evidence_keeps_complementary_list_chunks() -> None:
                 text="TOOLS\nDocker, GitHub, Elasticsearch",
                 fused_score=0.79,
                 sources=("sparse",),
+                section_title="TOOLS",
+                section_slug="tools",
+                chunk_role="section_header",
+                starts_with_heading=True,
+                is_list_block=True,
             ),
         ],
     )

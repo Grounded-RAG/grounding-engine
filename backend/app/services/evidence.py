@@ -41,7 +41,7 @@ def package_evidence(
         if is_field_extraction_query(profile) and not is_collection_query(profile):
             selection_limit = 1
         elif is_collection_query(profile):
-            selection_limit = min(requested_limit, 2)
+            selection_limit = min(requested_limit, 3)
         else:
             selection_limit = requested_limit
     else:
@@ -63,6 +63,11 @@ def package_evidence(
             text=hit.text,
             score=hit.fused_score,
             sources=hit.sources,
+            section_title=hit.section_title,
+            section_slug=hit.section_slug,
+            chunk_role=hit.chunk_role,
+            starts_with_heading=hit.starts_with_heading,
+            is_list_block=hit.is_list_block,
         )
         for index, hit in enumerate(selected_hits, start=1)
     ]
@@ -119,6 +124,7 @@ def _select_hits_for_query(
                     if has_strong_intent_signal(hit.text, profile=profile)
                     else (-5.0 if is_collection_query(profile) else 0.0)
                 )
+                + _section_alignment_bonus(hit=hit, profile=profile)
                 + len(hit.sources) * 1.5
             ),
             terms=frozenset(tokenize_meaningful_terms(hit.text)),
@@ -143,6 +149,11 @@ def _select_hits_for_query(
             ranked_hits = strong_intent_hits
     if is_field_extraction_query(profile) and not is_collection_query(profile):
         return [ranked_hits[0].hit]
+    if is_collection_query(profile):
+        return _select_collection_bundle_hits(
+            ranked_hits,
+            limit=limit,
+        )
     if is_dataset_summary_query(profile):
         ranked_hits = _collapse_to_document_representatives(ranked_hits)
         selected_hits = _select_diverse_hits(
@@ -174,6 +185,79 @@ def _select_hits_for_query(
         limit=limit,
         prefer_document_diversity=False,
     )
+
+
+def _section_alignment_bonus(
+    *,
+    hit: FusedRetrievedChunk,
+    profile,
+) -> float:
+    """Reward hits whose section metadata aligns with the query."""
+
+    section_fragments = [
+        fragment
+        for fragment in (
+            hit.section_title,
+            hit.section_slug.replace("-", " ") if hit.section_slug else None,
+            hit.chunk_role.replace("_", " "),
+        )
+        if fragment
+    ]
+    if not section_fragments:
+        return 0.0
+
+    section_terms = tokenize_meaningful_terms(" ".join(section_fragments))
+    overlap = len(set(profile.expanded_terms) & section_terms)
+    if overlap <= 0:
+        return 0.0
+
+    score = overlap * 4.0
+    if is_collection_query(profile):
+        score += 7.0 if hit.chunk_role == "section_header" else 5.0 if hit.chunk_role == "section_list" else 3.0
+    elif is_field_extraction_query(profile):
+        score += 3.5
+    if hit.chunk_role == "section_header":
+        score += 2.0
+    return score
+
+
+def _select_collection_bundle_hits(
+    ranked_hits: list[_ScoredHit],
+    *,
+    limit: int,
+) -> list[FusedRetrievedChunk]:
+    """Prefer coherent same-section bundles for list-like questions."""
+
+    if not ranked_hits:
+        return []
+
+    primary = ranked_hits[0]
+    selected: list[FusedRetrievedChunk] = [primary.hit]
+    selected_ids = {primary.hit.chunk_id}
+
+    if primary.hit.section_slug:
+        for candidate in ranked_hits[1:]:
+            hit = candidate.hit
+            if hit.chunk_id in selected_ids:
+                continue
+            if (
+                hit.document_id == primary.hit.document_id
+                and hit.section_slug == primary.hit.section_slug
+            ):
+                selected.append(hit)
+                selected_ids.add(hit.chunk_id)
+            if len(selected) >= limit:
+                return selected
+
+    remaining = [entry for entry in ranked_hits if entry.hit.chunk_id not in selected_ids]
+    selected.extend(
+        _select_diverse_hits(
+            remaining,
+            limit=max(limit - len(selected), 0),
+            prefer_document_diversity=False,
+        )
+    )
+    return selected[:limit]
 
 
 def _collapse_to_document_representatives(
