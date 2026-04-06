@@ -81,6 +81,7 @@ export default function AgentChatPage() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [selectedMode, setSelectedMode] = useState<UserFacingMode>("auto");
   const [selectedDatasetId, setSelectedDatasetId] = useState("");
+  const [datasetToAttachId, setDatasetToAttachId] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
 
   const agentQuery = useQuery({
@@ -112,6 +113,11 @@ export default function AgentChatPage() {
     const datasetIds = new Set(agentQuery.data?.dataset_ids ?? []);
     return datasets.filter((dataset) => datasetIds.has(dataset.dataset_id));
   }, [agentQuery.data?.dataset_ids, datasetsQuery.data]);
+
+  const attachableDatasets = useMemo(() => {
+    const attachedIds = new Set(attachedDatasets.map((dataset) => dataset.dataset_id));
+    return (datasetsQuery.data ?? []).filter((dataset) => !attachedIds.has(dataset.dataset_id));
+  }, [attachedDatasets, datasetsQuery.data]);
 
   const latestAssistantRunId = useMemo(() => {
     const messages = messagesQuery.data ?? [];
@@ -158,6 +164,18 @@ export default function AgentChatPage() {
       setSelectedDatasetId(attachedDatasets[0].dataset_id);
     }
   }, [attachedDatasets, selectedDatasetId]);
+
+  useEffect(() => {
+    if (attachableDatasets.length === 0) {
+      setDatasetToAttachId("");
+      return;
+    }
+
+    const stillSelected = attachableDatasets.some((dataset) => dataset.dataset_id === datasetToAttachId);
+    if (!stillSelected) {
+      setDatasetToAttachId(attachableDatasets[0].dataset_id);
+    }
+  }, [attachableDatasets, datasetToAttachId]);
 
   useEffect(() => {
     if (latestAssistantRunId) {
@@ -320,50 +338,71 @@ export default function AgentChatPage() {
 
           <div>
             <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Attached datasets</div>
-            {attachedDatasets.length === 0 ? (
-              <div className="space-y-2">
+            <div className="space-y-3">
+              {attachedDatasets.length === 0 ? (
                 <div className="text-xs leading-5 text-muted-foreground">
                   Attach a dataset before sending grounded questions.
                 </div>
-                {availableDatasets.length > 0 ? (
-                  <div className="space-y-2">
-                    {availableDatasets.slice(0, 3).map((dataset) => (
+              ) : (
+                <div className="space-y-2">
+                  {attachedDatasets.map((dataset) => (
+                    <div
+                      key={dataset.dataset_id}
+                      className="flex items-center gap-2 rounded-2xl border bg-background px-3 py-2.5 text-xs text-foreground"
+                    >
+                      <Database className="h-3 w-3 text-accent" />
+                      <span className="truncate">{dataset.name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {availableDatasets.length > 0 ? (
+                attachableDatasets.length > 0 ? (
+                  <div className="rounded-2xl border bg-background/70 p-3">
+                    <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                      Attach more datasets
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <select
+                        value={datasetToAttachId}
+                        onChange={(event) => setDatasetToAttachId(event.target.value)}
+                        className="h-10 rounded-xl border bg-background px-3 text-sm text-foreground"
+                        disabled={attachDatasetMutation.isPending}
+                      >
+                        {attachableDatasets.map((dataset) => (
+                          <option key={dataset.dataset_id} value={dataset.dataset_id}>
+                            {dataset.name}
+                          </option>
+                        ))}
+                      </select>
                       <Button
-                        key={dataset.dataset_id}
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="w-full justify-start rounded-2xl"
-                        onClick={() => attachDatasetMutation.mutate(dataset.dataset_id)}
-                        disabled={attachDatasetMutation.isPending}
+                        className="w-full rounded-2xl"
+                        onClick={() => datasetToAttachId && attachDatasetMutation.mutate(datasetToAttachId)}
+                        disabled={attachDatasetMutation.isPending || !datasetToAttachId}
                       >
                         <Database className="mr-2 h-3.5 w-3.5" />
-                        {dataset.name}
+                        {attachDatasetMutation.isPending ? "Attaching..." : "Attach selected dataset"}
                       </Button>
-                    ))}
+                    </div>
                   </div>
                 ) : (
-                  <Link
-                    to={workspacePath(workspaceSlug, "/datasets")}
-                    className="text-xs text-accent hover:underline"
-                  >
-                    Create a dataset first
-                  </Link>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {attachedDatasets.map((dataset) => (
-                  <div
-                    key={dataset.dataset_id}
-                    className="flex items-center gap-2 rounded-2xl border bg-background px-3 py-2.5 text-xs text-foreground"
-                  >
-                    <Database className="h-3 w-3 text-accent" />
-                    <span className="truncate">{dataset.name}</span>
+                  <div className="rounded-2xl border bg-background px-3 py-2.5 text-xs text-muted-foreground">
+                    All workspace datasets are already attached to this agent.
                   </div>
-                ))}
-              </div>
-            )}
+                )
+              ) : (
+                <Link
+                  to={workspacePath(workspaceSlug, "/datasets")}
+                  className="text-xs text-accent hover:underline"
+                >
+                  Create a dataset first
+                </Link>
+              )}
+            </div>
           </div>
         </div>
 

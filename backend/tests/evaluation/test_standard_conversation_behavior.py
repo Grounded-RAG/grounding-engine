@@ -55,7 +55,10 @@ def _tenant_context() -> TenantContext:
 
 
 @pytest.mark.asyncio()
-@pytest.mark.parametrize("query_text", ["hi", "hello!", "thanks", "what can you do"])
+@pytest.mark.parametrize(
+    "query_text",
+    ["hi", "hello!", "thanks", "what can you do", "hi how are you", "hello can you help me"],
+)
 async def test_standard_smalltalk_queries_return_friendly_clarification(query_text: str) -> None:
     """Conversational filler should stay friendly without pretending to be grounded."""
 

@@ -158,6 +158,100 @@ def test_generate_grounded_draft_omits_irrelevant_evidence_items() -> None:
     assert "[E002]" not in draft.answer_text
 
 
+def test_generate_grounded_draft_can_extract_name_like_answer() -> None:
+    """Field-style questions should prefer exact answer lines over unrelated descriptive bullets."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-name", "chunk-experience"],
+        selected_evidence_ids=["chunk-name", "chunk-experience"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-name",
+                text="Samrawit Gebremaryam Bahta\nsamrawitgebremaryam121@gmail.com\n+251-989-985-456",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-experience",
+                text="Professional experience: AI Engineer at iCog Labs building grounded retrieval systems.",
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What is the name of the resume owner?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.cited_evidence_ids[0] == "chunk-name"
+    assert draft.answer_text.startswith("The person's name is Samrawit Gebremaryam Bahta")
+    assert "[E001]" in draft.answer_text
+    assert "[E002]" not in draft.answer_text
+
+
+def test_generate_grounded_draft_prefers_skills_section_over_incidental_skill_wording() -> None:
+    """Skills questions should prefer actual skill sections over unrelated mentions of skills."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-awards", "chunk-skills"],
+        selected_evidence_ids=["chunk-awards", "chunk-skills"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-awards",
+                text="Enhanced skills in advanced ICT and Artificial intelligence through targeted workshops.",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-skills",
+                text=(
+                    "TECHNICAL SKILLS\n"
+                    "AI & Machine Learning: PyTorch, Scikit-learn, Hugging Face, RAG\n"
+                    "Programming Languages: Python, Go, TypeScript"
+                ),
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What are her technical skills?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.cited_evidence_ids[0] == "chunk-skills"
+    assert draft.answer_text.startswith("The listed skills are")
+    assert "PyTorch" in draft.answer_text
+    assert "[E002]" in draft.answer_text
+    assert "[E001]" not in draft.answer_text
+
+
+def test_generate_grounded_draft_rejects_definition_queries_without_definition_support() -> None:
+    """Mentioning a term should not count as defining it."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-course", "chunk-skills"],
+        selected_evidence_ids=["chunk-course", "chunk-skills"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-course",
+                text="Relevant courses include Introduction to Machine Learning and Advanced Programming.",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-skills",
+                text="AI & Machine Learning: PyTorch, Scikit-learn, Hugging Face.",
+            ),
+        ],
+    )
+
+    with pytest.raises(GroundedGenerationError, match="query-aligned support"):
+        generate_grounded_draft(
+            query_text="What does machine learning mean?",
+            evidence_package=evidence_package,
+        )
+
+
 @pytest.mark.asyncio()
 async def test_generate_answer_from_evidence_delegates_to_generation_backend(monkeypatch) -> None:
     """The generation service should delegate to the grounded generator backend."""

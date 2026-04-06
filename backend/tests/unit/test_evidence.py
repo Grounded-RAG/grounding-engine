@@ -69,6 +69,45 @@ def test_package_evidence_selects_top_fused_hits() -> None:
     assert [item.chunk_id for item in package.items] == ["chunk-2", "chunk-1"]
 
 
+def test_package_evidence_reranks_hits_by_query_answerability() -> None:
+    """Query-aware packaging should prefer chunks that can directly answer the question."""
+
+    bundle = RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[
+            FusedRetrievedChunk(
+                chunk_id="chunk-experience",
+                tenant_id=uuid.uuid4(),
+                namespace_id=uuid.uuid4(),
+                document_id=uuid.uuid4(),
+                chunk_index=2,
+                text="Professional experience: AI Engineer at iCog Labs.",
+                fused_score=0.92,
+                sources=("dense", "sparse"),
+            ),
+            FusedRetrievedChunk(
+                chunk_id="chunk-name",
+                tenant_id=uuid.uuid4(),
+                namespace_id=uuid.uuid4(),
+                document_id=uuid.uuid4(),
+                chunk_index=0,
+                text="Samrawit Gebremaryam Bahta\nsamrawit@example.com",
+                fused_score=0.83,
+                sources=("dense",),
+            ),
+        ],
+    )
+
+    package = package_evidence(
+        bundle,
+        query_text="What is the name of the resume owner?",
+        limit=1,
+    )
+
+    assert package.selected_evidence_ids == ["chunk-name"]
+
+
 def test_package_evidence_renders_stable_prompt_context() -> None:
     """Evidence packages should render a stable prompt context for generation."""
 

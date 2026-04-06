@@ -150,7 +150,15 @@ async def test_dense_index_document_reads_manifest_and_upserts_points(
         captured["vector_size"] = vector_size
         return len(points)
 
+    def fake_delete_dense_points_for_document(*, tenant_id, document_id) -> None:
+        captured["deleted_tenant_id"] = tenant_id
+        captured["deleted_document_id"] = document_id
+
     monkeypatch.setattr("app.services.dense_indexing.download_bytes", fake_download_bytes)
+    monkeypatch.setattr(
+        "app.services.dense_indexing.delete_dense_points_for_document",
+        fake_delete_dense_points_for_document,
+    )
     monkeypatch.setattr(
         "app.services.dense_indexing.upsert_dense_points",
         fake_upsert_dense_points,
@@ -168,6 +176,8 @@ async def test_dense_index_document_reads_manifest_and_upserts_points(
     assert result.collection_name == "grounded_chunks"
     assert result.points_indexed == 2
     assert result.vector_dimensions == 16
+    assert captured["deleted_tenant_id"] == context.tenant_id
+    assert captured["deleted_document_id"] == context.document_id
     assert captured["vector_size"] == 16
     points = captured["points"]
     assert isinstance(points, list)

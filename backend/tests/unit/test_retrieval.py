@@ -262,3 +262,177 @@ async def test_retrieve_hybrid_candidates_runs_both_paths(monkeypatch) -> None:
     assert bundle.sparse_hits == sparse_hits
     assert bundle.dense_hits == dense_hits
     assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-1", "chunk-2"]
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_reranks_for_answerable_name_query(monkeypatch) -> None:
+    """Hybrid retrieval should surface more directly answerable chunks for field-style questions."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-awards",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=3,
+            text="Selected as 1 of 10 students for a prestigious ICT award.",
+            score=0.8,
+            rank=1,
+            source="sparse",
+        ),
+        RetrievedChunk(
+            chunk_id="chunk-name",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="Samrawit Gebremaryam Bahta\nsamrawit@example.com",
+            score=0.2,
+            rank=6,
+            source="sparse",
+        ),
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-experience",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=2,
+            text="AI Engineer at iCog Labs building grounded retrieval systems.",
+            score=0.91,
+            rank=1,
+            source="dense",
+        ),
+        RetrievedChunk(
+            chunk_id="chunk-name",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="Samrawit Gebremaryam Bahta\nsamrawit@example.com",
+            score=0.51,
+            rank=7,
+            source="dense",
+        ),
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        assert kwargs["limit"] == 16
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        assert kwargs["limit"] == 16
+        return dense_hits
+
+    monkeypatch.setattr(
+        "app.services.retrieval.sparse_retrieve_chunks",
+        fake_sparse_retrieve_chunks,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What is the resume owner's name?",
+        limit=4,
+    )
+
+    assert bundle.fused_hits[0].chunk_id == "chunk-name"
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_recovers_header_context_from_relevant_document(
+    monkeypatch,
+) -> None:
+    """Header chunks from a relevant document should be recoverable even when initial hits miss them."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-awards",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=4,
+            text="AWARDS\nSelected for Huawei Seeds for the Future.",
+            score=0.82,
+            rank=1,
+            source="sparse",
+        )
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-experience",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=2,
+            text="PROFESSIONAL EXPERIENCE\nAI Engineer at iCog Labs.",
+            score=0.91,
+            rank=1,
+            source="dense",
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        return dense_hits
+
+    class FakeScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def __iter__(self):
+            return iter(self._rows)
+
+    class SupportingSession(FakeAsyncSession):
+        async def execute(self, statement, params=None):
+            del statement, params
+            return FakeScalarResult(
+                [
+                    SimpleNamespace(
+                        chunk_id="chunk-header",
+                        tenant_id=tenant_id,
+                        namespace_id=namespace_id,
+                        doc_id=document_id,
+                        chunk_index=0,
+                        chunk_text="Samrawit Gebremaryam Bahta\nsamrawit@example.com",
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "app.services.retrieval.sparse_retrieve_chunks",
+        fake_sparse_retrieve_chunks,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=SupportingSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What is the person's name?",
+        limit=4,
+    )
+
+    assert bundle.fused_hits[0].chunk_id == "chunk-header"

@@ -269,6 +269,40 @@ async def test_execute_standard_query_requests_clarification_for_vague_query(mon
 
 
 @pytest.mark.asyncio()
+async def test_execute_standard_query_requests_clarification_for_combined_greeting(monkeypatch) -> None:
+    """Combined greetings like 'hi how are you' should also bypass retrieval."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="hi how are you")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fail_retrieve_hybrid_candidates(**kwargs):
+        del kwargs
+        raise AssertionError("Combined greeting clarification should bypass retrieval.")
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fail_retrieve_hybrid_candidates,
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+    )
+
+    assert result.response.verification_status == "degraded"
+    assert result.response.degraded_reasons == ["QUERY_REQUIRES_CLARIFICATION"]
+    assert "attached dataset" in result.response.answer.lower()
+
+
+@pytest.mark.asyncio()
 async def test_execute_standard_query_rejects_higher_tier_namespace() -> None:
     """Standard query execution should reject namespaces that require a higher tier."""
 
