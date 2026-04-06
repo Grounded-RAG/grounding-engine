@@ -29,6 +29,19 @@ class FakeAsyncResult:
         return self._rows
 
 
+class FakeScalarQueryResult:
+    """Minimal scalar iterable wrapper for ORM-style retrieval tests."""
+
+    def __init__(self, rows: list[object]) -> None:
+        self._rows = rows
+
+    def scalars(self) -> "FakeScalarQueryResult":
+        return self
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
 class FakeAsyncSession:
     """Minimal async session stub for sparse retrieval tests."""
 
@@ -39,6 +52,14 @@ class FakeAsyncSession:
     async def execute(self, statement, params=None):
         self.executed.append((statement, params))
         return FakeAsyncResult(self.rows)
+
+
+class ScalarAsyncSession(FakeAsyncSession):
+    """Async session stub that returns ORM-like scalar rows."""
+
+    async def execute(self, statement, params=None):
+        self.executed.append((statement, params))
+        return FakeScalarQueryResult(self.rows)
 
 
 @pytest.mark.asyncio()
@@ -436,3 +457,60 @@ async def test_retrieve_hybrid_candidates_recovers_header_context_from_relevant_
     )
 
     assert bundle.fused_hits[0].chunk_id == "chunk-header"
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_supports_dataset_summary_queries(monkeypatch) -> None:
+    """Dataset-summary questions should be able to use leading namespace chunks even without lexical hits."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return []
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return []
+
+    monkeypatch.setattr(
+        "app.services.retrieval.sparse_retrieve_chunks",
+        fake_sparse_retrieve_chunks,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    session = ScalarAsyncSession(
+        [
+            SimpleNamespace(
+                chunk_id="chunk-header",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                doc_id=document_id,
+                chunk_index=0,
+                chunk_text="Samrawit Gebremaryam Bahta\nEDUCATION\nBSc in Software Engineering",
+            ),
+            SimpleNamespace(
+                chunk_id="chunk-skills",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                doc_id=document_id,
+                chunk_index=1,
+                chunk_text="TECHNICAL SKILLS\nPython, Go, TypeScript, FastAPI",
+            ),
+        ]
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=session,
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What is the dataset about?",
+        limit=4,
+    )
+
+    assert [hit.chunk_id for hit in bundle.fused_hits[:2]] == ["chunk-header", "chunk-skills"]

@@ -12,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.core.query_analysis import (
-    build_query_profile,
-    build_retrieval_query_text,
+    QueryPlan,
+    build_query_plan,
+    is_dataset_summary_query,
     is_field_extraction_query,
     score_text_against_query,
 )
@@ -52,8 +53,6 @@ async def sparse_retrieve_chunks(
 ) -> list[RetrievedChunk]:
     """Retrieve lexical candidates from PostgreSQL full-text search."""
 
-    profile = build_query_profile(query_text)
-    retrieval_query_text = build_retrieval_query_text(profile)
     candidate_limit = limit or get_settings().retrieval_candidate_limit
     statement = text(
         """
@@ -80,7 +79,7 @@ async def sparse_retrieve_chunks(
             {
                 "tenant_id": tenant_id,
                 "namespace_id": namespace_id,
-                "query_text": retrieval_query_text,
+                "query_text": query_text,
                 "limit": candidate_limit,
             },
         )
@@ -115,11 +114,9 @@ async def dense_retrieve_chunks(
 ) -> list[RetrievedChunk]:
     """Retrieve semantic candidates from Qdrant."""
 
-    profile = build_query_profile(query_text)
-    retrieval_query_text = build_retrieval_query_text(profile)
     candidate_limit = limit or get_settings().retrieval_candidate_limit
     try:
-        query_embedding = (await embed_texts([retrieval_query_text]))[0]
+        query_embedding = (await embed_texts([query_text]))[0]
         points = search_dense_points(
             query_vector=query_embedding.vector,
             tenant_id=tenant_id,
@@ -205,7 +202,7 @@ def fuse_retrieval_hits(
 def _rerank_fused_hits_for_query(
     fused_hits: list[FusedRetrievedChunk],
     *,
-    query_text: str,
+    query_plan: QueryPlan,
     limit: int,
 ) -> list[FusedRetrievedChunk]:
     """Rerank fused hits by query answerability before the final top-k cut."""
@@ -213,7 +210,7 @@ def _rerank_fused_hits_for_query(
     if not fused_hits:
         return []
 
-    profile = build_query_profile(query_text)
+    profile = query_plan.profile
     top_fused_score = max(hit.fused_score for hit in fused_hits) or 1.0
 
     reranked = sorted(
@@ -240,7 +237,7 @@ async def _fetch_supporting_context_hits(
     session: AsyncSession,
     tenant_id: UUID,
     namespace_id: UUID,
-    query_text: str,
+    query_plan: QueryPlan,
     fused_hits: list[FusedRetrievedChunk],
 ) -> list[FusedRetrievedChunk]:
     """Recover nearby/header chunks from already-relevant documents."""
@@ -248,7 +245,7 @@ async def _fetch_supporting_context_hits(
     if not fused_hits:
         return []
 
-    profile = build_query_profile(query_text)
+    profile = query_plan.profile
     target_indexes_by_doc: dict[UUID, set[int]] = {}
     doc_priority_scores: dict[UUID, float] = {}
 
@@ -322,12 +319,54 @@ async def _fetch_supporting_context_hits(
     return supplemental_hits
 
 
+async def _fetch_namespace_lead_chunks(
+    *,
+    session: AsyncSession,
+    tenant_id: UUID,
+    namespace_id: UUID,
+    limit: int,
+) -> list[FusedRetrievedChunk]:
+    """Fetch leading chunks across the namespace for broad dataset-summary questions."""
+
+    statement = (
+        select(DocumentChunkRecord)
+        .where(
+            DocumentChunkRecord.tenant_id == tenant_id,
+            DocumentChunkRecord.namespace_id == namespace_id,
+            DocumentChunkRecord.chunk_index <= 1,
+        )
+        .order_by(DocumentChunkRecord.doc_id.asc(), DocumentChunkRecord.chunk_index.asc())
+        .limit(limit)
+    )
+
+    try:
+        result = await session.execute(statement)
+    except SQLAlchemyError as exc:
+        raise RetrievalError("Dataset summary retrieval failed.") from exc
+
+    rows = result.scalars() if hasattr(result, "scalars") else []
+    return [
+        FusedRetrievedChunk(
+            chunk_id=row.chunk_id,
+            tenant_id=row.tenant_id,
+            namespace_id=row.namespace_id,
+            document_id=row.doc_id,
+            chunk_index=row.chunk_index,
+            text=row.chunk_text,
+            fused_score=1.0 if row.chunk_index == 0 else 0.85,
+            sources=("summary_context",),
+        )
+        for row in rows
+    ]
+
+
 async def retrieve_hybrid_candidates(
     *,
     session: AsyncSession,
     tenant_id: UUID,
     namespace_id: UUID,
     query_text: str,
+    query_plan: QueryPlan | None = None,
     limit: int | None = None,
 ) -> RetrievalBundle:
     """Run sparse and dense retrieval, then merge candidates with RRF."""
@@ -338,20 +377,29 @@ async def retrieve_hybrid_candidates(
         final_limit,
         final_limit * settings.retrieval_overfetch_factor,
     )
+    plan = query_plan or build_query_plan(query_text)
+    profile = plan.profile
 
-    sparse_hits = await sparse_retrieve_chunks(
-        session=session,
-        tenant_id=tenant_id,
-        namespace_id=namespace_id,
-        query_text=query_text,
-        limit=overfetch_limit,
-    )
-    dense_hits = await dense_retrieve_chunks(
-        tenant_id=tenant_id,
-        namespace_id=namespace_id,
-        query_text=query_text,
-        limit=overfetch_limit,
-    )
+    sparse_hits: list[RetrievedChunk] = []
+    dense_hits: list[RetrievedChunk] = []
+    for retrieval_query in plan.retrieval_queries:
+        sparse_hits.extend(
+            await sparse_retrieve_chunks(
+                session=session,
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                query_text=retrieval_query,
+                limit=overfetch_limit,
+            )
+        )
+        dense_hits.extend(
+            await dense_retrieve_chunks(
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                query_text=retrieval_query,
+                limit=overfetch_limit,
+            )
+        )
     fused_hits = fuse_retrieval_hits(
         sparse_hits,
         dense_hits,
@@ -361,14 +409,25 @@ async def retrieve_hybrid_candidates(
         session=session,
         tenant_id=tenant_id,
         namespace_id=namespace_id,
-        query_text=query_text,
+        query_plan=plan,
         fused_hits=fused_hits,
     )
     if supporting_hits:
         fused_hits = list(fused_hits) + supporting_hits
+    if is_dataset_summary_query(profile):
+        summary_hits = await _fetch_namespace_lead_chunks(
+            session=session,
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            limit=max(final_limit, settings.evidence_package_limit * 2),
+        )
+        existing_chunk_ids = {hit.chunk_id for hit in fused_hits}
+        fused_hits = list(fused_hits) + [
+            hit for hit in summary_hits if hit.chunk_id not in existing_chunk_ids
+        ]
     fused_hits = _rerank_fused_hits_for_query(
         fused_hits,
-        query_text=query_text,
+        query_plan=plan,
         limit=final_limit,
     )
     return RetrievalBundle(

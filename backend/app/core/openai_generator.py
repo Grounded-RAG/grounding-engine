@@ -66,7 +66,9 @@ def _build_user_prompt(*, query_text: str, evidence_package: EvidencePackage) ->
     return "\n\n".join(
         [
             f"query={query_text}",
-            f"detected_intents={','.join(sorted(profile.intents)) or 'none'}",
+            f"query_kind={profile.query_kind}",
+            f"semantic_tags={','.join(sorted(profile.semantic_tags)) or 'none'}",
+            f"attribute_terms={','.join(sorted(profile.attribute_terms)) or 'none'}",
             "focus_hints:",
             "\n".join(query_focus_hints(profile)) or "none",
             "evidence:",

@@ -14,8 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext
 from app.core.llm_client import GroundedGenerationError
-from app.models import ExecutionTier, Namespace, QueryTrace, UserFacingMode
+from app.core.query_analysis import build_query_plan, query_plan_metadata, QueryPlan
+from app.models import ExecutionTier, MessageRole, Namespace, QueryTrace, UserFacingMode
 from app.schemas.query import GroundedAnswerResponse, QueryRequest
+from app.services.messages import MessageServiceError, list_conversation_messages
 from app.services.evidence import package_evidence
 from app.services.generation import generate_answer_from_evidence
 from app.services.response_shaping import (
@@ -166,6 +168,7 @@ async def _persist_query_trace(
     stage_latencies_ms: dict[str, int],
     total_latency_ms: int,
     generator_provider: str,
+    query_plan: QueryPlan | None = None,
     agent_id: uuid.UUID | None = None,
     conversation_id: uuid.UUID | None = None,
     selected_mode: UserFacingMode | None = None,
@@ -187,7 +190,10 @@ async def _persist_query_trace(
         retrieved_chunk_ids=[hit.chunk_id for hit in retrieval_bundle.fused_hits],
         selected_evidence_ids=[citation.chunk_id for citation in response.citations],
         generator_provider=generator_provider,
-        verifier_result={"status": response.verification_status},
+        verifier_result={
+            "status": response.verification_status,
+            "query_plan": query_plan_metadata(query_plan) if query_plan is not None else None,
+        },
         final_answer_redacted=response.answer,
         citations=[citation.model_dump(mode="json") for citation in response.citations],
         overall_confidence=response.confidence_score,
@@ -212,6 +218,36 @@ async def _persist_query_trace(
 
     await session.refresh(trace)
     return trace
+
+
+async def _resolve_previous_user_query(
+    *,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    conversation_id: uuid.UUID | None,
+    current_query: str,
+) -> str | None:
+    """Return the prior user query for safe follow-up expansion when available."""
+
+    if conversation_id is None:
+        return None
+    try:
+        messages = await list_conversation_messages(
+            session=session,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+        )
+    except MessageServiceError:
+        return None
+
+    user_messages = [message for message in messages if message.role is MessageRole.USER]
+    if not user_messages:
+        return None
+    if user_messages and user_messages[-1].content.strip() == current_query.strip():
+        user_messages = user_messages[:-1]
+    if not user_messages:
+        return None
+    return user_messages[-1].content
 
 
 async def _update_query_trace_timings(
@@ -277,6 +313,7 @@ async def execute_standard_query(
             stage_latencies_ms=stage_latencies_ms,
             total_latency_ms=int((time.perf_counter() - started_at) * 1000),
             generator_provider="clarification-handler-v1",
+            query_plan=None,
             agent_id=agent_id,
             conversation_id=conversation_id,
             selected_mode=selected_mode,
@@ -296,6 +333,16 @@ async def execute_standard_query(
             trace_id=trace.trace_id,
         )
 
+    query_plan = build_query_plan(
+        query_request.query,
+        previous_user_query=await _resolve_previous_user_query(
+            session=session,
+            tenant_id=tenant_context.tenant_id,
+            conversation_id=conversation_id,
+            current_query=query_request.query,
+        ),
+    )
+
     retrieval_started = time.perf_counter()
     try:
         retrieval_bundle = await retrieve_hybrid_candidates(
@@ -303,6 +350,7 @@ async def execute_standard_query(
             tenant_id=tenant_context.tenant_id,
             namespace_id=query_request.namespace_id,
             query_text=query_request.query,
+            query_plan=query_plan,
         )
     except RetrievalError as exc:
         raise QueryServiceError(
@@ -314,7 +362,7 @@ async def execute_standard_query(
     evidence_started = time.perf_counter()
     evidence_package = package_evidence(
         retrieval_bundle,
-        query_text=query_request.query,
+        query_text=query_plan.resolved_query_text,
     )
     evidence_ms = int((time.perf_counter() - evidence_started) * 1000)
 
@@ -328,7 +376,7 @@ async def execute_standard_query(
     else:
         try:
             draft = await generate_answer_from_evidence(
-                query_text=query_request.query,
+                query_text=query_plan.resolved_query_text,
                 evidence_package=evidence_package,
             )
             response = shape_grounded_response(
@@ -361,6 +409,7 @@ async def execute_standard_query(
         stage_latencies_ms=stage_latencies_ms,
         total_latency_ms=int((time.perf_counter() - started_at) * 1000),
         generator_provider=generator_provider,
+        query_plan=query_plan,
         agent_id=agent_id,
         conversation_id=conversation_id,
         selected_mode=selected_mode,

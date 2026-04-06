@@ -25,6 +25,12 @@ class FakeScalarResult:
     def scalar_one_or_none(self):
         return self.value
 
+    def scalars(self):
+        return self
+
+    def all(self):
+        return []
+
 
 class FakeAsyncSession:
     """Minimal async session stub for query service tests."""
@@ -157,6 +163,7 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
     assert trace.generator_provider == "local-grounded-v1"
     assert trace.retrieved_chunk_ids == ["chunk-1"]
     assert trace.selected_evidence_ids == ["chunk-1"]
+    assert trace.verifier_result["query_plan"]["query_kind"] == "open"
 
 
 @pytest.mark.asyncio()

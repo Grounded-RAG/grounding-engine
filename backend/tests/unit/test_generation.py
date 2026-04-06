@@ -219,7 +219,7 @@ def test_generate_grounded_draft_prefers_skills_section_over_incidental_skill_wo
     )
 
     assert draft.cited_evidence_ids[0] == "chunk-skills"
-    assert draft.answer_text.startswith("The listed skills are")
+    assert draft.answer_text.startswith("The listed technical skills are")
     assert "PyTorch" in draft.answer_text
     assert "[E002]" in draft.answer_text
     assert "[E001]" not in draft.answer_text
@@ -250,6 +250,37 @@ def test_generate_grounded_draft_rejects_definition_queries_without_definition_s
             query_text="What does machine learning mean?",
             evidence_package=evidence_package,
         )
+
+
+def test_generate_grounded_draft_does_not_misclassify_experience_query_as_name() -> None:
+    """Queries mentioning a person should still answer the requested field, not default to name."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-name", "chunk-experience"],
+        selected_evidence_ids=["chunk-name", "chunk-experience"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-name",
+                text="Samrawit Gebremaryam Bahta\nsamrawit@example.com",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-experience",
+                text="PROFESSIONAL EXPERIENCE\nAI Engineer at iCog Labs working on grounded retrieval systems.",
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What is the work experience of the person?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text.startswith("The work experience is")
+    assert "AI Engineer at iCog Labs" in draft.answer_text
+    assert "The person's name is" not in draft.answer_text
+    assert draft.cited_evidence_ids == ["chunk-experience"]
 
 
 @pytest.mark.asyncio()
@@ -373,4 +404,63 @@ async def test_generate_answer_from_evidence_falls_back_from_gemini_backend(monk
     assert draft.answer_text == (
         "Grounded returns answers anchored in retrieved evidence. [E001]"
     )
+    assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
+
+
+@pytest.mark.asyncio()
+async def test_generate_answer_from_evidence_rejects_weak_provider_field_answer(monkeypatch) -> None:
+    """Provider answers that cite irrelevant field evidence should fall back to deterministic grounding."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-name", "chunk-experience"],
+        selected_evidence_ids=["chunk-name", "chunk-experience"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-name",
+                text="Samrawit Gebremaryam Bahta\nsamrawit@example.com",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-experience",
+                text="PROFESSIONAL EXPERIENCE\nAI Engineer at iCog Labs working on grounded retrieval systems.",
+            ),
+        ],
+    )
+
+    monkeypatch.setattr(
+        "app.services.generation.resolve_generation_backend",
+        lambda: GenerationBackend(
+            provider_name="gemini_v1",
+            implementation="gemini",
+        ),
+    )
+
+    async def fake_generate_gemini_draft(**kwargs):
+        del kwargs
+        from app.pipeline.contracts import GroundedAnswerDraft
+
+        return GroundedAnswerDraft(
+            answer_text="Samrawit Gebremaryam Bahta [E001] PROFESSIONAL EXPERIENCE [E002]",
+            cited_evidence_ids=["chunk-name", "chunk-experience"],
+            citation_snippets={
+                "chunk-name": "Samrawit Gebremaryam Bahta",
+                "chunk-experience": "PROFESSIONAL EXPERIENCE",
+            },
+            generator_provider="gemini:gemini-2.5-flash",
+            support_coverage=1.0,
+            source_diversity=2,
+        )
+
+    monkeypatch.setattr(
+        "app.services.generation.generate_gemini_draft",
+        fake_generate_gemini_draft,
+    )
+
+    draft = await generate_answer_from_evidence(
+        query_text="What is the name of the person?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text.startswith("The person's name is Samrawit Gebremaryam Bahta")
     assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
