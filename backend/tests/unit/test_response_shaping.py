@@ -249,3 +249,45 @@ def test_shape_grounded_response_marks_partial_support_without_full_degradation(
     assert response.support_summary == "partial"
     assert response.degraded_reasons == ["PARTIAL_EVIDENCE"]
     assert response.confidence_label in {"low", "medium"}
+
+
+def test_shape_grounded_response_marks_ambiguous_support_for_multi_citation_answer() -> None:
+    """Moderate multi-citation support should be surfaced as ambiguous rather than fully grounded."""
+
+    first = _evidence_item(
+        citation_id="E001",
+        chunk_id="chunk-1",
+        text="The policy retains employee records for seven years after closure.",
+        score=0.03,
+    )
+    second = _evidence_item(
+        citation_id="E002",
+        chunk_id="chunk-2",
+        text="Access logs are deleted after thirty days unless a legal hold applies.",
+        score=0.025,
+    )
+    package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1", "chunk-2"],
+        selected_evidence_ids=["chunk-1", "chunk-2"],
+        items=[first, second],
+    )
+    draft = GroundedAnswerDraft(
+        answer_text=(
+            "The policy retains employee records for seven years after closure, while access logs "
+            "are deleted after thirty days unless a legal hold applies. [E001] [E002]"
+        ),
+        cited_evidence_ids=["chunk-1", "chunk-2"],
+        citation_snippets={
+            "chunk-1": "The policy retains employee records for seven years after closure.",
+            "chunk-2": "Access logs are deleted after thirty days unless a legal hold applies.",
+        },
+        generator_provider="local-grounded-v1",
+        support_coverage=0.72,
+        source_diversity=2,
+    )
+
+    response = shape_grounded_response(draft=draft, evidence_package=package)
+
+    assert response.verification_status == "passed"
+    assert response.support_summary == "partial"
+    assert response.degraded_reasons == ["AMBIGUOUS_SUPPORT"]

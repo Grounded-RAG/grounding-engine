@@ -26,6 +26,8 @@ _KEY_VALUE_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
 _TABLE_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:\||\t|(?:\S+\s{2,}\S+\s{2,}\S+))"
 )
+_SEPARATOR_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?:[-_=|]{3,})$")
+_BULLET_MARKER_ONLY_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?:[-*\u2022\u2013\u2014]|\d+[\.\)])$")
 
 
 @dataclass(frozen=True)
@@ -85,7 +87,10 @@ def _normalize_chunk_text(raw_text: str) -> str:
             previous_blank = True
             continue
         if compact_lines and _should_merge_with_previous_line(compact_lines[-1], line):
-            compact_lines[-1] = f"{compact_lines[-1].rstrip()} {line.lstrip()}".strip()
+            if _looks_like_table_line(compact_lines[-1]) and not _looks_like_table_line(line):
+                compact_lines[-1] = f"{compact_lines[-1].rstrip()} | {line.lstrip()}".strip()
+            else:
+                compact_lines[-1] = f"{compact_lines[-1].rstrip()} {line.lstrip()}".strip()
         else:
             compact_lines.append(line)
         previous_blank = False
@@ -108,6 +113,8 @@ def _normalize_display_line(raw_line: str) -> str:
 
     stripped = raw_line.strip()
     if not stripped:
+        return ""
+    if _SEPARATOR_LINE_PATTERN.fullmatch(stripped):
         return ""
     if _TABLE_LINE_PATTERN.search(raw_line):
         table_like = re.sub(r"\t+", " | ", stripped)
@@ -163,6 +170,15 @@ def _pair_label_value_lines(lines: list[str]) -> list[str]:
 
         next_line = lines[index + 1] if index + 1 < len(lines) else ""
         if (
+            _BULLET_MARKER_ONLY_PATTERN.fullmatch(line.strip())
+            and next_line
+            and not _HEADING_LINE_PATTERN.fullmatch(next_line)
+            and not _looks_like_table_line(next_line)
+        ):
+            paired.append(f"- {next_line.lstrip('-*• ').strip()}")
+            index += 2
+            continue
+        if (
             _looks_like_label_only_line(line)
             and next_line
             and not _HEADING_LINE_PATTERN.fullmatch(next_line)
@@ -185,13 +201,21 @@ def _should_merge_with_previous_line(previous_line: str, current_line: str) -> b
 
     previous = previous_line.strip()
     current = current_line.strip()
+    if _looks_like_table_line(previous) and (
+        previous.endswith("|")
+        or (
+            previous.count("|") >= 1
+            and len(current.split()) <= 4
+            and not _looks_like_table_line(current)
+        )
+    ):
+        return True
     if (
         not previous
         or not current
         or _HEADING_LINE_PATTERN.fullmatch(previous)
         or _HEADING_LINE_PATTERN.fullmatch(current)
         or _BULLET_LINE_PATTERN.match(current)
-        or _looks_like_table_line(previous)
         or _looks_like_table_line(current)
         or _looks_like_label_only_line(current)
         or _looks_like_key_value_line(current)

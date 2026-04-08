@@ -254,6 +254,55 @@ def test_build_chunk_manifest_repairs_wrapped_ocrish_paragraph_lines() -> None:
     )
 
 
+def test_build_chunk_manifest_repairs_bullet_marker_only_lines() -> None:
+    """OCR-like bullet markers on their own line should be merged into the following content."""
+
+    manifest = build_chunk_manifest(
+        document_id=uuid.uuid4(),
+        text=(
+            "CHECKLIST\n"
+            "•\n"
+            "Retain employee records for 7 years.\n"
+            "•\n"
+            "Delete access logs after 30 days."
+        ),
+        source_artifact_key="artifact.txt",
+        config=ChunkingConfig(
+            max_tokens=128,
+            overlap_tokens=8,
+            strategy="structure_aware_v1",
+        ),
+    )
+
+    chunk = manifest.chunks[0]
+    assert "- Retain employee records for 7 years." in chunk.text
+    assert "- Delete access logs after 30 days." in chunk.text
+
+
+def test_build_chunk_manifest_merges_short_table_continuations() -> None:
+    """Short wrapped table cells should merge back into the preceding row."""
+
+    manifest = build_chunk_manifest(
+        document_id=uuid.uuid4(),
+        text=(
+            "RETENTION SCHEDULE\n"
+            "Record Type\tRetention Period\tOwner\n"
+            "Employee File\t7 years\t\n"
+            "HR\n"
+            "Access Logs\t30 days\tSecurity"
+        ),
+        source_artifact_key="artifact.txt",
+        config=ChunkingConfig(
+            max_tokens=128,
+            overlap_tokens=8,
+            strategy="structure_aware_v1",
+        ),
+    )
+
+    chunk = manifest.chunks[0]
+    assert "Employee File | 7 years | HR" in chunk.text
+
+
 def test_derive_chunk_manifest_key_uses_chunk_artifact_path() -> None:
     """Chunk manifests should live under the deterministic artifact prefix."""
 

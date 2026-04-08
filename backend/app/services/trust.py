@@ -38,7 +38,7 @@ def support_summary_for_response(
         return "insufficient"
     if normalized_reasons & {"PARTIAL_EVIDENCE", "AMBIGUOUS_SUPPORT"}:
         return "partial"
-    if confidence_score < 0.65:
+    if confidence_score < 0.45:
         return "partial"
     return "grounded"
 

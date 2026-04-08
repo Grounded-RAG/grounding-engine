@@ -118,7 +118,12 @@ _ATTRIBUTE_PATTERNS = [
 _FOLLOW_UP_PREFIXES = ("and ", "also ", "how about", "what about", "what else", "and what", "and how")
 _REFERENCE_ONLY_PATTERN = re.compile(r"^(?:and\s+)?(?:what\s+about\s+)?(?:it|that|this|those|these|them|there|here)\b")
 _REFERENCE_MARKER_PATTERN = re.compile(r"\b(?:it|that|this|those|these|them|there|here|former|latter|second|first)\b")
-_DOCUMENT_REFERENCE_PATTERN = re.compile(r"\b(?P<ordinal>first|second|third)\s+document\b")
+_DOCUMENT_REFERENCE_PATTERN = re.compile(
+    r"\b(?P<ordinal>first|second|third)\s+(?:document|file|record|one)\b"
+)
+_RELATIVE_DOCUMENT_REFERENCE_PATTERN = re.compile(
+    r"\b(?P<direction>previous|prior|earlier|next|later)\s+(?:document|file|record|one)\b"
+)
 _CONTEXT_PREPOSITION_PATTERN = re.compile(r"\b(?:at|in|on|for|with|about|under|within|inside)\s+(?P<context>.+)$")
 _CONTEXT_BREAK_TOKENS = {"and", "another", "any", "because", "but", "else", "if", "only", "or", "than", "there", "whether"}
 _ACTION_HINT_TERMS = {
@@ -184,7 +189,11 @@ def _normalize_token(token: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "", token.casefold())
     if normalized and normalized.isalpha():
         normalized = _correct_query_token(normalized)
-    if normalized.endswith("s") and len(normalized) > 4:
+    if (
+        normalized.endswith("s")
+        and len(normalized) > 4
+        and not normalized.endswith(("ss", "us", "is", "ous"))
+    ):
         normalized = normalized[:-1]
     return normalized
 
@@ -364,6 +373,17 @@ def _document_reference_rank(normalized_text: str) -> int | None:
         return None
     ordinal = match.group("ordinal")
     return {"first": 1, "second": 2, "third": 3}.get(ordinal)
+
+
+def _document_reference_phrase(rank: int) -> str | None:
+    """Render a stable ordinal phrase for a small document reference rank."""
+
+    ordinal = {
+        1: "first document",
+        2: "second document",
+        3: "third document",
+    }.get(rank)
+    return ordinal
 
 
 def _extract_attribute_terms(*, normalized_text: str, terms: set[str]) -> set[str]:
@@ -573,18 +593,28 @@ def _resolve_follow_up_context(
         return query_text, False
 
     context_fragments: list[str] = []
-    if (
-        profile.document_reference_rank is None
-        and conversation_context.last_document_reference_rank is not None
-        and _REFERENCE_MARKER_PATTERN.search(profile.normalized_text)
-    ):
-        ordinal = {
-            1: "first document",
-            2: "second document",
-            3: "third document",
-        }.get(conversation_context.last_document_reference_rank)
-        if ordinal is not None:
-            context_fragments.append(ordinal)
+    if conversation_context.last_document_reference_rank is not None:
+        relative_reference_match = _RELATIVE_DOCUMENT_REFERENCE_PATTERN.search(
+            profile.normalized_text
+        )
+        if relative_reference_match is not None:
+            direction = relative_reference_match.group("direction")
+            if direction in {"previous", "prior", "earlier"}:
+                rank = max(1, conversation_context.last_document_reference_rank - 1)
+            else:
+                rank = min(3, conversation_context.last_document_reference_rank + 1)
+            ordinal = _document_reference_phrase(rank)
+            if ordinal is not None:
+                context_fragments.append(ordinal)
+        elif (
+            profile.document_reference_rank is None
+            and _REFERENCE_MARKER_PATTERN.search(profile.normalized_text)
+        ):
+            ordinal = _document_reference_phrase(
+                conversation_context.last_document_reference_rank
+            )
+            if ordinal is not None:
+                context_fragments.append(ordinal)
     if not profile.attribute_terms and conversation_context.carried_attribute_terms:
         context_fragments.extend(conversation_context.carried_attribute_terms[:2])
     if not profile.context_terms and conversation_context.carried_context_terms:

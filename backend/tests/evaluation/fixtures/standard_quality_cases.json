@@ -348,6 +348,44 @@
     ]
   },
   {
+    "name": "ocr_style_policy_list_question_still_returns_requirements",
+    "query": "What are the retention requirements?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Retain employee records for 7 years",
+      "Delete temporary access logs after 30 days",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-ocr-policy",
+        "text": "RETENTION REQUIREMENTS\n-\nRetain employee records for 7 years after account closure.\n-\nDelete temporary access logs after 30 days unless a legal hold applies.",
+        "score": 0.88
+      }
+    ]
+  },
+  {
+    "name": "table_like_manual_question_returns_structured_row_details",
+    "query": "What is the retention period for employee files?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "7 years",
+      "Employee File",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-table-manual",
+        "text": "RETENTION SCHEDULE\nRecord Type | Retention Period | Owner\nEmployee File | 7 years | HR\nAccess Logs | 30 days | Security",
+        "score": 0.9
+      }
+    ]
+  },
+  {
     "name": "unrelated_query_without_alignment_fails_generation",
     "query": "What is the weather today?",
     "expected_type": "generation_error",

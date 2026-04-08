@@ -217,3 +217,23 @@ def test_build_query_plan_preserves_document_reference_from_recent_history() -> 
 
     assert plan.used_conversation_context is True
     assert "second document" in plan.resolved_query_text.casefold()
+
+
+def test_build_query_plan_resolves_relative_document_follow_up_from_recent_history() -> None:
+    """Relative document follow-ups should reuse recent document ordering context."""
+
+    conversation_context = build_conversation_context(
+        recent_user_queries=[
+            "What is the first document about?",
+            "What about the second document?",
+        ],
+    )
+
+    assert conversation_context is not None
+    plan = build_query_plan(
+        "what about the previous document",
+        conversation_context=conversation_context,
+    )
+
+    assert plan.used_conversation_context is True
+    assert "first document" in plan.resolved_query_text.casefold()

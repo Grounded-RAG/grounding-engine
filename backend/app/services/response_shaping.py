@@ -58,6 +58,12 @@ def _calculate_confidence(
     )
     if len(cited_items) >= 2 and support_signal >= 0.95 and diversity_signal >= 1.0:
         calibrated = min(calibrated + 0.05, 1.0)
+    if len(cited_items) == 1 and support_signal < 0.7:
+        calibrated = max(calibrated - 0.08, 0.0)
+    if len(cited_items) >= 2 and support_signal < 0.68:
+        calibrated = max(calibrated - 0.04, 0.0)
+    if ":fallback_from_" in draft.generator_provider:
+        calibrated = max(calibrated - 0.03, 0.0)
     return round(
         calibrated,
         4,
@@ -107,17 +113,18 @@ def shape_grounded_response(
         cited_items=cited_items,
         draft=draft,
     )
+    support_signal = min(max(draft.support_coverage, 0.0), 1.0)
     degraded_reasons: list[str] = []
     verification_status = "passed"
     if confidence_score < 0.25:
         verification_status = "degraded"
         degraded_reasons.append("LOW_CONFIDENCE_SUPPORT")
-    elif confidence_score < 0.55:
+    elif confidence_score < 0.5:
         degraded_reasons.append("PARTIAL_EVIDENCE")
     elif (
         len(cited_items) >= 2
-        and confidence_score < 0.7
-        and draft.support_coverage < 0.8
+        and (confidence_score < 0.7 or support_signal < 0.75)
+        and support_signal < 0.82
     ):
         degraded_reasons.append("AMBIGUOUS_SUPPORT")
     confidence_label = confidence_label_for_score(confidence_score)
