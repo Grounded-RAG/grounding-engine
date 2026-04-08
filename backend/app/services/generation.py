@@ -14,10 +14,14 @@ from app.core.openai_generator import (
 from app.core.query_analysis import (
     build_query_profile,
     has_strong_intent_signal,
+    is_action_query,
     is_collection_query,
+    is_comparison_query,
     is_dataset_summary_query,
     is_definition_query,
+    is_entity_context_query,
     is_field_extraction_query,
+    is_count_query,
     score_text_against_query,
     tokenize_meaningful_terms,
 )
@@ -144,6 +148,27 @@ def _provider_draft_is_query_aligned(
             draft=draft,
         )
 
+    if is_action_query(profile):
+        return _provider_action_is_query_aligned(
+            query_text=query_text,
+            cited_items=cited_items,
+            draft=draft,
+        )
+
+    if is_comparison_query(profile) or is_entity_context_query(profile):
+        return _provider_boolean_like_is_query_aligned(
+            query_text=query_text,
+            cited_items=cited_items,
+            draft=draft,
+        )
+
+    if is_count_query(profile):
+        return _provider_count_is_query_aligned(
+            query_text=query_text,
+            cited_items=cited_items,
+            draft=draft,
+        )
+
     if (
         is_field_extraction_query(profile)
         and not is_collection_query(profile)
@@ -241,6 +266,73 @@ def _field_answer_has_unsupported_terms(
         term for term in answer_terms if term not in allowed_terms
     }
     return len(unsupported_terms) > 1
+
+
+def _provider_action_is_query_aligned(
+    *,
+    query_text: str,
+    cited_items: list,
+    draft: GroundedAnswerDraft,
+) -> bool:
+    profile = build_query_profile(query_text)
+    if len(draft.answer_text.split()) < 8:
+        return False
+    if not any(
+        has_strong_intent_signal(
+            draft.citation_snippets.get(item.chunk_id, item.text),
+            profile=profile,
+        )
+        or has_strong_intent_signal(item.text, profile=profile)
+        for item in cited_items
+    ):
+        return False
+    return not _field_answer_has_unsupported_terms(
+        query_text=query_text,
+        cited_items=cited_items,
+        draft=draft,
+    )
+
+
+def _provider_boolean_like_is_query_aligned(
+    *,
+    query_text: str,
+    cited_items: list,
+    draft: GroundedAnswerDraft,
+) -> bool:
+    profile = build_query_profile(query_text)
+    normalized_answer = draft.answer_text.casefold().strip()
+    if not normalized_answer.startswith(("yes", "no")):
+        return False
+    return any(
+        score_text_against_query(
+            draft.citation_snippets.get(item.chunk_id, item.text),
+            profile=profile,
+            chunk_index=item.chunk_index,
+        )
+        >= 8.0
+        for item in cited_items
+    )
+
+
+def _provider_count_is_query_aligned(
+    *,
+    query_text: str,
+    cited_items: list,
+    draft: GroundedAnswerDraft,
+) -> bool:
+    profile = build_query_profile(query_text)
+    if not any(character.isdigit() for character in draft.answer_text):
+        return False
+    return any(
+        has_strong_intent_signal(item.text, profile=profile)
+        or score_text_against_query(
+            item.text,
+            profile=profile,
+            chunk_index=item.chunk_index,
+        )
+        >= 8.0
+        for item in cited_items
+    )
 
 
 async def generate_answer_from_evidence(

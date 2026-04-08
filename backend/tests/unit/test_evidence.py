@@ -346,3 +346,65 @@ def test_package_evidence_filters_incidental_collection_mentions_when_section_ex
     )
 
     assert package.selected_evidence_ids == ["skills-section"]
+
+
+def test_package_evidence_keeps_same_section_action_context() -> None:
+    """Action questions should keep nearby same-section responsibility chunks together."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    bundle = RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[
+            FusedRetrievedChunk(
+                chunk_id="exp-header",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=4,
+                text="AI Engineer\niCog Labs\nArchitected grounded retrieval systems.",
+                fused_score=0.95,
+                sources=("dense", "sparse"),
+                section_title="PROFESSIONAL EXPERIENCE",
+                section_slug="professional-experience",
+                chunk_role="section_body",
+            ),
+            FusedRetrievedChunk(
+                chunk_id="exp-next",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=5,
+                text="Enhanced neural mining workflows and improved visualization modules.",
+                fused_score=0.88,
+                sources=("dense",),
+                section_title="PROFESSIONAL EXPERIENCE",
+                section_slug="professional-experience",
+                chunk_role="section_list",
+                is_list_block=True,
+            ),
+            FusedRetrievedChunk(
+                chunk_id="other-doc",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=uuid.uuid4(),
+                chunk_index=1,
+                text="PROJECTS\nBuilt a travel assistant using agents.",
+                fused_score=0.81,
+                sources=("sparse",),
+                section_title="PROJECTS",
+                section_slug="projects",
+                chunk_role="section_header",
+            ),
+        ],
+    )
+
+    package = package_evidence(
+        bundle,
+        query_text="What did she do at iCog Labs?",
+        limit=3,
+    )
+
+    assert package.selected_evidence_ids == ["exp-header", "exp-next"]

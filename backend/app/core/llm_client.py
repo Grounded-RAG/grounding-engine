@@ -9,10 +9,14 @@ from app.core.query_analysis import (
     QueryProfile,
     build_query_profile,
     has_strong_intent_signal,
+    is_action_query,
     is_boolean_query,
     is_collection_query,
+    is_comparison_query,
+    is_count_query,
     is_dataset_summary_query,
     is_definition_query,
+    is_entity_context_query,
     is_field_extraction_query,
     primary_intent,
     query_focus_hints,
@@ -274,6 +278,50 @@ def _human_join(values: list[str]) -> str:
     return f"{', '.join(values[:-1])}, and {values[-1]}"
 
 
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = _normalize_line(value)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(value.strip())
+    return deduped
+
+
+def _context_phrase(profile: QueryProfile) -> str | None:
+    if not profile.context_terms:
+        return None
+    return sorted(profile.context_terms, key=len)[0].replace("_", " ").strip()
+
+
+def _text_matches_context(text: str, *, profile: QueryProfile) -> bool:
+    normalized_text = _normalize_line(text)
+    text_terms = tokenize_meaningful_terms(text)
+    for context in profile.context_terms:
+        if context in normalized_text:
+            return True
+        if tokenize_meaningful_terms(context) & text_terms:
+            return True
+    return False
+
+
+def _section_candidate_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    for line in _clean_lines(text):
+        normalized = _normalize_line(line)
+        if (
+            not normalized
+            or _is_heading_only_line(line)
+            or "@" in line
+            or re.search(r"\b\d{4}\b", line)
+        ):
+            continue
+        lines.append(line)
+    return _dedupe_preserving_order(lines)
+
+
 def _summary_heading_labels(text: str) -> list[str]:
     labels: list[str] = []
     seen: set[str] = set()
@@ -358,6 +406,205 @@ def _render_summary_answer(
     return " ".join(sentences).strip()
 
 
+def _render_collection_answer(
+    *,
+    profile: QueryProfile,
+    top_support: list[tuple[float, EvidenceItem, str]],
+) -> str:
+    requested_label = requested_attribute_label(profile) or "items"
+    rendered_lines: list[str] = []
+    citations: list[str] = []
+
+    for _, item, snippet in top_support:
+        citations.append(f"[{item.citation_id}]")
+        candidate_lines = _section_candidate_lines(item.text) or _clean_lines(snippet)
+        for line in candidate_lines:
+            cleaned = _strip_attribute_prefix(line, profile=profile).rstrip(".")
+            if not cleaned or _is_heading_only_line(cleaned):
+                continue
+            rendered_lines.append(cleaned)
+            if len(rendered_lines) >= 6:
+                break
+        if len(rendered_lines) >= 6:
+            break
+
+    rendered_lines = _dedupe_preserving_order(rendered_lines)
+    if not rendered_lines:
+        fallback_item = top_support[0][1]
+        return f"{cleaned_snippets[fallback_item.chunk_id]} [{fallback_item.citation_id}]"
+
+    return (
+        f"The listed {_format_collection_label(requested_label)} are "
+        f"{'; '.join(rendered_lines[:5])} {' '.join(_dedupe_preserving_order(citations))}"
+    ).strip()
+
+
+def _render_action_answer(
+    *,
+    profile: QueryProfile,
+    top_support: list[tuple[float, EvidenceItem, str]],
+) -> str:
+    context_phrase = _context_phrase(profile)
+    action_lines: list[tuple[str, str]] = []
+
+    for _, item, _ in top_support:
+        for line in _section_candidate_lines(item.text):
+            normalized = _normalize_line(line)
+            if len(normalized.split()) <= 2:
+                continue
+            if re.search(
+                r"\b(architected|built|contributed|created|delivered|designed|developed|implemented|integrated|led|optimized|responsibilities|task|tasks|worked)\b",
+                normalized,
+            ):
+                action_lines.append((line.rstrip("."), item.citation_id))
+            if len(action_lines) >= 4:
+                break
+        if len(action_lines) >= 4:
+            break
+
+    deduped_lines: list[tuple[str, str]] = []
+    seen_lines: set[str] = set()
+    for line, citation_id in action_lines:
+        normalized = _normalize_line(line)
+        if normalized in seen_lines:
+            continue
+        seen_lines.add(normalized)
+        deduped_lines.append((line, citation_id))
+
+    if not deduped_lines:
+        fallback_item = top_support[0][1]
+        fallback_text = cleaned_snippets[fallback_item.chunk_id]
+        prefix = f"In {context_phrase}, " if context_phrase else ""
+        return f"{prefix}{fallback_text} [{fallback_item.citation_id}]".strip()
+
+    rendered_parts = [
+        f"{line} [{citation_id}]"
+        for line, citation_id in deduped_lines[:3]
+    ]
+    if context_phrase:
+        return f"In {context_phrase}, the evidence shows work including {' '.join(rendered_parts)}".strip()
+    return f"The evidence shows work including {' '.join(rendered_parts)}".strip()
+
+
+def _render_comparison_answer(
+    *,
+    profile: QueryProfile,
+    top_support: list[tuple[float, EvidenceItem, str]],
+    cleaned_snippets: dict[str, str],
+) -> str:
+    matching: list[tuple[EvidenceItem, str]] = []
+    non_matching: list[tuple[EvidenceItem, str]] = []
+
+    for _, item, _ in top_support:
+        cleaned = cleaned_snippets[item.chunk_id]
+        if _text_matches_context(item.text, profile=profile) or _text_matches_context(
+            cleaned,
+            profile=profile,
+        ):
+            matching.append((item, cleaned))
+        else:
+            non_matching.append((item, cleaned))
+
+    context_phrase = _context_phrase(profile) or "the referenced context"
+    if matching and not non_matching:
+        item, cleaned = matching[0]
+        return f"Yes. The evidence only shows {requested_attribute_label(profile) or 'that'} in {context_phrase}: {cleaned} [{item.citation_id}]".strip()
+    if matching and non_matching:
+        match_item, match_cleaned = matching[0]
+        other_item, other_cleaned = non_matching[0]
+        return (
+            f"No. The evidence shows {match_cleaned} [{match_item.citation_id}] "
+            f"and also {other_cleaned} [{other_item.citation_id}]."
+        ).strip()
+    return _render_boolean_answer(
+        top_support=top_support,
+        cleaned_snippets=cleaned_snippets,
+    )
+
+
+def _render_entity_context_answer(
+    *,
+    top_support: list[tuple[float, EvidenceItem, str]],
+    cleaned_snippets: dict[str, str],
+) -> str:
+    score, item, _ = top_support[0]
+    del score
+    cleaned = cleaned_snippets[item.chunk_id]
+    return f"Yes. {cleaned} [{item.citation_id}]".strip()
+
+
+def _count_candidate_items(text: str) -> list[str]:
+    raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    candidates: list[str] = []
+    action_starts = (
+        "architected",
+        "built",
+        "contributed",
+        "created",
+        "delivered",
+        "designed",
+        "developed",
+        "enhanced",
+        "implemented",
+        "integrated",
+        "optimized",
+    )
+    for index, raw_line in enumerate(raw_lines):
+        line = re.sub(r"^[\s:,\-*\u2022\u00B7]+", "", raw_line).strip()
+        if (
+            not line
+            or _is_heading_only_line(line)
+            or "@" in line
+            or re.search(r"\b\d{4}\b", line)
+        ):
+            if ":" not in line or _is_heading_only_line(line) or "@" in line:
+                continue
+        next_line = raw_lines[index + 1].strip() if index + 1 < len(raw_lines) else ""
+        previous_line = raw_lines[index - 1].strip() if index > 0 else ""
+        if len(line.split()) > 10:
+            continue
+        if _normalize_line(line).startswith(action_starts):
+            continue
+        if ":" in line:
+            candidates.append(line.rstrip("."))
+            continue
+        if (
+            next_line.lstrip().startswith(("-", "*", "•"))
+            or _is_heading_only_line(previous_line)
+            or "–" in line
+            or "-" in line
+        ):
+            candidates.append(line.rstrip("."))
+    return _dedupe_preserving_order(candidates)
+
+
+def _render_count_answer(
+    *,
+    profile: QueryProfile,
+    top_support: list[tuple[float, EvidenceItem, str]],
+) -> str:
+    countable_items: list[str] = []
+    citations: list[str] = []
+    for _, item, _ in top_support:
+        citations.append(f"[{item.citation_id}]")
+        countable_items.extend(_count_candidate_items(item.text))
+
+    countable_items = _dedupe_preserving_order(countable_items)
+    label = requested_attribute_label(profile) or "items"
+    if not countable_items:
+        fallback_item = top_support[0][1]
+        return f"I found relevant {label}, but not enough structured evidence to count them confidently. [{fallback_item.citation_id}]"
+
+    rendered_label = (
+        label.rstrip("s") if len(countable_items) == 1 else _format_collection_label(label)
+    )
+
+    return (
+        f"The evidence shows {len(countable_items)} {rendered_label}: "
+        f"{'; '.join(countable_items[:5])} {' '.join(_dedupe_preserving_order(citations))}"
+    ).strip()
+
+
 def _render_boolean_answer(
     *,
     top_support: list[tuple[float, EvidenceItem, str]],
@@ -386,6 +633,31 @@ def _render_grounded_answer(
         cleaned_snippets[item.chunk_id] = cleaned
         rendered_parts.append(f"{cleaned} [{item.citation_id}]")
 
+    if is_action_query(profile):
+        return _render_action_answer(
+            profile=profile,
+            top_support=top_support,
+        ), cleaned_snippets
+
+    if is_comparison_query(profile):
+        return _render_comparison_answer(
+            profile=profile,
+            top_support=top_support,
+            cleaned_snippets=cleaned_snippets,
+        ), cleaned_snippets
+
+    if is_entity_context_query(profile):
+        return _render_entity_context_answer(
+            top_support=top_support,
+            cleaned_snippets=cleaned_snippets,
+        ), cleaned_snippets
+
+    if is_count_query(profile):
+        return _render_count_answer(
+            profile=profile,
+            top_support=top_support,
+        ), cleaned_snippets
+
     if is_boolean_query(profile):
         return _render_boolean_answer(
             top_support=top_support,
@@ -396,6 +668,12 @@ def _render_grounded_answer(
         return _render_summary_answer(
             top_support=top_support,
             cleaned_snippets=cleaned_snippets,
+        ), cleaned_snippets
+
+    if is_collection_query(profile):
+        return _render_collection_answer(
+            profile=profile,
+            top_support=top_support,
         ), cleaned_snippets
 
     if is_field_extraction_query(profile) and len(rendered_parts) == 1:
@@ -419,10 +697,14 @@ def _render_grounded_answer(
 
 
 def _field_query_support_limit(profile: QueryProfile) -> int:
+    if is_action_query(profile) or is_comparison_query(profile) or is_entity_context_query(profile):
+        return 4
+    if is_count_query(profile):
+        return 4
     if not is_field_extraction_query(profile):
         return 3
     if is_collection_query(profile):
-        return 3
+        return 4
     return 1
 
 
@@ -467,7 +749,13 @@ def generate_grounded_draft(
             "Grounded generation could not derive query-aligned support."
         )
 
-    if is_field_extraction_query(profile):
+    if (
+        is_field_extraction_query(profile)
+        or is_action_query(profile)
+        or is_comparison_query(profile)
+        or is_entity_context_query(profile)
+        or is_count_query(profile)
+    ):
         strong_support = [
             entry
             for entry in ranked_support
@@ -479,6 +767,13 @@ def generate_grounded_draft(
 
     best_score = ranked_support[0][0]
     support_threshold = max(best_score * 0.6, best_score - 5.0)
+    if (
+        is_action_query(profile)
+        or is_comparison_query(profile)
+        or is_entity_context_query(profile)
+        or is_count_query(profile)
+    ):
+        support_threshold = max(best_score * 0.45, best_score - 6.0)
     top_support: list[tuple[float, EvidenceItem, str]] = []
     covered_query_terms: set[str] = set()
     max_support_items = _field_query_support_limit(profile)

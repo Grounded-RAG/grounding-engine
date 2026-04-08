@@ -15,8 +15,12 @@ from app.core.query_analysis import (
     QueryPlan,
     build_query_plan,
     has_strong_intent_signal,
+    is_action_query,
     is_collection_query,
+    is_comparison_query,
+    is_count_query,
     is_dataset_summary_query,
+    is_entity_context_query,
     is_field_extraction_query,
     score_text_against_query,
     tokenize_meaningful_terms,
@@ -112,6 +116,26 @@ def _intent_bonus_for_hit(*, hit: FusedRetrievedChunk, query_plan: QueryPlan) ->
 
     if is_field_extraction_query(profile) and not is_collection_query(profile):
         return 10.0 if strong_intent else -5.0
+    if is_action_query(profile):
+        if strong_intent and structured:
+            return 9.0
+        if strong_intent:
+            return 4.5
+        return -3.0
+    if is_comparison_query(profile):
+        if strong_intent and structured:
+            return 8.0
+        if strong_intent:
+            return 3.5
+        return -2.0
+    if is_entity_context_query(profile):
+        return 7.0 if strong_intent else -2.5
+    if is_count_query(profile):
+        if strong_intent and structured:
+            return 8.0
+        if strong_intent:
+            return 3.5
+        return -3.0
     if is_collection_query(profile):
         if strong_intent and structured:
             return 8.0

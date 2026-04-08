@@ -5,275 +5,78 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Any
-from typing import Literal
+from typing import Any, Literal
 
 
-QueryKind = Literal["summary", "definition", "boolean", "list", "lookup", "open"]
+QueryKind = Literal[
+    "summary",
+    "definition",
+    "boolean",
+    "list",
+    "lookup",
+    "action",
+    "comparison",
+    "entity",
+    "count",
+    "open",
+]
 
 _STOPWORDS = {
-    "a",
-    "about",
-    "an",
-    "and",
-    "are",
-    "at",
-    "by",
-    "can",
-    "could",
-    "do",
-    "does",
-    "for",
-    "from",
-    "give",
-    "had",
-    "has",
-    "have",
-    "he",
-    "hello",
-    "help",
-    "her",
-    "hers",
-    "him",
-    "his",
-    "how",
-    "i",
-    "in",
-    "into",
-    "is",
-    "it",
-    "its",
-    "just",
-    "me",
-    "my",
-    "need",
-    "of",
-    "on",
-    "or",
-    "our",
-    "please",
-    "she",
-    "show",
-    "tell",
-    "than",
-    "that",
-    "the",
-    "their",
-    "them",
-    "there",
-    "these",
-    "they",
-    "this",
-    "those",
-    "to",
-    "us",
-    "was",
-    "we",
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "with",
-    "would",
-    "you",
-    "your",
+    "a", "about", "an", "and", "are", "at", "by", "can", "could", "do", "does",
+    "for", "from", "had", "has", "have", "he", "hello", "help", "her", "hers",
+    "him", "his", "how", "i", "in", "into", "is", "it", "its", "just", "me",
+    "my", "of", "on", "or", "our", "please", "she", "than", "that", "the",
+    "their", "them", "there", "these", "they", "this", "those", "to", "us",
+    "was", "we", "what", "when", "where", "which", "who", "with", "would",
+    "you", "your",
 }
 
 _ATTRIBUTE_NOISE_TOKENS = {
-    "attached",
-    "dataset",
-    "datasets",
-    "document",
-    "documents",
-    "entry",
-    "file",
-    "files",
-    "item",
-    "items",
-    "person",
-    "people",
-    "profile",
-    "record",
-    "records",
-    "resume",
-    "thing",
+    "attached", "dataset", "datasets", "document", "documents", "entry", "file",
+    "files", "item", "items", "person", "people", "profile", "record", "records",
+    "resume", "thing",
 }
 
 _CANONICAL_ATTRIBUTE_SYNONYMS = {
     "name": {"full name", "fullname", "identity", "name", "owner", "title"},
-    "contact": {
-        "address",
-        "contact",
-        "email",
-        "github",
-        "linkedin",
-        "mail",
-        "number",
-        "phone",
-        "website",
-    },
-    "date": {
-        "date",
-        "deadline",
-        "duration",
-        "month",
-        "period",
-        "schedule",
-        "time",
-        "timeline",
-        "year",
-    },
+    "contact": {"address", "contact", "email", "github", "linkedin", "mail", "number", "phone", "website"},
+    "date": {"date", "deadline", "duration", "month", "period", "schedule", "time", "timeline", "year"},
     "location": {"address", "city", "country", "location", "place", "where"},
 }
 
 _COLLECTION_ATTRIBUTE_HINTS = {
-    "achievement",
-    "achievements",
-    "award",
-    "awards",
-    "benefit",
-    "benefits",
-    "capability",
-    "capabilities",
-    "certificate",
-    "certificates",
-    "component",
-    "components",
-    "feature",
-    "features",
-    "framework",
-    "frameworks",
-    "language",
-    "languages",
-    "project",
-    "projects",
-    "requirement",
-    "requirements",
-    "responsibility",
-    "responsibilities",
-    "role",
-    "roles",
-    "section",
-    "sections",
-    "service",
-    "services",
-    "skill",
-    "skills",
-    "technology",
-    "technologies",
-    "tool",
-    "tools",
+    "achievement", "achievements", "award", "awards", "benefit", "benefits",
+    "capability", "capabilities", "certificate", "certificates", "component",
+    "components", "feature", "features", "framework", "frameworks", "language",
+    "languages", "project", "projects", "requirement", "requirements",
+    "responsibility", "responsibilities", "role", "roles", "section", "sections",
+    "service", "services", "skill", "skills", "technology", "technologies",
+    "tool", "tools",
 }
 
 _GENERIC_QUERY_VOCABULARY = {
-    "about",
-    "achievement",
-    "achievements",
-    "address",
-    "answer",
-    "attribute",
-    "attributes",
-    "award",
-    "awards",
-    "boolean",
-    "candidate",
-    "categories",
-    "category",
-    "contact",
-    "contain",
-    "contains",
-    "content",
-    "cover",
-    "covers",
-    "dataset",
-    "datasets",
-    "date",
-    "definition",
-    "details",
-    "document",
-    "documents",
-    "education",
-    "email",
-    "employment",
-    "experience",
-    "feature",
-    "features",
-    "field",
-    "fields",
-    "file",
-    "files",
-    "framework",
-    "frameworks",
-    "full",
-    "fullname",
-    "github",
-    "history",
-    "identity",
-    "include",
-    "includes",
-    "information",
-    "introduction",
-    "item",
-    "items",
-    "language",
-    "languages",
-    "list",
-    "location",
-    "mail",
-    "meaning",
-    "model",
-    "name",
-    "number",
-    "overview",
-    "owner",
-    "pattern",
-    "person",
-    "people",
-    "phone",
-    "pricing",
-    "professional",
-    "profile",
-    "project",
-    "projects",
-    "query",
-    "record",
-    "records",
-    "recognition",
-    "refers",
-    "responsibilities",
-    "responsibility",
-    "resume",
-    "role",
-    "roles",
-    "section",
-    "sections",
-    "service",
-    "services",
-    "skill",
-    "skills",
-    "stack",
-    "subject",
-    "summarize",
-    "summary",
-    "support",
-    "supported",
-    "supports",
-    "technical",
-    "technology",
-    "technologies",
-    "title",
-    "tool",
-    "tools",
-    "website",
-    "work",
-    "worked",
+    "about", "achievement", "achievements", "address", "answer", "attribute",
+    "attributes", "award", "awards", "categories", "category", "certificate",
+    "certificates", "compare", "comparison", "contact", "contain", "contains",
+    "count", "dataset", "datasets", "date", "definition", "details", "difference",
+    "document", "documents", "education", "email", "employment", "entity",
+    "experience", "feature", "features", "field", "fields", "file", "files",
+    "framework", "frameworks", "fullname", "github", "history", "identity",
+    "include", "includes", "information", "introduction", "item", "items",
+    "language", "languages", "list", "location", "mail", "meaning", "mention",
+    "model", "name", "number", "only", "other", "overview", "owner", "pattern",
+    "person", "people", "phone", "pricing", "profile", "project", "projects",
+    "record", "records", "recognition", "refers", "responsibilities",
+    "responsibility", "resume", "role", "roles", "section", "sections", "service",
+    "services", "skill", "skills", "summary", "support", "supported", "supports",
+    "technical", "technology", "technologies", "title", "tool", "tools", "total",
+    "website", "work", "worked",
 }
 
 _ATTRIBUTE_EXPANSION_HINTS = {
     "award": {"achievement", "recognition", "honor"},
-    "awards": {"achievement", "recognition", "honor"},
     "contact": {"email", "phone", "address"},
+    "count": {"number", "total"},
     "experience": {"employment", "professional", "role", "work"},
     "history": {"employment", "experience", "timeline"},
     "name": {"full name", "identity", "title"},
@@ -288,86 +91,49 @@ _ATTRIBUTE_EXPANSION_HINTS = {
 }
 
 _SUMMARY_QUERY_NOISE = {
-    "attached",
-    "contain",
-    "contains",
-    "cover",
-    "covers",
-    "data",
-    "dataset",
-    "datasets",
-    "document",
-    "documents",
-    "file",
-    "files",
-    "include",
-    "includes",
-    "information",
-    "item",
-    "items",
-    "overview",
-    "record",
-    "records",
-    "summary",
+    "attached", "contain", "contains", "cover", "covers", "data", "dataset",
+    "datasets", "document", "documents", "file", "files", "include", "includes",
+    "information", "item", "items", "overview", "record", "records", "summary",
 }
 
 _SUMMARY_QUERY_PATTERN = re.compile(
-    r"^(?:"
-    r"what\s+is\s+(?:the\s+)?(?:dataset|document|file|record|profile|resume)\s+about|"
+    r"^(?:what\s+is\s+(?:the\s+)?(?:dataset|document|file|record|profile|resume)\s+about|"
     r"summari[sz]e\s+(?:the\s+)?(?:dataset|document|file|record|profile|resume)|"
     r"what\s+does\s+(?:the\s+)?(?:dataset|document|file|record|profile|resume)\s+(?:contain|cover)|"
-    r"give\s+me\s+an?\s+overview(?:\s+of\s+.+)?"
-    r")\b"
+    r"give\s+me\s+an?\s+overview(?:\s+of\s+.+)?)\b"
 )
-_DEFINITION_QUERY_PATTERN = re.compile(
-    r"^(?:what\s+(?:is|does)\s+.+?\s+(?:mean|means)\??|define\s+.+)$"
-)
-_BOOLEAN_QUERY_PATTERN = re.compile(
-    r"^(?:is|are|was|were|do|does|did|has|have|had|can|could|should|would)\b"
-)
-_LIST_QUERY_PATTERN = re.compile(
-    r"^(?:what\s+are|which|list|show\s+me|give\s+me|tell\s+me)\b"
-)
-
+_DEFINITION_QUERY_PATTERN = re.compile(r"^(?:what\s+(?:is|does)\s+.+?\s+(?:mean|means)\??|define\s+.+)$")
+_BOOLEAN_QUERY_PATTERN = re.compile(r"^(?:is|are|was|were|do|does|did|has|have|had|can|could|should|would)\b")
+_LIST_QUERY_PATTERN = re.compile(r"^(?:what\s+are|which|list|show\s+me|give\s+me|tell\s+me)\b")
+_COUNT_QUERY_PATTERN = re.compile(r"^(?:how\s+many|number\s+of|count\s+(?:the\s+)?)\b")
+_ACTION_QUERY_PATTERN = re.compile(r"^(?:what\s+(?:did|does)\b|describe\b|summari[sz]e\b).*\b(?:do|did|does|work|responsibilit(?:y|ies)|contribution|contributions|task|tasks)\b")
 _ATTRIBUTE_PATTERNS = [
-    re.compile(
-        r"^(?:what|which)\s+(?:is|are|was|were)\s+(?:the\s+)?(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"
-    ),
-    re.compile(
-        r"^(?:list|show\s+me|give\s+me|tell\s+me)\s+(?:the\s+)?(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"
-    ),
-    re.compile(
-        r"^(?:what|which)\s+(?P<attribute>.+?)\s+(?:does|do|did|has|have|had|can|could|should|would)\b"
-    ),
-    re.compile(
-        r"^(?:who\s+is\s+(?:the\s+)?)(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"
-    ),
+    re.compile(r"^(?:what|which)\s+(?:is|are|was|were)\s+(?:the\s+)?(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"),
+    re.compile(r"^(?:list|show\s+me|give\s+me|tell\s+me)\s+(?:the\s+)?(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"),
+    re.compile(r"^(?:how\s+many|number\s+of|count\s+(?:the\s+)?)\s*(?P<attribute>.+?)(?:\s+(?:are|does|do|did|has|have|had|can|could|should|would)\b|$)"),
+    re.compile(r"^(?:what|which)\s+(?P<attribute>.+?)\s+(?:does|do|did|has|have|had|can|could|should|would)\b"),
+    re.compile(r"^(?:who\s+is\s+(?:the\s+)?)(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"),
 ]
-_FOLLOW_UP_PREFIXES = (
-    "and ",
-    "also ",
-    "how about",
-    "what about",
-    "what else",
-    "and what",
-    "and how",
-)
-_REFERENCE_ONLY_PATTERN = re.compile(
-    r"^(?:and\s+)?(?:what\s+about\s+)?(?:it|that|this|those|these|them|there|here)\b"
-)
-
-_NAME_LINE_PATTERN = re.compile(
-    r"^[A-Z][A-Za-z'\u2019-]+(?:\s+[A-Z][A-Za-z'\u2019-]+){1,4}$"
-)
+_FOLLOW_UP_PREFIXES = ("and ", "also ", "how about", "what about", "what else", "and what", "and how")
+_REFERENCE_ONLY_PATTERN = re.compile(r"^(?:and\s+)?(?:what\s+about\s+)?(?:it|that|this|those|these|them|there|here)\b")
+_REFERENCE_MARKER_PATTERN = re.compile(r"\b(?:it|that|this|those|these|them|there|here|former|latter|second|first)\b")
+_CONTEXT_PREPOSITION_PATTERN = re.compile(r"\b(?:at|in|on|for|with|about|under|within|inside)\s+(?P<context>.+)$")
+_CONTEXT_BREAK_TOKENS = {"and", "another", "any", "because", "but", "else", "if", "only", "or", "than", "there", "whether"}
+_ACTION_HINT_TERMS = {
+    "action", "actions", "architected", "build", "built", "contribute",
+    "contributed", "contribution", "contributions", "create", "created",
+    "deliver", "delivered", "design", "designed", "develop", "developed", "do",
+    "did", "implement", "implemented", "integrated", "lead", "led", "optimize",
+    "optimized", "responsibilities", "responsibility", "support", "supported",
+    "task", "tasks", "work", "worked",
+}
+_COMPARISON_MARKERS = {"another", "compare", "compared", "difference", "different", "else", "only", "other", "outside", "same", "versus", "vs"}
+_ENTITY_CONTEXT_HINTS = {"build", "built", "contribute", "contributed", "mention", "mentioned", "support", "supported", "use", "used", "work", "worked"}
+_NAME_LINE_PATTERN = re.compile(r"^[A-Z][A-Za-z'\u2019-]+(?:\s+[A-Z][A-Za-z'\u2019-]+){1,4}$")
 _EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 _PHONE_PATTERN = re.compile(r"(?:\+?\d[\d\s().-]{6,}\d)")
-_DATE_PATTERN = re.compile(
-    r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*)\b",
-    re.IGNORECASE,
-)
-_HEADING_CANDIDATE_PATTERN = re.compile(
-    r"^(?:[A-Z][A-Z0-9/&,\- ]{2,}|[A-Z][A-Za-z0-9/&,\- ]{1,48}:)\s*$"
-)
+_DATE_PATTERN = re.compile(r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*)\b", re.IGNORECASE)
+_HEADING_CANDIDATE_PATTERN = re.compile(r"^(?:[A-Z][A-Z0-9/&,\- ]{2,}|[A-Z][A-Za-z0-9/&,\- ]{1,48}:)\s*$")
 
 
 @dataclass(frozen=True)
@@ -379,6 +145,7 @@ class QueryProfile:
     terms: frozenset[str]
     expanded_terms: frozenset[str]
     attribute_terms: frozenset[str]
+    context_terms: frozenset[str]
     semantic_tags: frozenset[str]
     query_kind: QueryKind
 
@@ -426,12 +193,7 @@ def _dedupe_texts(values: list[str]) -> tuple[str, ...]:
     return tuple(deduped)
 
 
-def _fuzzy_token_match(
-    candidate: str,
-    target: str,
-    *,
-    threshold: float = 0.84,
-) -> bool:
+def _fuzzy_token_match(candidate: str, target: str, *, threshold: float = 0.84) -> bool:
     normalized_candidate = _normalize_token(candidate)
     normalized_target = _normalize_token(target)
     if not normalized_candidate or not normalized_target:
@@ -440,9 +202,7 @@ def _fuzzy_token_match(
         return True
     if abs(len(normalized_candidate) - len(normalized_target)) > 3:
         return False
-    return (
-        SequenceMatcher(a=normalized_candidate, b=normalized_target).ratio() >= threshold
-    )
+    return SequenceMatcher(a=normalized_candidate, b=normalized_target).ratio() >= threshold
 
 
 def _correct_query_token(token: str) -> str:
@@ -460,9 +220,7 @@ def _correct_query_token(token: str) -> str:
     best_match = normalized
     best_score = 0.0
     for candidate in _GENERIC_QUERY_VOCABULARY:
-        if abs(len(candidate) - len(normalized)) > 2:
-            continue
-        if candidate[:1] != normalized[:1]:
+        if abs(len(candidate) - len(normalized)) > 2 or candidate[:1] != normalized[:1]:
             continue
         score = SequenceMatcher(a=normalized, b=candidate).ratio()
         if score > best_score:
@@ -483,21 +241,15 @@ def _token_expansion_forms(token: str) -> set[str]:
     if normalized.endswith("ing") and len(normalized) > 5:
         stem = normalized[:-3]
         if len(stem) >= 3:
-            variants.add(stem)
-            variants.add(f"{stem}e")
-            variants.add(f"{stem}er")
+            variants.update({stem, f"{stem}e", f"{stem}er"})
     elif normalized.endswith(("er", "or", "ed")) and len(normalized) > 4:
         stem = normalized[:-2]
         if len(stem) >= 3:
-            variants.add(stem)
-            variants.add(f"{stem}e")
-            variants.add(f"{stem}ing")
+            variants.update({stem, f"{stem}e", f"{stem}ing"})
 
     for token_variant in list(variants):
-        hints = _ATTRIBUTE_EXPANSION_HINTS.get(token_variant)
-        if hints:
-            for hint in hints:
-                variants.add(_normalize_token(hint))
+        for hint in _ATTRIBUTE_EXPANSION_HINTS.get(token_variant, set()):
+            variants.add(_normalize_token(hint))
 
     return {variant for variant in variants if len(variant) >= 4}
 
@@ -511,12 +263,7 @@ def _terms_contain_token(terms: set[str], token: str) -> bool:
     return any(_fuzzy_token_match(candidate, normalized_token) for candidate in terms)
 
 
-def _contains_phrase(
-    *,
-    normalized_text: str,
-    terms: set[str],
-    phrase: str,
-) -> bool:
+def _contains_phrase(*, normalized_text: str, terms: set[str], phrase: str) -> bool:
     normalized_phrase = _normalize_text(phrase)
     if not normalized_phrase:
         return False
@@ -527,14 +274,10 @@ def _contains_phrase(
         for token in normalized_phrase.split()
         if _normalize_token(token)
     ]
-    return bool(phrase_tokens) and all(
-        _terms_contain_token(terms, token) for token in phrase_tokens
-    )
+    return bool(phrase_tokens) and all(_terms_contain_token(terms, token) for token in phrase_tokens)
 
 
 def _looks_like_name_line(line: str) -> bool:
-    """Return whether a line looks like a real person name instead of a section heading."""
-
     candidate = line.strip()
     if not candidate or candidate.isupper() or any(char.isdigit() for char in candidate):
         return False
@@ -542,8 +285,6 @@ def _looks_like_name_line(line: str) -> bool:
 
 
 def _is_heading_only_line(line: str) -> bool:
-    """Return whether one short line looks like a heading rather than body text."""
-
     candidate = line.strip().rstrip(":")
     return bool(candidate and _HEADING_CANDIDATE_PATTERN.fullmatch(candidate))
 
@@ -561,8 +302,31 @@ def tokenize_meaningful_terms(text: str) -> set[str]:
     return normalized_terms
 
 
+def _extract_context_terms(*, normalized_text: str) -> set[str]:
+    """Extract generic contextual targets like company, project, or topic phrases."""
+
+    context_terms: set[str] = set()
+    for match in _CONTEXT_PREPOSITION_PATTERN.finditer(normalized_text):
+        raw_context = match.group("context").strip()
+        tokens: list[str] = []
+        for token in raw_context.split():
+            normalized = _normalize_token(token)
+            if not normalized:
+                continue
+            if normalized in _CONTEXT_BREAK_TOKENS:
+                break
+            if normalized in _STOPWORDS:
+                continue
+            tokens.append(normalized)
+            if len(tokens) >= 4:
+                break
+        if tokens:
+            context_terms.add(" ".join(tokens))
+    return context_terms
+
+
 def _extract_attribute_terms(*, normalized_text: str, terms: set[str]) -> set[str]:
-    """Extract generic attribute phrases like 'work experience' or 'error code'."""
+    """Extract generic attribute phrases like work experience or pricing model."""
 
     attribute_terms: set[str] = set()
 
@@ -571,11 +335,16 @@ def _extract_attribute_terms(*, normalized_text: str, terms: set[str]) -> set[st
         if not match:
             continue
         raw_attribute = match.group("attribute").strip()
-        cleaned_tokens = [
-            token
-            for token in raw_attribute.split()
-            if token not in _ATTRIBUTE_NOISE_TOKENS and token not in _STOPWORDS
-        ]
+        cleaned_tokens: list[str] = []
+        for token in raw_attribute.split():
+            normalized = _normalize_token(token)
+            if (
+                not normalized
+                or normalized in _ATTRIBUTE_NOISE_TOKENS
+                or normalized in _STOPWORDS
+            ):
+                continue
+            cleaned_tokens.append(normalized)
         if cleaned_tokens:
             attribute_terms.add(" ".join(cleaned_tokens[:4]))
 
@@ -619,7 +388,14 @@ def _is_summary_query(*, normalized_text: str, terms: set[str]) -> bool:
     )
     summary_like = any(
         token in normalized_text
-        for token in {" about", " contain", " cover", "overview", "summarize", "summary"}
+        for token in {
+            " about",
+            " contain",
+            " cover",
+            "overview",
+            "summarize",
+            "summary",
+        }
     ) or normalized_text.endswith("about")
     return dataset_like and summary_like
 
@@ -636,19 +412,45 @@ def _attribute_is_collection_like(attribute: str) -> bool:
     return any(token in _COLLECTION_ATTRIBUTE_HINTS for token in tokens)
 
 
+def _comparison_marker_present(*, normalized_text: str, terms: set[str]) -> bool:
+    return any(_terms_contain_token(terms, marker) for marker in _COMPARISON_MARKERS) or any(
+        marker in normalized_text
+        for marker in (" only ", " other ", " another ", " else ", " vs ", " versus ")
+    )
+
+
 def _classify_query_kind(
     *,
     normalized_text: str,
     terms: set[str],
     attribute_terms: set[str],
+    semantic_tags: set[str],
+    context_terms: set[str],
 ) -> QueryKind:
     """Map a query into a generic question shape."""
+
+    del semantic_tags  # Captured via attribute terms and downstream scoring.
 
     if _is_summary_query(normalized_text=normalized_text, terms=terms):
         return "summary"
     if _DEFINITION_QUERY_PATTERN.match(normalized_text):
         return "definition"
-    if _BOOLEAN_QUERY_PATTERN.match(normalized_text):
+    if _COUNT_QUERY_PATTERN.match(normalized_text):
+        return "count"
+
+    boolean_like = bool(_BOOLEAN_QUERY_PATTERN.match(normalized_text))
+    if boolean_like and _comparison_marker_present(
+        normalized_text=normalized_text,
+        terms=terms,
+    ):
+        return "comparison"
+    if _ACTION_QUERY_PATTERN.match(normalized_text):
+        return "action"
+    if boolean_like and context_terms and any(
+        _terms_contain_token(terms, token) for token in _ENTITY_CONTEXT_HINTS
+    ):
+        return "entity"
+    if boolean_like:
         return "boolean"
     if _LIST_QUERY_PATTERN.match(normalized_text):
         return "list" if attribute_terms else "open"
@@ -656,6 +458,10 @@ def _classify_query_kind(
         return "list"
     if attribute_terms:
         return "lookup"
+    if context_terms and any(
+        _terms_contain_token(terms, token) for token in _ACTION_HINT_TERMS
+    ):
+        return "action"
     return "open"
 
 
@@ -667,10 +473,13 @@ def _is_follow_up_like_query(profile: QueryProfile) -> bool:
         return True
     if _REFERENCE_ONLY_PATTERN.match(normalized):
         return True
-    vague_term_count = len(profile.terms)
-    if vague_term_count <= 2 and not profile.attribute_terms:
+    if _REFERENCE_MARKER_PATTERN.search(normalized):
         return True
-    return False
+    return (
+        len(profile.terms) <= 2
+        and not profile.attribute_terms
+        and not profile.context_terms
+    )
 
 
 def _resolve_follow_up_context(
@@ -688,18 +497,19 @@ def _resolve_follow_up_context(
 
     previous_profile = build_query_profile(previous_user_query)
     context_fragments: list[str] = []
-    if previous_profile.attribute_terms and not profile.attribute_terms:
+    if not profile.attribute_terms and previous_profile.attribute_terms:
         context_fragments.extend(sorted(previous_profile.attribute_terms))
-    if not context_fragments and previous_profile.semantic_tags and not profile.semantic_tags:
+    if not profile.context_terms and previous_profile.context_terms:
+        context_fragments.extend(sorted(previous_profile.context_terms))
+    if not profile.semantic_tags and previous_profile.semantic_tags:
         context_fragments.extend(sorted(previous_profile.semantic_tags))
     if not context_fragments:
         context_fragments.extend(sorted(previous_profile.terms)[:4])
     if not context_fragments:
         return query_text, False
 
-    context_text = " ".join(context_fragments)
-    resolved_query_text = f"{query_text.strip()} context {context_text}".strip()
-    return resolved_query_text, True
+    resolved_query_text = f"{query_text.strip()} context {' '.join(context_fragments)}"
+    return resolved_query_text.strip(), True
 
 
 def build_query_profile(query_text: str) -> QueryProfile:
@@ -707,6 +517,7 @@ def build_query_profile(query_text: str) -> QueryProfile:
 
     normalized_text = _normalize_text(query_text)
     terms = tokenize_meaningful_terms(query_text)
+    context_terms = _extract_context_terms(normalized_text=normalized_text)
     attribute_terms = _extract_attribute_terms(
         normalized_text=normalized_text,
         terms=terms,
@@ -719,17 +530,36 @@ def build_query_profile(query_text: str) -> QueryProfile:
         normalized_text=normalized_text,
         terms=terms,
         attribute_terms=attribute_terms,
+        semantic_tags=semantic_tags,
+        context_terms=context_terms,
     )
 
+    mutable_attribute_terms = set(attribute_terms)
+    if query_kind == "action" and not mutable_attribute_terms:
+        mutable_attribute_terms.add("responsibilities")
+    if query_kind == "comparison" and not mutable_attribute_terms:
+        if any(
+            _terms_contain_token(terms, token)
+            for token in {"career", "employment", "experience", "job", "role", "work"}
+        ):
+            mutable_attribute_terms.add("experience")
+
     expanded_terms = set(terms)
-    for attribute in attribute_terms:
+    for attribute in mutable_attribute_terms:
         expanded_terms.update(tokenize_meaningful_terms(attribute))
         for token in attribute.split():
             expanded_terms.update(_token_expansion_forms(token))
 
+    for context in context_terms:
+        expanded_terms.update(tokenize_meaningful_terms(context))
+        for token in context.split():
+            expanded_terms.update(_token_expansion_forms(token))
+
     for semantic_tag in semantic_tags:
         expanded_terms.update(
-            tokenize_meaningful_terms(" ".join(_CANONICAL_ATTRIBUTE_SYNONYMS[semantic_tag]))
+            tokenize_meaningful_terms(
+                " ".join(_CANONICAL_ATTRIBUTE_SYNONYMS[semantic_tag])
+            )
         )
     for term in list(terms):
         expanded_terms.update(_token_expansion_forms(term))
@@ -737,16 +567,38 @@ def build_query_profile(query_text: str) -> QueryProfile:
     if query_kind == "summary":
         expanded_terms.update({"overview", "summary", "introduction", "profile"})
     elif query_kind == "definition":
-        expanded_terms.update({"definition", "means", "refers", "explains"})
+        expanded_terms.update({"definition", "explains", "means", "refers"})
     elif query_kind == "list":
-        expanded_terms.update({"list", "items", "categories"})
+        expanded_terms.update({"categories", "items", "list"})
+    elif query_kind == "count":
+        expanded_terms.update({"count", "number", "total"})
+    elif query_kind == "action":
+        expanded_terms.update(
+            {
+                "build",
+                "contribution",
+                "contributions",
+                "develop",
+                "developed",
+                "responsibilities",
+                "responsibility",
+                "task",
+                "tasks",
+                "work",
+            }
+        )
+    elif query_kind == "comparison":
+        expanded_terms.update({"another", "compare", "else", "only", "other"})
+    elif query_kind == "entity":
+        expanded_terms.update({"mention", "project", "support", "used", "work"})
 
     return QueryProfile(
         raw_text=query_text,
         normalized_text=normalized_text,
         terms=frozenset(terms),
         expanded_terms=frozenset(expanded_terms),
-        attribute_terms=frozenset(attribute_terms),
+        attribute_terms=frozenset(mutable_attribute_terms),
+        context_terms=frozenset(context_terms),
         semantic_tags=frozenset(semantic_tags),
         query_kind=query_kind,
     )
@@ -757,13 +609,16 @@ def _build_retrieval_query_variants(profile: QueryProfile) -> tuple[str, ...]:
 
     variants: list[str] = [build_retrieval_query_text(profile)]
     core_terms = sorted(profile.terms)
+    context_terms = sorted(profile.context_terms)
 
     if profile.attribute_terms:
         for attribute in sorted(profile.attribute_terms)[:2]:
             attribute_terms = tokenize_meaningful_terms(attribute)
             remaining_terms = [
-                term for term in core_terms if term not in attribute_terms
-            ][:4]
+                term
+                for term in [*context_terms, *core_terms]
+                if term not in attribute_terms
+            ][:5]
             variants.append(" ".join([attribute, *remaining_terms]).strip())
 
     if profile.semantic_tags:
@@ -772,7 +627,9 @@ def _build_retrieval_query_variants(profile: QueryProfile) -> tuple[str, ...]:
                 " ".join(
                     [
                         semantic_tag,
-                        *sorted(_CANONICAL_ATTRIBUTE_SYNONYMS.get(semantic_tag, set()))[:2],
+                        *sorted(
+                            _CANONICAL_ATTRIBUTE_SYNONYMS.get(semantic_tag, set())
+                        )[:2],
                         *core_terms[:3],
                     ]
                 ).strip()
@@ -791,8 +648,40 @@ def _build_retrieval_query_variants(profile: QueryProfile) -> tuple[str, ...]:
         if collection_terms:
             variants.append(" ".join([*collection_terms, "list", "items"]).strip())
 
-    if is_boolean_query(profile) and profile.attribute_terms:
-        variants.append(" ".join(sorted(profile.attribute_terms)).strip())
+    if is_count_query(profile):
+        count_terms = sorted(profile.attribute_terms) or core_terms[:3]
+        if count_terms:
+            variants.append(" ".join([*count_terms, "count", "total", "number"]).strip())
+
+    if is_action_query(profile):
+        action_terms = sorted(profile.attribute_terms) or ["responsibilities"]
+        variants.append(
+            " ".join(
+                [
+                    *context_terms[:3],
+                    *action_terms[:2],
+                    "responsibilities",
+                    "contributions",
+                    "tasks",
+                ]
+            ).strip()
+        )
+
+    if is_entity_context_query(profile):
+        variants.append(
+            " ".join([*context_terms[:3], *core_terms[:3], "work", "project", "mention"]).strip()
+        )
+
+    if is_comparison_query(profile):
+        comparison_terms = sorted(profile.attribute_terms) or core_terms[:3]
+        variants.append(
+            " ".join(
+                [*context_terms[:3], *comparison_terms[:2], "compare", "other", "another"]
+            ).strip()
+        )
+
+    if is_boolean_query(profile) and (profile.attribute_terms or profile.context_terms):
+        variants.append(" ".join([*sorted(profile.attribute_terms), *context_terms]).strip())
 
     return _dedupe_texts(variants)
 
@@ -804,6 +693,10 @@ def explain_query_plan(plan: QueryPlan) -> str:
     if plan.profile.attribute_terms:
         explanation_parts.append(
             "attributes=" + ", ".join(sorted(plan.profile.attribute_terms))
+        )
+    if plan.profile.context_terms:
+        explanation_parts.append(
+            "context=" + ", ".join(sorted(plan.profile.context_terms))
         )
     if plan.profile.semantic_tags:
         explanation_parts.append(
@@ -864,6 +757,7 @@ def query_plan_metadata(plan: QueryPlan) -> dict[str, Any]:
         "resolved_query_text": plan.resolved_query_text,
         "query_kind": plan.profile.query_kind,
         "attribute_terms": list(sorted(plan.profile.attribute_terms)),
+        "context_terms": list(sorted(plan.profile.context_terms)),
         "semantic_tags": list(sorted(plan.profile.semantic_tags)),
         "retrieval_query_text": plan.retrieval_query_text,
         "retrieval_queries": list(plan.retrieval_queries),
@@ -881,7 +775,31 @@ def is_definition_query(profile: QueryProfile) -> bool:
 def is_boolean_query(profile: QueryProfile) -> bool:
     """Return whether the query is asking for a yes/no style answer."""
 
-    return profile.query_kind == "boolean"
+    return profile.query_kind in {"boolean", "comparison", "entity"}
+
+
+def is_action_query(profile: QueryProfile) -> bool:
+    """Return whether the query asks what someone or something did."""
+
+    return profile.query_kind == "action"
+
+
+def is_comparison_query(profile: QueryProfile) -> bool:
+    """Return whether the query compares one context against alternatives."""
+
+    return profile.query_kind == "comparison"
+
+
+def is_entity_context_query(profile: QueryProfile) -> bool:
+    """Return whether the query asks about one entity within a context."""
+
+    return profile.query_kind == "entity"
+
+
+def is_count_query(profile: QueryProfile) -> bool:
+    """Return whether the query asks for a grounded count."""
+
+    return profile.query_kind == "count"
 
 
 def is_dataset_summary_query(profile: QueryProfile) -> bool:
@@ -897,7 +815,10 @@ def primary_intent(profile: QueryProfile) -> str | None:
         if semantic_tag in profile.semantic_tags:
             return semantic_tag
     if profile.attribute_terms:
-        return sorted(profile.attribute_terms, key=lambda value: (len(value.split()), len(value)))[0]
+        return sorted(
+            profile.attribute_terms,
+            key=lambda value: (len(value.split()), len(value)),
+        )[0]
     return None
 
 
@@ -922,7 +843,9 @@ def is_collection_query(profile: QueryProfile) -> bool:
 def is_field_extraction_query(profile: QueryProfile) -> bool:
     """Return whether the query asks for one focused attribute rather than open summarization."""
 
-    return profile.query_kind in {"lookup", "list"} and bool(profile.attribute_terms)
+    return profile.query_kind in {"lookup", "list"} and bool(
+        profile.attribute_terms or profile.semantic_tags
+    )
 
 
 def _heading_lines(text: str) -> list[str]:
@@ -947,11 +870,28 @@ def score_text_against_query(
     for attribute in profile.attribute_terms:
         if attribute in normalized_text:
             score += 4.5
-        if any(attribute in _normalize_text(candidate) for candidate in heading_candidates):
+        if any(
+            attribute in _normalize_text(candidate)
+            for candidate in heading_candidates
+        ):
             score += 6.5
 
+    context_overlap = 0
+    for context in profile.context_terms:
+        if context in normalized_text:
+            score += 6.0
+            context_overlap += 1
+        else:
+            context_terms = tokenize_meaningful_terms(context)
+            if context_terms & text_terms:
+                score += 2.5 * len(context_terms & text_terms)
+                context_overlap += 1
+
     if is_definition_query(profile):
-        if re.search(r"\b(is|means|refers to|defined as|definition|explains?)\b", normalized_text):
+        if re.search(
+            r"\b(is|means|refers to|defined as|definition|explains?)\b",
+            normalized_text,
+        ):
             score += 8.0
         else:
             score -= 6.0
@@ -993,10 +933,50 @@ def score_text_against_query(
     ):
         score += 4.0
 
+    line_count = len([line for line in text.splitlines() if line.strip()])
+    structured = text.count(":") >= 1 or line_count >= 2
     if is_collection_query(profile) and (
-        text.count(":") >= 2 or text.count("*") >= 2 or text.count("\n") >= 2
+        text.count(":") >= 2 or text.count("*") >= 2 or line_count >= 3
     ):
         score += 2.5
+
+    if is_action_query(profile):
+        if re.search(
+            r"\b(architected|built|contributed|created|delivered|designed|developed|implemented|integrated|led|optimized|responsibilities|task|tasks|worked)\b",
+            normalized_text,
+        ):
+            score += 7.0
+        if context_overlap:
+            score += context_overlap * 3.5
+        if structured:
+            score += 2.5
+
+    if is_comparison_query(profile):
+        if context_overlap:
+            score += context_overlap * 3.0
+        if structured:
+            score += 3.0
+        if re.search(
+            r"\b(another|other|only|outside|prior|previous|current)\b",
+            normalized_text,
+        ):
+            score += 2.0
+
+    if is_entity_context_query(profile):
+        if context_overlap:
+            score += context_overlap * 4.0
+        if re.search(
+            r"\b(build|built|contribute|contributed|mention|mentioned|support|supported|use|used|work|worked)\b",
+            normalized_text,
+        ):
+            score += 4.0
+
+    if is_count_query(profile):
+        if structured:
+            score += 3.0
+        if text.count("\n") >= 2 or text.count("•") >= 2 or text.count("*") >= 2:
+            score += 2.5
+
     if profile.attribute_terms:
         if has_strong_intent_signal(text, profile=profile):
             score += 5.5 if is_field_extraction_query(profile) else 3.5
@@ -1011,8 +991,13 @@ def score_text_against_query(
     ):
         score += 2.0
 
-    if re.search(r"\b(backed by|sponsored by|powered by|organized by)\b", normalized_text) and (
-        "work" in profile.terms or "experience" in profile.terms or "employment" in profile.terms
+    if re.search(
+        r"\b(backed by|sponsored by|powered by|organized by)\b",
+        normalized_text,
+    ) and (
+        "work" in profile.terms
+        or "experience" in profile.terms
+        or "employment" in profile.terms
     ):
         score -= 3.0
 
@@ -1024,16 +1009,40 @@ def query_focus_hints(profile: QueryProfile) -> list[str]:
 
     hints: list[str] = []
     if is_dataset_summary_query(profile):
-        hints.append("Provide a concise high-level summary of what the attached data contains.")
+        hints.append(
+            "Provide a concise high-level summary of what the attached data contains."
+        )
     if is_definition_query(profile):
-        hints.append("Only answer if the evidence actually defines or explains the concept.")
+        hints.append(
+            "Only answer if the evidence actually defines or explains the concept."
+        )
     if is_boolean_query(profile):
-        hints.append("Return a concise yes/no style answer only when the evidence directly supports it.")
+        hints.append(
+            "Return a concise yes/no style answer only when the evidence directly supports it."
+        )
+    if is_action_query(profile):
+        hints.append(
+            "Summarize the concrete work, responsibilities, or contributions supported by the evidence."
+        )
+    if is_comparison_query(profile):
+        hints.append(
+            "Compare the cited evidence carefully before concluding whether there are other matching cases."
+        )
+    if is_entity_context_query(profile):
+        hints.append(
+            "Answer only if the referenced entity or topic is explicitly supported within the cited context."
+        )
+    if is_count_query(profile):
+        hints.append(
+            "Return a grounded count and mention the counted items when the evidence makes them clear."
+        )
     if is_field_extraction_query(profile):
         requested = ", ".join(sorted(profile.attribute_terms))
         hints.append(f"Return only the requested attribute or field: {requested}.")
     if is_collection_query(profile):
-        hints.append("Prefer structured lists or enumerated items when the evidence provides them.")
+        hints.append(
+            "Prefer structured lists or enumerated items when the evidence provides them."
+        )
     return hints
 
 
@@ -1056,11 +1065,12 @@ def has_strong_intent_signal(text: str, *, profile: QueryProfile) -> bool:
         for normalized_line in normalized_early_lines[:3]
         for attribute in profile.attribute_terms
     )
+    context_in_text = any(context in normalized_text for context in profile.context_terms)
     structured_lines = [
         line
         for line in early_lines
         if ":" in line
-        or line.lstrip().startswith(("-", "*"))
+        or line.lstrip().startswith(("-", "*", "•"))
         or (line and line[0].isdigit() and "." in line[:4])
     ]
 
@@ -1070,10 +1080,35 @@ def has_strong_intent_signal(text: str, *, profile: QueryProfile) -> bool:
         return bool(_EMAIL_PATTERN.search(text) or _PHONE_PATTERN.search(text))
     if intent == "date":
         return bool(_DATE_PATTERN.search(text))
+    if is_action_query(profile):
+        return context_in_text and bool(
+            structured_lines
+            or re.search(
+                r"\b(architected|built|contributed|created|delivered|designed|developed|implemented|integrated|led|optimized|responsibilities|task|tasks|worked)\b",
+                normalized_text,
+            )
+        )
+    if is_comparison_query(profile):
+        return bool(context_in_text or attribute_in_heading or attribute_in_early_lines) and bool(
+            structured_lines or len(early_lines) >= 2
+        )
+    if is_entity_context_query(profile):
+        return context_in_text and bool(
+            re.search(
+                r"\b(build|built|contribute|contributed|mention|mentioned|support|supported|use|used|work|worked)\b",
+                normalized_text,
+            )
+        )
+    if is_count_query(profile):
+        return attribute_in_heading or (
+            attribute_in_early_lines and bool(structured_lines or len(early_lines) >= 2)
+        )
     if is_collection_query(profile):
         if attribute_in_heading:
             return True
-        return attribute_in_early_lines and bool(structured_lines or len(early_lines) >= 2)
+        return attribute_in_early_lines and bool(
+            structured_lines or len(early_lines) >= 2
+        )
     if intent and any(intent in _normalize_text(candidate) for candidate in heading_like_lines):
         return True
     if attribute_in_heading:
@@ -1084,9 +1119,13 @@ def has_strong_intent_signal(text: str, *, profile: QueryProfile) -> bool:
         or len(early_lines) >= 2
     ):
         return True
-    if profile.attribute_terms and any(attribute in normalized_text for attribute in profile.attribute_terms):
+    if profile.attribute_terms and any(
+        attribute in normalized_text for attribute in profile.attribute_terms
+    ):
         if is_field_extraction_query(profile):
-            return any(":" in line for line in early_lines[:2]) or bool(heading_like_lines)
+            return any(":" in line for line in early_lines[:2]) or bool(
+                heading_like_lines
+            )
         return True
     if is_collection_query(profile) and (
         text.count(":") >= 2 or text.count("*") >= 2 or text.count("\n") >= 2
@@ -1100,6 +1139,7 @@ def build_retrieval_query_text(profile: QueryProfile) -> str:
 
     supplemental_terms: list[str] = [profile.normalized_text]
     supplemental_terms.extend(sorted(profile.attribute_terms))
+    supplemental_terms.extend(sorted(profile.context_terms))
 
     for semantic_tag in sorted(profile.semantic_tags):
         synonyms = sorted(_CANONICAL_ATTRIBUTE_SYNONYMS.get(semantic_tag, set()))
@@ -1111,7 +1151,7 @@ def build_retrieval_query_text(profile: QueryProfile) -> str:
         for term in sorted(profile.expanded_terms)
         if term not in query_tokens and term not in _SUMMARY_QUERY_NOISE
     ]
-    supplemental_terms.extend(expanded_only_terms[:4])
+    supplemental_terms.extend(expanded_only_terms[:6])
 
     if is_dataset_summary_query(profile):
         supplemental_terms.extend(["overview", "summary", "introduction"])
@@ -1119,6 +1159,14 @@ def build_retrieval_query_text(profile: QueryProfile) -> str:
         supplemental_terms.extend(["definition", "means", "refers to"])
     if is_collection_query(profile):
         supplemental_terms.extend(["list", "items", "categories"])
+    if is_count_query(profile):
+        supplemental_terms.extend(["count", "number", "total"])
+    if is_action_query(profile):
+        supplemental_terms.extend(["responsibilities", "contributions", "tasks"])
+    if is_comparison_query(profile):
+        supplemental_terms.extend(["compare", "other", "another"])
+    if is_entity_context_query(profile):
+        supplemental_terms.extend(["mention", "project", "support", "work"])
 
     deduped_terms: list[str] = []
     seen: set[str] = set()

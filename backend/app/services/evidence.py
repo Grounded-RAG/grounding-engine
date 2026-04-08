@@ -8,8 +8,12 @@ from app.config import get_settings
 from app.core.query_analysis import (
     build_query_profile,
     has_strong_intent_signal,
+    is_action_query,
     is_collection_query,
+    is_comparison_query,
+    is_count_query,
     is_dataset_summary_query,
+    is_entity_context_query,
     is_field_extraction_query,
     score_text_against_query,
     tokenize_meaningful_terms,
@@ -40,8 +44,16 @@ def package_evidence(
         profile = build_query_profile(query_text)
         if is_field_extraction_query(profile) and not is_collection_query(profile):
             selection_limit = 1
-        elif is_collection_query(profile):
-            selection_limit = min(requested_limit, 3)
+        elif any(
+            (
+                is_collection_query(profile),
+                is_action_query(profile),
+                is_comparison_query(profile),
+                is_entity_context_query(profile),
+                is_count_query(profile),
+            )
+        ):
+            selection_limit = min(max(requested_limit, 4), 4)
         else:
             selection_limit = requested_limit
     else:
@@ -149,9 +161,18 @@ def _select_hits_for_query(
             ranked_hits = strong_intent_hits
     if is_field_extraction_query(profile) and not is_collection_query(profile):
         return [ranked_hits[0].hit]
-    if is_collection_query(profile):
-        return _select_collection_bundle_hits(
+    if any(
+        (
+            is_collection_query(profile),
+            is_action_query(profile),
+            is_comparison_query(profile),
+            is_entity_context_query(profile),
+            is_count_query(profile),
+        )
+    ):
+        return _select_structured_bundle_hits(
             ranked_hits,
+            profile=profile,
             limit=limit,
         )
     if is_dataset_summary_query(profile):
@@ -221,12 +242,24 @@ def _section_alignment_bonus(
     return score
 
 
-def _select_collection_bundle_hits(
+def _text_matches_any_context(*, text: str, profile) -> bool:
+    normalized_text = " ".join(text.casefold().split())
+    text_terms = tokenize_meaningful_terms(text)
+    for context in profile.context_terms:
+        if context in normalized_text:
+            return True
+        if tokenize_meaningful_terms(context) & text_terms:
+            return True
+    return False
+
+
+def _select_structured_bundle_hits(
     ranked_hits: list[_ScoredHit],
     *,
+    profile,
     limit: int,
 ) -> list[FusedRetrievedChunk]:
-    """Prefer coherent same-section bundles for list-like questions."""
+    """Prefer coherent same-section or same-context bundles for structured questions."""
 
     if not ranked_hits:
         return []
@@ -235,19 +268,36 @@ def _select_collection_bundle_hits(
     selected: list[FusedRetrievedChunk] = [primary.hit]
     selected_ids = {primary.hit.chunk_id}
 
-    if primary.hit.section_slug:
-        for candidate in ranked_hits[1:]:
-            hit = candidate.hit
-            if hit.chunk_id in selected_ids:
-                continue
-            if (
-                hit.document_id == primary.hit.document_id
-                and hit.section_slug == primary.hit.section_slug
-            ):
-                selected.append(hit)
-                selected_ids.add(hit.chunk_id)
-            if len(selected) >= limit:
-                return selected
+    for candidate in ranked_hits[1:]:
+        hit = candidate.hit
+        if hit.chunk_id in selected_ids:
+            continue
+        if hit.document_id != primary.hit.document_id:
+            continue
+
+        same_section = bool(
+            primary.hit.section_slug
+            and hit.section_slug
+            and hit.section_slug == primary.hit.section_slug
+        )
+        nearby_chunk = abs(hit.chunk_index - primary.hit.chunk_index) <= 2
+        context_match = _text_matches_any_context(text=hit.text, profile=profile)
+
+        if same_section or nearby_chunk or context_match:
+            selected.append(hit)
+            selected_ids.add(hit.chunk_id)
+        if len(selected) >= limit:
+            return selected
+
+    if len(selected) > 1 and any(
+        (
+            is_action_query(profile),
+            is_comparison_query(profile),
+            is_entity_context_query(profile),
+            is_count_query(profile),
+        )
+    ):
+        return selected[:limit]
 
     remaining = [entry for entry in ranked_hits if entry.hit.chunk_id not in selected_ids]
     selected.extend(

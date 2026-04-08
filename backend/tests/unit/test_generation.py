@@ -322,6 +322,121 @@ def test_generate_grounded_draft_does_not_misclassify_experience_query_as_name()
     assert draft.cited_evidence_ids == ["chunk-experience"]
 
 
+def test_generate_grounded_draft_renders_action_questions_from_responsibility_lines() -> None:
+    """Action questions should summarize concrete responsibilities, not echo a raw section label."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-experience"],
+        selected_evidence_ids=["chunk-experience"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-experience",
+                text=(
+                    "PROFESSIONAL EXPERIENCE\n"
+                    "AI Engineer\n"
+                    "iCog Labs\n"
+                    "Architected and developed emotionally intelligent AI characters.\n"
+                    "Integrated SPMiner-inspired neural mining techniques with improved visualization modules."
+                ),
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What did she do at iCog Labs?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text.startswith("In icog labs, the evidence shows work including")
+    assert "Architected and developed emotionally intelligent AI characters" in draft.answer_text
+    assert "Integrated SPMiner-inspired neural mining techniques" in draft.answer_text
+
+
+def test_generate_grounded_draft_renders_comparison_questions_as_boolean_with_evidence() -> None:
+    """Comparison questions should answer yes/no using the relevant context rather than dumping a snippet."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-role-1", "chunk-role-2"],
+        selected_evidence_ids=["chunk-role-1", "chunk-role-2"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-role-1",
+                text="AI Engineer\niCog Labs\nArchitected grounded retrieval systems.",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-role-2",
+                text="Backend | AI Developer Intern\niCog Labs\nImplemented an Elasticsearch autocomplete system.",
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="Is her experience only in iCog Labs?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text.startswith("Yes.")
+    assert "icog labs" in draft.answer_text.casefold()
+
+
+def test_generate_grounded_draft_renders_entity_context_questions_cleanly() -> None:
+    """Entity-in-context questions should return a grounded yes/no answer from the matching snippet."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-experience"],
+        selected_evidence_ids=["chunk-experience"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-experience",
+                text="Integrated SPMiner-inspired neural mining techniques with improved visualization modules.",
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="Did she work on pattern miner?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text.startswith("Yes.")
+    assert "neural mining techniques" in draft.answer_text
+
+
+def test_generate_grounded_draft_renders_count_questions_from_structured_items() -> None:
+    """Count questions should return a grounded numeric answer when structured item titles are present."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-projects"],
+        selected_evidence_ids=["chunk-projects"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-projects",
+                text=(
+                    "PROJECTS\n"
+                    "The Traveler's Pocket Pal - Travel Companion\n"
+                    "Developed an AI-powered travel assistant.\n"
+                    "StyleCraft - Personalized AI Writing Assistant\n"
+                    "Built a RAG-based writing system."
+                ),
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="How many projects does she have?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text.startswith("The evidence shows 2 projects:")
+    assert "Traveler's Pocket Pal" in draft.answer_text
+    assert "StyleCraft" in draft.answer_text
+
+
 @pytest.mark.asyncio()
 async def test_generate_answer_from_evidence_delegates_to_generation_backend(monkeypatch) -> None:
     """The generation service should delegate to the grounded generator backend."""

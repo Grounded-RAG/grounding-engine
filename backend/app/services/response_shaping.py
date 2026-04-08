@@ -43,18 +43,23 @@ def _calculate_confidence(
 
     average_score = sum(item.score for item in cited_items) / len(cited_items)
     retrieval_signal = min(
-        average_score * max(get_settings().rrf_smoothing_constant / 3, 1),
+        average_score * max(get_settings().rrf_smoothing_constant * 0.4, 1),
         1.0,
     )
     support_signal = min(max(draft.support_coverage, 0.0), 1.0)
     diversity_signal = min(max(draft.source_diversity, 0) / 2, 1.0)
+    citation_signal = min(len(cited_items) / 3, 1.0)
+    calibrated = min(
+        0.45 * retrieval_signal
+        + 0.25 * support_signal
+        + 0.15 * citation_signal
+        + 0.15 * diversity_signal,
+        1.0,
+    )
+    if len(cited_items) >= 2 and support_signal >= 0.95 and diversity_signal >= 1.0:
+        calibrated = min(calibrated + 0.05, 1.0)
     return round(
-        min(
-            0.65 * retrieval_signal
-            + 0.25 * support_signal
-            + 0.10 * diversity_signal,
-            1.0,
-        ),
+        calibrated,
         4,
     )
 

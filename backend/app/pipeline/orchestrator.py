@@ -18,7 +18,13 @@ _HEADING_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?m)^(?:[A-Z][A-Z0-9/&,\- ]{2,}|[A-Z][A-Za-z0-9/&,\- ]{1,48}:)\s*$"
 )
 _BULLET_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(?m)^(?:\s*[-*\u2022]\s+|\s*\d+[\.\)]\s+)"
+    r"(?m)^(?:\s*[-*\u2022\u2013\u2014]\s+|\s*\d+[\.\)]\s+)"
+)
+_KEY_VALUE_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^[A-Za-z][A-Za-z0-9/&()' -]{0,40}:\s+\S"
+)
+_TABLE_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?:\||\t|(?:\S+\s{2,}\S+\s{2,}\S+))"
 )
 
 
@@ -63,20 +69,25 @@ def _normalize_chunk_text(raw_text: str) -> str:
     """Normalize chunk text while preserving meaningful line structure."""
 
     normalized_source = raw_text.replace("\r\n", "\n").replace("\r", "\n")
-    normalized_lines = [
-        re.sub(r"[ \t]+", " ", line).strip()
-        for line in normalized_source.split("\n")
-    ]
+    raw_lines = normalized_source.split("\n")
 
+    normalized_lines = [
+        _normalize_display_line(line)
+        for line in raw_lines
+    ]
+    paired_lines = _pair_label_value_lines(normalized_lines)
     compact_lines: list[str] = []
     previous_blank = False
-    for line in normalized_lines:
+    for line in paired_lines:
         if not line:
             if compact_lines and not previous_blank:
                 compact_lines.append("")
             previous_blank = True
             continue
-        compact_lines.append(line)
+        if compact_lines and _should_merge_with_previous_line(compact_lines[-1], line):
+            compact_lines[-1] = f"{compact_lines[-1].rstrip()} {line.lstrip()}".strip()
+        else:
+            compact_lines.append(line)
         previous_blank = False
 
     return "\n".join(compact_lines).strip()
@@ -90,6 +101,116 @@ def _starts_with_heading(text: str, *, start_char: int, end_char: int) -> bool:
         return False
     first_line = candidate.splitlines()[0].strip()
     return bool(first_line and _HEADING_LINE_PATTERN.fullmatch(first_line))
+
+
+def _normalize_display_line(raw_line: str) -> str:
+    """Normalize one line while preserving table-like separators when present."""
+
+    stripped = raw_line.strip()
+    if not stripped:
+        return ""
+    if _TABLE_LINE_PATTERN.search(raw_line):
+        table_like = re.sub(r"\t+", " | ", stripped)
+        table_like = re.sub(r"\s{2,}", " | ", table_like)
+        return re.sub(r"\s+", " ", table_like).strip()
+    return re.sub(r"[ \t]+", " ", stripped).strip()
+
+
+def _looks_like_table_line(line: str) -> bool:
+    """Return whether a normalized line still looks table-like."""
+
+    stripped = line.strip()
+    if not stripped:
+        return False
+    return "|" in stripped
+
+
+def _looks_like_key_value_line(line: str) -> bool:
+    """Return whether one normalized line looks like a short key-value row."""
+
+    stripped = line.strip()
+    return bool(stripped and _KEY_VALUE_LINE_PATTERN.fullmatch(stripped))
+
+
+def _looks_like_label_only_line(line: str) -> bool:
+    """Return whether a short line likely represents a form label awaiting a value."""
+
+    stripped = line.strip().rstrip(":")
+    if (
+        not stripped
+        or _HEADING_LINE_PATTERN.fullmatch(stripped)
+        or _BULLET_LINE_PATTERN.match(stripped)
+        or _looks_like_table_line(stripped)
+        or _looks_like_key_value_line(stripped)
+        or any(character.isdigit() for character in stripped)
+        or len(stripped.split()) > 5
+    ):
+        return False
+    return stripped == stripped.title() or stripped.isupper()
+
+
+def _pair_label_value_lines(lines: list[str]) -> list[str]:
+    """Combine short form-style label/value rows into single key-value lines."""
+
+    paired: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line:
+            paired.append("")
+            index += 1
+            continue
+
+        next_line = lines[index + 1] if index + 1 < len(lines) else ""
+        if (
+            _looks_like_label_only_line(line)
+            and next_line
+            and not _looks_like_label_only_line(next_line)
+            and not _HEADING_LINE_PATTERN.fullmatch(next_line)
+            and not _BULLET_LINE_PATTERN.match(next_line)
+            and not _looks_like_table_line(next_line)
+        ):
+            paired.append(f"{line.rstrip(':')}: {next_line}")
+            index += 2
+            continue
+
+        paired.append(line)
+        index += 1
+
+    return paired
+
+
+def _should_merge_with_previous_line(previous_line: str, current_line: str) -> bool:
+    """Return whether one line is a continuation of the previous structured line."""
+
+    previous = previous_line.strip()
+    current = current_line.strip()
+    if (
+        not previous
+        or not current
+        or _HEADING_LINE_PATTERN.fullmatch(current)
+        or _BULLET_LINE_PATTERN.match(current)
+        or _looks_like_table_line(previous)
+        or _looks_like_table_line(current)
+        or _looks_like_label_only_line(current)
+        or _looks_like_key_value_line(current)
+    ):
+        return False
+
+    if previous.endswith((":", ";", ",", "/")):
+        return True
+
+    if _BULLET_LINE_PATTERN.match(previous) or _looks_like_key_value_line(previous):
+        return True
+
+    if re.search(r"[.!?]$", previous):
+        return False
+
+    first_character = current[0]
+    if first_character.islower() or first_character.isdigit():
+        return True
+
+    return not _looks_like_label_only_line(previous)
 
 
 def _leading_heading_title(text: str) -> str | None:
@@ -126,8 +247,10 @@ def _looks_like_list_block(text: str) -> bool:
         ]
     )
     colon_lines = len([line for line in lines if ":" in line])
+    key_value_lines = len([line for line in lines if _looks_like_key_value_line(line)])
+    table_lines = len([line for line in lines if _looks_like_table_line(line)])
     short_lines = len([line for line in lines if len(line.split()) <= 10])
-    if bullet_lines >= 1 or colon_lines >= 2:
+    if bullet_lines >= 1 or colon_lines >= 2 or key_value_lines >= 2 or table_lines >= 2:
         return True
     return len(lines) >= 3 and short_lines >= 2
 
@@ -245,6 +368,15 @@ def _char_spans_to_token_spans(
         block_starts.append(match.start())
     for match in _BULLET_LINE_PATTERN.finditer(text):
         block_starts.append(match.start())
+    cursor = 0
+    for raw_line in text.splitlines(keepends=True):
+        normalized_line = _normalize_display_line(raw_line)
+        if normalized_line and (
+            _looks_like_key_value_line(normalized_line)
+            or _looks_like_table_line(normalized_line)
+        ):
+            block_starts.append(cursor)
+        cursor += len(raw_line)
     block_starts = sorted({start for start in block_starts if 0 <= start <= len(text)})
     if not block_starts or block_starts[-1] != len(text):
         block_starts.append(len(text))

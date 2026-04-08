@@ -5,7 +5,11 @@ from __future__ import annotations
 from app.core.query_analysis import (
     build_query_plan,
     build_query_profile,
+    is_action_query,
     is_collection_query,
+    is_comparison_query,
+    is_count_query,
+    is_entity_context_query,
     primary_intent,
     query_plan_metadata,
     requested_attribute_label,
@@ -96,3 +100,39 @@ def test_query_plan_metadata_is_trace_safe() -> None:
 
     assert payload["query_kind"] == "summary"
     assert isinstance(payload["retrieval_queries"], list)
+
+
+def test_build_query_profile_detects_action_queries_with_context() -> None:
+    """Action queries should preserve their context and route as action questions."""
+
+    profile = build_query_profile("What did she do at iCog Labs?")
+
+    assert is_action_query(profile) is True
+    assert "icog labs" in profile.context_terms
+
+
+def test_build_query_profile_detects_comparison_queries() -> None:
+    """Comparison-style yes/no questions should not collapse into plain boolean routing."""
+
+    profile = build_query_profile("Is her experience only in iCog or is there some other one?")
+
+    assert is_comparison_query(profile) is True
+    assert "experience" in profile.attribute_terms
+
+
+def test_build_query_profile_detects_entity_in_context_queries() -> None:
+    """Entity-in-context questions should preserve the topic phrase they are asking about."""
+
+    profile = build_query_profile("Did she work on pattern miner?")
+
+    assert is_entity_context_query(profile) is True
+    assert "pattern miner" in profile.context_terms
+
+
+def test_build_query_profile_detects_count_queries() -> None:
+    """Count questions should be routed separately from generic list questions."""
+
+    profile = build_query_profile("How many projects does she have?")
+
+    assert is_count_query(profile) is True
+    assert "projects" in profile.attribute_terms or "project" in profile.attribute_terms
