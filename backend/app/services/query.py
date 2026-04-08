@@ -54,6 +54,8 @@ _SMALLTALK_QUERIES = {
     "good afternoon",
     "good evening",
     "how are you",
+    "how are u",
+    "how r u",
     "how are you doing",
     "can you help me",
     "help me",
@@ -97,6 +99,8 @@ def _is_smalltalk_query(query_text: str) -> bool:
     normalized = re.sub(r"\s+", " ", normalized).strip()
     if not normalized:
         return False
+    if re.fullmatch(r"(?:h+i+|h+e+y+|hello+|hiya+|yo+)", normalized):
+        return True
     if normalized in _SMALLTALK_QUERIES:
         return True
 

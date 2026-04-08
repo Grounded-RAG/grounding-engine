@@ -127,7 +127,7 @@ def _select_hits_for_query(
                     if is_dataset_summary_query(profile)
                     and any(
                         token in hit.text.casefold()
-                        for token in ("overview", "introduction", "summary")
+                        for token in ("overview", "abstract", "summary", "title")
                     )
                     else 0.0
                 )
@@ -191,7 +191,7 @@ def _select_hits_for_query(
                         4.0
                         if any(
                             token in hit.text.casefold()
-                            for token in ("overview", "introduction", "summary")
+                            for token in ("overview", "abstract", "summary", "title")
                         )
                         else 0.0
                     )
@@ -321,7 +321,7 @@ def _collapse_to_document_representatives(
             4.0
             if any(
                 token in entry.hit.text.casefold()
-                for token in ("overview", "introduction", "summary")
+                for token in ("overview", "abstract", "summary", "title")
             )
             else 0.0
         )

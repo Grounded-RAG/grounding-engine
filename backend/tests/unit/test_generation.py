@@ -7,7 +7,7 @@ import uuid
 import pytest
 
 from app.core.llm_client import GroundedGenerationError, generate_grounded_draft
-from app.core.gemini_generator import GeminiGenerationError
+from app.core.gemini_generator import GeminiGenerationError, _parse_result
 from app.core.openai_generator import OpenAICompatibleGenerationError
 from app.pipeline.contracts import EvidenceItem, EvidencePackage
 from app.services.generation import GenerationBackend, generate_answer_from_evidence
@@ -406,6 +406,143 @@ def test_generate_grounded_draft_renders_entity_context_questions_cleanly() -> N
     assert "neural mining techniques" in draft.answer_text
 
 
+def test_generate_grounded_draft_summarizes_paper_like_dataset_using_title_and_topic() -> None:
+    """Paper-like datasets should summarize from titles/topic sentences, not generic section labels."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-paper"],
+        selected_evidence_ids=["chunk-paper"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-paper",
+                text=(
+                    "Explainable AI in Software Engineering\n"
+                    "Introduction\n"
+                    "This paper examines how explainable AI methods help software teams debug, validate, and govern AI-enabled systems."
+                ),
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What is the dataset about?",
+        evidence_package=evidence_package,
+    )
+
+    assert "Explainable AI in Software Engineering" in draft.answer_text
+    assert "The dataset contains" in draft.answer_text
+    assert "The dataset contains Introduction" not in draft.answer_text
+
+
+def test_generate_grounded_draft_renders_collection_answers_from_prose_sentences() -> None:
+    """Collection queries on prose should extract relevant sentences rather than raw paragraphs."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-xai"],
+        selected_evidence_ids=["chunk-xai"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-xai",
+                text=(
+                    "One major challenge is that some explanations create a false sense of trust in incorrect outputs. "
+                    "Another emerging challenge concerns generative AI and large language models, where open-ended outputs are harder to explain safely. "
+                    "Finally, software teams must integrate explanations into documentation, monitoring, testing, and governance workflows."
+                ),
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What are the challenges for xAI?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text.startswith("The listed challenges are")
+    assert "false sense of trust" in draft.answer_text
+    assert "generative AI and large language models" in draft.answer_text
+
+
+def test_generate_grounded_draft_ignores_outline_headings_for_challenge_lists() -> None:
+    """Collection answers should ignore numbered section headings and use challenge prose."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-outline", "chunk-challenges", "chunk-summary"],
+        selected_evidence_ids=["chunk-outline", "chunk-challenges", "chunk-summary"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-outline",
+                text=(
+                    "2. New Opportunities in Software Engineering\n"
+                    "Overview text.\n"
+                    "3. New Challenges in Software Engineering"
+                ),
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-challenges",
+                text=(
+                    "One major challenge is the trade-off between model performance and interpretability. "
+                    "Another critical challenge is the evaluation of explanations. "
+                    "Scalability is also a concern as models grow larger and more complex."
+                ),
+            ),
+            _evidence_item(
+                citation_id="E003",
+                chunk_id="chunk-summary",
+                text=(
+                    "However, challenges such as evaluation, scalability, and balancing accuracy with "
+                    "interpretability remain significant."
+                ),
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What are the challenges?",
+        evidence_package=evidence_package,
+    )
+
+    assert "New Opportunities in Software Engineering" not in draft.answer_text
+    assert "New Challenges in Software Engineering" not in draft.answer_text
+    assert "trade-off between model performance and interpretability" in draft.answer_text
+    assert "evaluation of explanations" in draft.answer_text
+
+
+def test_generate_grounded_draft_answers_mixed_boolean_action_role_question() -> None:
+    """Role + where + what-did questions should return a grounded action answer."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-experience"],
+        selected_evidence_ids=["chunk-experience"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-experience",
+                text=(
+                    "PROFESSIONAL EXPERIENCE\n"
+                    "AI Engineer\n"
+                    "iCog Labs\n"
+                    "Architected and developed emotionally intelligent AI characters.\n"
+                    "Integrated SPMiner-inspired neural mining techniques with improved visualization modules."
+                ),
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="does she has an experiance as a AI enginner if so where and what did she do there",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text.startswith("Yes.")
+    assert "AI Engineer" in draft.answer_text
+    assert "iCog Labs" in draft.answer_text
+    assert "Architected and developed emotionally intelligent AI characters" in draft.answer_text
+
+
 def test_generate_grounded_draft_renders_count_questions_from_structured_items() -> None:
     """Count questions should return a grounded numeric answer when structured item titles are present."""
 
@@ -435,6 +572,39 @@ def test_generate_grounded_draft_renders_count_questions_from_structured_items()
     assert draft.answer_text.startswith("The evidence shows 2 projects:")
     assert "Traveler's Pocket Pal" in draft.answer_text
     assert "StyleCraft" in draft.answer_text
+
+
+def test_parse_gemini_result_accepts_array_citation_snippets() -> None:
+    """Gemini JSON parsing should accept schema-friendly citation snippet arrays."""
+
+    parsed = _parse_result(
+        {
+            "answer_text": "Grounded uses hybrid retrieval.",
+            "cited_evidence_ids": ["chunk-1"],
+            "citation_snippets": [
+                {"chunk_id": "chunk-1", "snippet": "Grounded uses hybrid retrieval."}
+            ],
+        }
+    )
+
+    assert parsed.answer_text == "Grounded uses hybrid retrieval."
+    assert parsed.cited_evidence_ids == ["chunk-1"]
+    assert parsed.citation_snippets == {
+        "chunk-1": "Grounded uses hybrid retrieval."
+    }
+
+
+def test_parse_gemini_result_rejects_empty_array_citation_snippets() -> None:
+    """Gemini parsing should fail cleanly when snippet arrays are empty."""
+
+    with pytest.raises(GeminiGenerationError, match="invalid citation_snippets"):
+        _parse_result(
+            {
+                "answer_text": "Grounded uses hybrid retrieval.",
+                "cited_evidence_ids": ["chunk-1"],
+                "citation_snippets": [],
+            }
+        )
 
 
 @pytest.mark.asyncio()

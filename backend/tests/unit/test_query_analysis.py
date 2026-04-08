@@ -148,6 +148,26 @@ def test_build_query_profile_detects_count_queries() -> None:
     assert "projects" in profile.attribute_terms or "project" in profile.attribute_terms
 
 
+def test_build_query_profile_routes_mixed_boolean_action_question_as_action() -> None:
+    """Role + where + what-did follow-ups should route as action queries."""
+
+    profile = build_query_profile(
+        "does she has an experiance as a AI enginner if so where and what did she do there"
+    )
+
+    assert is_action_query(profile) is True
+    assert any("ai eng" in context for context in profile.context_terms)
+
+
+def test_build_query_profile_treats_whose_question_as_name_lookup() -> None:
+    """Owner-style whose phrasing should still resolve to a name lookup."""
+
+    profile = build_query_profile("whose resume is this please")
+
+    assert profile.query_kind == "lookup"
+    assert "name" in profile.attribute_terms
+
+
 def test_build_query_plan_preserves_document_reference_follow_up_scope() -> None:
     """Document-order follow-ups should inherit summary scope from the prior turn."""
 

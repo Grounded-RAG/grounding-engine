@@ -386,6 +386,62 @@
     ]
   },
   {
+    "name": "paper_summary_question_prefers_title_over_introduction_heading",
+    "query": "What is the dataset about?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Explainable AI in Software Engineering",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-paper-summary",
+        "text": "Explainable AI in Software Engineering\nIntroduction\nThis paper examines how explainable AI methods help software teams debug, validate, and govern AI-enabled systems.",
+        "score": 0.9
+      }
+    ]
+  },
+  {
+    "name": "paper_challenges_question_extracts_prose_items_cleanly",
+    "query": "What are the challenges for xAI?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "false sense of trust",
+      "generative AI and large language models",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-paper-challenges",
+        "text": "One major challenge is that some explanations create a false sense of trust in incorrect outputs. Another emerging challenge concerns generative AI and large language models, where open-ended outputs are harder to explain safely. Finally, software teams must integrate explanations into documentation, monitoring, testing, and governance workflows.",
+        "score": 0.91
+      }
+    ]
+  },
+  {
+    "name": "paper_tools_question_extracts_relevant_tool_sentence",
+    "query": "What are the tools?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "What-If Tool",
+      "visual analytics",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-paper-tools",
+        "text": "The What-If Tool demonstrates how visual analytics can support model debugging, feature sensitivity analysis, and fairness inspection with low coding overhead. Together with SHAP and LIME, it shows how XAI tooling is entering practical engineering workflows.",
+        "score": 0.9
+      }
+    ]
+  },
+  {
     "name": "unrelated_query_without_alignment_fails_generation",
     "query": "What is the weather today?",
     "expected_type": "generation_error",

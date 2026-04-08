@@ -59,17 +59,17 @@ _GENERIC_QUERY_VOCABULARY = {
     "attributes", "award", "awards", "categories", "category", "certificate",
     "certificates", "compare", "comparison", "contact", "contain", "contains",
     "count", "dataset", "datasets", "date", "definition", "details", "difference",
-    "document", "documents", "education", "email", "employment", "entity",
+    "developer", "developers", "document", "documents", "education", "email", "employment", "engineer", "engineers", "entity",
     "experience", "feature", "features", "field", "fields", "file", "files",
     "framework", "frameworks", "fullname", "github", "history", "identity",
     "include", "includes", "information", "introduction", "item", "items",
     "language", "languages", "list", "location", "mail", "meaning", "mention",
-    "model", "name", "number", "only", "other", "overview", "owner", "pattern",
+    "method", "methods", "model", "name", "number", "only", "other", "overview", "owner", "pattern",
     "person", "people", "phone", "pricing", "profile", "project", "projects",
     "record", "records", "recognition", "refers", "responsibilities",
     "responsibility", "resume", "role", "roles", "section", "sections", "service",
     "services", "skill", "skills", "summary", "support", "supported", "supports",
-    "technical", "technology", "technologies", "title", "tool", "tools", "total",
+    "technical", "technology", "technologies", "title", "tool", "tools", "total", "whose",
     "website", "work", "worked",
 }
 
@@ -124,7 +124,7 @@ _DOCUMENT_REFERENCE_PATTERN = re.compile(
 _RELATIVE_DOCUMENT_REFERENCE_PATTERN = re.compile(
     r"\b(?P<direction>previous|prior|earlier|next|later)\s+(?:document|file|record|one)\b"
 )
-_CONTEXT_PREPOSITION_PATTERN = re.compile(r"\b(?:at|in|on|for|with|about|under|within|inside)\s+(?P<context>.+)$")
+_CONTEXT_PREPOSITION_PATTERN = re.compile(r"\b(?:as|at|in|on|for|with|about|under|within|inside)\s+(?P<context>.+)$")
 _CONTEXT_BREAK_TOKENS = {"and", "another", "any", "because", "but", "else", "if", "only", "or", "than", "there", "whether"}
 _ACTION_HINT_TERMS = {
     "action", "actions", "architected", "build", "built", "contribute",
@@ -420,6 +420,9 @@ def _extract_attribute_terms(*, normalized_text: str, terms: set[str]) -> set[st
         ):
             attribute_terms.add(canonical)
 
+    if normalized_text.startswith("whose "):
+        attribute_terms.add("name")
+
     return {term for term in attribute_terms if term}
 
 
@@ -534,6 +537,20 @@ def _classify_query_kind(
         terms=terms,
     ):
         return "comparison"
+    if boolean_like and (
+        "if so" in normalized_text
+        or (
+            any(_terms_contain_token(terms, token) for token in _ACTION_HINT_TERMS)
+            and (
+                "where" in normalized_text
+                or any(
+                    _terms_contain_token(terms, token)
+                    for token in {"developer", "engineer", "intern", "manager", "researcher"}
+                )
+            )
+        )
+    ):
+        return "action"
     if _ACTION_QUERY_PATTERN.match(normalized_text):
         return "action"
     if boolean_like and context_terms and any(
@@ -760,7 +777,7 @@ def build_query_profile(query_text: str) -> QueryProfile:
         expanded_terms.update(_token_expansion_forms(term))
 
     if query_kind == "summary":
-        expanded_terms.update({"overview", "summary", "introduction", "profile"})
+        expanded_terms.update({"overview", "summary", "abstract", "profile", "title"})
     elif query_kind == "definition":
         expanded_terms.update({"definition", "explains", "means", "refers"})
     elif query_kind == "list":
@@ -837,7 +854,7 @@ def _build_retrieval_query_variants(profile: QueryProfile) -> tuple[str, ...]:
             variants.append(" ".join([*subject_terms, "definition", "meaning"]).strip())
 
     if is_dataset_summary_query(profile):
-        variants.append("dataset document overview summary introduction")
+        variants.append("dataset document overview summary abstract title")
 
     if is_collection_query(profile):
         collection_terms = sorted(profile.attribute_terms) or core_terms[:3]
@@ -1255,7 +1272,13 @@ def has_strong_intent_signal(text: str, *, profile: QueryProfile) -> bool:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     early_lines = lines[:5]
     heading_like_lines = [line for line in early_lines if _is_heading_only_line(line)]
+    non_heading_early_lines = [
+        line for line in early_lines if not _is_heading_only_line(line)
+    ]
     normalized_early_lines = [_normalize_text(line) for line in early_lines]
+    normalized_non_heading_early_lines = [
+        _normalize_text(line) for line in non_heading_early_lines
+    ]
     attribute_in_heading = any(
         attribute in _normalize_text(candidate)
         for candidate in heading_like_lines
@@ -1264,6 +1287,11 @@ def has_strong_intent_signal(text: str, *, profile: QueryProfile) -> bool:
     attribute_in_early_lines = any(
         attribute in normalized_line
         for normalized_line in normalized_early_lines[:3]
+        for attribute in profile.attribute_terms
+    )
+    attribute_in_non_heading_early_lines = any(
+        attribute in normalized_line
+        for normalized_line in normalized_non_heading_early_lines[:3]
         for attribute in profile.attribute_terms
     )
     context_in_text = any(context in normalized_text for context in profile.context_terms)
@@ -1305,9 +1333,15 @@ def has_strong_intent_signal(text: str, *, profile: QueryProfile) -> bool:
             attribute_in_early_lines and bool(structured_lines or len(early_lines) >= 2)
         )
     if is_collection_query(profile):
-        if attribute_in_heading:
+        if attribute_in_heading and (
+            structured_lines
+            or attribute_in_non_heading_early_lines
+            or text.count(":") >= 2
+            or text.count("*") >= 2
+            or text.count("\n") >= 3
+        ):
             return True
-        return attribute_in_early_lines and bool(
+        return attribute_in_non_heading_early_lines and bool(
             structured_lines or len(early_lines) >= 2
         )
     if intent and any(intent in _normalize_text(candidate) for candidate in heading_like_lines):
@@ -1355,7 +1389,7 @@ def build_retrieval_query_text(profile: QueryProfile) -> str:
     supplemental_terms.extend(expanded_only_terms[:6])
 
     if is_dataset_summary_query(profile):
-        supplemental_terms.extend(["overview", "summary", "introduction"])
+        supplemental_terms.extend(["overview", "summary", "abstract", "title"])
     if is_definition_query(profile):
         supplemental_terms.extend(["definition", "means", "refers to"])
     if is_collection_query(profile):

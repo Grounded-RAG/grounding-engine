@@ -310,6 +310,72 @@ async def test_execute_standard_query_requests_clarification_for_combined_greeti
 
 
 @pytest.mark.asyncio()
+async def test_execute_standard_query_requests_clarification_for_stretched_greeting(monkeypatch) -> None:
+    """Elongated greetings like 'heyyyyyyyyy' should also bypass retrieval."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="heyyyyyyyyy")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fail_retrieve_hybrid_candidates(**kwargs):
+        del kwargs
+        raise AssertionError("Stretched greeting clarification should bypass retrieval.")
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fail_retrieve_hybrid_candidates,
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+    )
+
+    assert result.response.verification_status == "degraded"
+    assert result.response.degraded_reasons == ["QUERY_REQUIRES_CLARIFICATION"]
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_requests_clarification_for_how_are_u(monkeypatch) -> None:
+    """Short chatty variants like 'how are u' should also bypass retrieval."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="how are u")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fail_retrieve_hybrid_candidates(**kwargs):
+        del kwargs
+        raise AssertionError("Small-talk clarification should bypass retrieval.")
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fail_retrieve_hybrid_candidates,
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+    )
+
+    assert result.response.verification_status == "degraded"
+    assert result.response.degraded_reasons == ["QUERY_REQUIRES_CLARIFICATION"]
+
+
+@pytest.mark.asyncio()
 async def test_execute_standard_query_rejects_higher_tier_namespace() -> None:
     """Standard query execution should reject namespaces that require a higher tier."""
 

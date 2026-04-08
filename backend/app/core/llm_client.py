@@ -31,9 +31,30 @@ class GroundedGenerationError(RuntimeError):
     """Raised when grounded generation cannot produce a usable draft."""
 
 
-_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+|\n+|[\u2022\u00B7]+|(?<=;)\s+")
+_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<!\d\.)(?<=[.!?])\s+|\n+|[\u2022\u00B7]+|(?<=;)\s+")
 _HEADING_ONLY_PATTERN = re.compile(r"^[A-Z][A-Z0-9/&,\- ]{2,}$")
+_OUTLINE_HEADING_PATTERN = re.compile(r"^\d+(?:\.\d+)*[.)]?\s+[A-Z][A-Za-z0-9/&,\- ]{2,}$")
 _SUMMARY_NAMEISH_PATTERN = re.compile(r"^[A-Z][A-Za-z'\u2019-]+(?:\s+[A-Z][A-Za-z'\u2019-]+){1,4}$")
+_GENERIC_SECTION_LABELS = {
+    "abstract",
+    "acknowledgements",
+    "appendix",
+    "background",
+    "conclusion",
+    "discussion",
+    "format",
+    "implementation",
+    "introduction",
+    "limitations",
+    "method",
+    "methods",
+    "overview",
+    "practical examples and real world relevance",
+    "references",
+    "related work",
+    "results",
+    "topic selected",
+}
 
 
 def _sentence_candidates(text: str) -> list[str]:
@@ -65,9 +86,33 @@ def _normalize_line(line: str) -> str:
     return re.sub(r"\s+", " ", line.casefold()).strip()
 
 
+def _looks_like_outline_heading(line: str) -> bool:
+    stripped = line.strip().rstrip(":")
+    if not stripped or not _OUTLINE_HEADING_PATTERN.fullmatch(stripped):
+        return False
+    stripped = re.sub(r"^\d+(?:\.\d+)*[.)]?\s+", "", stripped).strip()
+    words = [word for word in stripped.split() if any(char.isalpha() for char in word)]
+    if not words or len(words) > 12:
+        return False
+    title_like_count = sum(
+        1 for word in words if word[:1].isupper() or word.isupper()
+    )
+    return title_like_count >= max(2, len(words) - 1)
+
+
 def _is_heading_only_line(line: str) -> bool:
     stripped = line.strip().rstrip(":")
-    return bool(stripped and _HEADING_ONLY_PATTERN.fullmatch(stripped))
+    return bool(
+        stripped
+        and (
+            _HEADING_ONLY_PATTERN.fullmatch(stripped)
+            or _looks_like_outline_heading(stripped)
+        )
+    )
+
+
+def _is_generic_section_label(line: str) -> bool:
+    return _normalize_line(line).rstrip(":") in _GENERIC_SECTION_LABELS
 
 
 def _looks_like_summary_subject_line(line: str) -> bool:
@@ -76,11 +121,42 @@ def _looks_like_summary_subject_line(line: str) -> bool:
         not stripped
         or stripped.isupper()
         or _is_heading_only_line(stripped)
+        or _is_generic_section_label(stripped)
         or any(char.isdigit() for char in stripped)
         or "@" in stripped
     ):
         return False
     return bool(_SUMMARY_NAMEISH_PATTERN.fullmatch(stripped))
+
+
+def _looks_like_document_title_line(line: str) -> bool:
+    stripped = line.strip().rstrip(":")
+    words = stripped.split()
+    if (
+        not stripped
+        or _is_heading_only_line(stripped)
+        or _is_generic_section_label(stripped)
+        or any(char.isdigit() for char in stripped)
+        or "@" in stripped
+        or len(words) < 3
+        or len(words) > 18
+    ):
+        return False
+    alpha_words = [word for word in words if any(character.isalpha() for character in word)]
+    if len(alpha_words) < 3:
+        return False
+    title_like_words = [
+        word
+        for word in alpha_words
+        if word[:1].isupper() or word.isupper()
+    ]
+    return len(title_like_words) >= max(2, len(alpha_words) // 2)
+
+
+def _strip_reference_markers(text: str) -> str:
+    cleaned = re.sub(r"\[(?:e\d{3}|\d+(?:,\s*\d+)*)\]", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip(" ,;:.")
 
 
 def _line_matches_query_focus(line: str, *, profile: QueryProfile) -> bool:
@@ -135,6 +211,29 @@ def _candidate_segments(
     return deduped or [text.strip()]
 
 
+def _collection_block_has_answerable_content(
+    candidate: str,
+    *,
+    profile: QueryProfile,
+) -> bool:
+    lines = _clean_lines(candidate)
+    non_heading_lines = [
+        line for line in lines if not _is_heading_only_line(line)
+    ]
+    if not non_heading_lines:
+        return False
+    if any(
+        _line_matches_query_focus(line, profile=profile)
+        for line in non_heading_lines
+    ):
+        return True
+    if any(":" in line for line in non_heading_lines):
+        return True
+    if len(non_heading_lines) >= 2:
+        return True
+    return any(len(line.split()) >= 6 for line in non_heading_lines)
+
+
 def _select_grounded_snippet(
     item: EvidenceItem,
     *,
@@ -146,6 +245,15 @@ def _select_grounded_snippet(
     best_overlap = 0
     best_score = -1.0
     for sentence in _candidate_segments(item.text, profile=profile):
+        if (
+            is_collection_query(profile)
+            and "\n" in sentence
+            and not _collection_block_has_answerable_content(
+                sentence,
+                profile=profile,
+            )
+        ):
+            continue
         if _is_heading_only_line(sentence) and is_field_extraction_query(profile):
             continue
         sentence_terms = _sentence_terms(sentence)
@@ -240,9 +348,31 @@ def _clean_snippet_for_query(snippet: str, *, profile: QueryProfile) -> str:
         return " ".join((contact_lines or lines)[:2]).strip()
 
     if is_dataset_summary_query(profile):
+        title_lines = [
+            line for line in lines[:5]
+            if _looks_like_document_title_line(line)
+        ]
+        if title_lines:
+            return title_lines[0]
         if _looks_like_summary_subject_line(lines[0]):
             return lines[0]
-        non_heading_lines = [line for line in lines if not _is_heading_only_line(line)]
+        prose_candidates = [
+            _strip_reference_markers(candidate)
+            for candidate in _sentence_candidates(snippet)
+            if candidate.strip()
+        ]
+        for candidate in prose_candidates:
+            if (
+                len(candidate.split()) >= 6
+                and not _is_heading_only_line(candidate)
+                and not _is_generic_section_label(candidate)
+            ):
+                return candidate
+        non_heading_lines = [
+            line
+            for line in lines
+            if not _is_heading_only_line(line) and not _is_generic_section_label(line)
+        ]
         return " ".join(non_heading_lines[:2]).strip()
 
     if is_collection_query(profile):
@@ -314,6 +444,7 @@ def _section_candidate_lines(text: str) -> list[str]:
         if (
             not normalized
             or _is_heading_only_line(line)
+            or _looks_like_outline_heading(line)
             or "@" in line
             or re.search(r"\b\d{4}\b", line)
         ):
@@ -339,6 +470,7 @@ def _summary_heading_labels(text: str) -> list[str]:
         if (
             not normalized
             or normalized in {"email", "phone", "github", "linkedin"}
+            or _is_generic_section_label(line)
             or _looks_like_summary_subject_line(line)
             or normalized in seen
         ):
@@ -352,6 +484,9 @@ def _summary_subject_phrase(*, item: EvidenceItem, cleaned_snippet: str) -> str:
     lines = _clean_lines(item.text)
     if lines and _looks_like_summary_subject_line(lines[0]):
         return f"a profile for {lines[0]}"
+    for line in lines[:5]:
+        if _looks_like_document_title_line(line):
+            return line
     return cleaned_snippet.rstrip(".")
 
 
@@ -417,10 +552,41 @@ def _render_collection_answer(
 
     for _, item, snippet in top_support:
         citations.append(f"[{item.citation_id}]")
-        candidate_lines = _section_candidate_lines(item.text) or _clean_lines(snippet)
+        structured_lines = [
+            line
+            for line in _section_candidate_lines(item.text)
+            if ":" in line or len(line.split()) <= 12
+        ]
+        candidate_lines = structured_lines
+        if not candidate_lines:
+            prose_candidates = sorted(
+                (
+                    (
+                        score_text_against_query(
+                            sentence,
+                            profile=profile,
+                            chunk_index=item.chunk_index,
+                        ),
+                        _strip_reference_markers(sentence).rstrip("."),
+                    )
+                    for sentence in _sentence_candidates(item.text)
+                ),
+                key=lambda entry: (-entry[0], len(entry[1])),
+            )
+            candidate_lines = [
+                sentence
+                for score, sentence in prose_candidates
+                if score > 0 and len(sentence.split()) >= 4
+            ][:4]
+        if not candidate_lines:
+            candidate_lines = _clean_lines(snippet)
         for line in candidate_lines:
             cleaned = _strip_attribute_prefix(line, profile=profile).rstrip(".")
-            if not cleaned or _is_heading_only_line(cleaned):
+            if (
+                not cleaned
+                or _is_heading_only_line(cleaned)
+                or _is_generic_section_label(cleaned)
+            ):
                 continue
             rendered_lines.append(cleaned)
             if len(rendered_lines) >= 6:
@@ -477,10 +643,40 @@ def _render_action_answer(
         prefix = f"In {context_phrase}, " if context_phrase else ""
         return f"{prefix}{fallback_text} [{fallback_item.citation_id}]".strip()
 
+    role_phrase = None
+    company_phrase = None
+    for _, item, _ in top_support:
+        candidate_lines = [
+            line
+            for line in _clean_lines(item.text)
+            if not _is_heading_only_line(line)
+        ]
+        for line in candidate_lines[:5]:
+            normalized = _normalize_line(line)
+            if role_phrase is None and re.search(
+                r"\b(engineer|developer|intern|manager|researcher|analyst|lead|consultant)\b",
+                normalized,
+            ):
+                role_phrase = line.rstrip(".")
+                continue
+            if company_phrase is None and len(line.split()) <= 5 and not re.search(r"\b\d{4}\b", line):
+                company_phrase = line.rstrip(".")
+        if role_phrase and company_phrase:
+            break
+
     rendered_parts = [
         f"{line} [{citation_id}]"
         for line, citation_id in deduped_lines[:3]
     ]
+    if profile.normalized_text.startswith(
+        ("does ", "do ", "did ", "has ", "have ", "had ", "is ", "are ", "was ", "were ")
+    ) or "if so" in profile.normalized_text:
+        where_phrase = ""
+        if role_phrase and company_phrase:
+            where_phrase = f" She worked as {role_phrase} at {company_phrase}, where"
+        elif context_phrase:
+            where_phrase = f" In {context_phrase}, the evidence shows"
+        return f"Yes.{where_phrase} work included {' '.join(rendered_parts)}".strip()
     if context_phrase:
         return f"In {context_phrase}, the evidence shows work including {' '.join(rendered_parts)}".strip()
     return f"The evidence shows work including {' '.join(rendered_parts)}".strip()

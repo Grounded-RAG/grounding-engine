@@ -40,8 +40,15 @@ def _build_schema() -> dict[str, object]:
                 "items": {"type": "STRING"},
             },
             "citation_snippets": {
-                "type": "OBJECT",
-                "additionalProperties": {"type": "STRING"},
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "chunk_id": {"type": "STRING"},
+                        "snippet": {"type": "STRING"},
+                    },
+                    "required": ["chunk_id", "snippet"],
+                },
             },
         },
         "required": [
@@ -81,6 +88,8 @@ def _build_prompt(*, query_text: str, evidence_package: EvidencePackage) -> str:
             "If the question asks for a specific field like a name, degree, skill set, role, company, email, or date, extract only that field.",
             "Do not concatenate unrelated bullets just because they were retrieved.",
             "If support is weak, say that briefly but still remain grounded.",
+            "Return JSON with keys: answer_text, cited_evidence_ids, citation_snippets.",
+            "citation_snippets must be an array of objects with keys: chunk_id and snippet.",
             "Return strict JSON only.",
             f"query={query_text}",
             f"query_kind={profile.query_kind}",
@@ -131,17 +140,41 @@ def _parse_result(payload: dict[str, object]) -> GeminiResult:
     if not isinstance(cited_raw, list) or not all(isinstance(item, str) and item.strip() for item in cited_raw):
         raise GeminiGenerationError("Gemini returned invalid cited_evidence_ids.")
 
-    snippets_raw = payload.get("citation_snippets", {})
-    if not isinstance(snippets_raw, dict) or not all(
-        isinstance(key, str) and key.strip() and isinstance(value, str) and value.strip()
-        for key, value in snippets_raw.items()
-    ):
+    snippets_raw = payload.get("citation_snippets", [])
+    snippet_map: dict[str, str] = {}
+    if isinstance(snippets_raw, dict):
+        snippet_map = {
+            key.strip(): value.strip()
+            for key, value in snippets_raw.items()
+            if isinstance(key, str)
+            and key.strip()
+            and isinstance(value, str)
+            and value.strip()
+        }
+    elif isinstance(snippets_raw, list):
+        for item in snippets_raw:
+            if not isinstance(item, dict):
+                raise GeminiGenerationError("Gemini returned invalid citation_snippets.")
+            chunk_id = item.get("chunk_id")
+            snippet = item.get("snippet")
+            if not (
+                isinstance(chunk_id, str)
+                and chunk_id.strip()
+                and isinstance(snippet, str)
+                and snippet.strip()
+            ):
+                raise GeminiGenerationError("Gemini returned invalid citation_snippets.")
+            snippet_map[chunk_id.strip()] = snippet.strip()
+    else:
+        raise GeminiGenerationError("Gemini returned invalid citation_snippets.")
+
+    if not snippet_map:
         raise GeminiGenerationError("Gemini returned invalid citation_snippets.")
 
     return GeminiResult(
         answer_text=answer_text,
         cited_evidence_ids=[item.strip() for item in cited_raw],
-        citation_snippets={key.strip(): value.strip() for key, value in snippets_raw.items()},
+        citation_snippets=snippet_map,
     )
 
 
