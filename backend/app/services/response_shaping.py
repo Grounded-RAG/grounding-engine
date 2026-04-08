@@ -99,7 +99,7 @@ def shape_grounded_response(
             chunk_id=item.chunk_id,
             document_id=item.document_id,
             chunk_index=item.chunk_index,
-            quote=_normalize_quote(draft.citation_snippets.get(item.chunk_id, item.text)),
+            quote=_normalize_quote(draft.citation_snippets.get(item.chunk_id) or item.text),
         )
         for item in cited_items
     ]
@@ -112,6 +112,14 @@ def shape_grounded_response(
     if confidence_score < 0.25:
         verification_status = "degraded"
         degraded_reasons.append("LOW_CONFIDENCE_SUPPORT")
+    elif confidence_score < 0.55:
+        degraded_reasons.append("PARTIAL_EVIDENCE")
+    elif (
+        len(cited_items) >= 2
+        and confidence_score < 0.7
+        and draft.support_coverage < 0.8
+    ):
+        degraded_reasons.append("AMBIGUOUS_SUPPORT")
     confidence_label = confidence_label_for_score(confidence_score)
     support_summary = support_summary_for_response(
         confidence_score=confidence_score,

@@ -328,3 +328,122 @@ async def test_execute_standard_query_rejects_higher_tier_namespace() -> None:
             tenant_context=tenant_context,
             query_request=query_request,
         )
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_uses_follow_up_context_for_second_document(monkeypatch) -> None:
+    """Follow-up summary queries should preserve document-order references in the query plan."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    query_request = QueryRequest(
+        namespace_id=namespace_id,
+        query="what about the second document",
+    )
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    captured_query_plan = None
+
+    from app.models import MessageRole
+
+    message = type("MessageStub", (), {"role": MessageRole.USER, "content": "What is the dataset about?"})()
+
+    async def fake_messages(**kwargs):
+        del kwargs
+        return [message]
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        nonlocal captured_query_plan
+        captured_query_plan = kwargs["query_plan"]
+        return RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
+
+    monkeypatch.setattr(
+        "app.services.query.list_conversation_messages",
+        fake_messages,
+    )
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        conversation_id=conversation_id,
+    )
+
+    assert captured_query_plan is not None
+    assert captured_query_plan.profile.document_reference_rank == 2
+    assert captured_query_plan.profile.query_kind == "summary"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_uses_multi_turn_conversation_context(monkeypatch) -> None:
+    """Multi-turn chat history should inform reference-heavy follow-ups beyond one prior turn."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    query_request = QueryRequest(
+        namespace_id=namespace_id,
+        query="did it mention pattern miner there",
+    )
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    captured_query_plan = None
+
+    from app.models import MessageRole
+
+    messages = [
+        type("MessageStub", (), {"role": MessageRole.USER, "content": "What is her work experience?"})(),
+        type(
+            "MessageStub",
+            (),
+            {
+                "role": MessageRole.ASSISTANT,
+                "content": "She has experience as an AI Engineer at iCog Labs and as a Backend | AI Developer Intern at iCog Labs.",
+            },
+        )(),
+        type("MessageStub", (), {"role": MessageRole.USER, "content": "What did she do at iCog Labs?"})(),
+    ]
+
+    async def fake_messages(**kwargs):
+        del kwargs
+        return messages
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        nonlocal captured_query_plan
+        captured_query_plan = kwargs["query_plan"]
+        return RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
+
+    monkeypatch.setattr(
+        "app.services.query.list_conversation_messages",
+        fake_messages,
+    )
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        conversation_id=conversation_id,
+    )
+
+    assert captured_query_plan is not None
+    assert captured_query_plan.used_conversation_context is True
+    assert "icog labs" in captured_query_plan.resolved_query_text.casefold()

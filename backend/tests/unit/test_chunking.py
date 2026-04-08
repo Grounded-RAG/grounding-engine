@@ -148,6 +148,112 @@ def test_build_chunk_manifest_keeps_distinct_sections_separate_when_headings_cha
     )
 
 
+def test_build_chunk_manifest_repairs_wrapped_bullet_lines() -> None:
+    """Structure-aware chunking should repair broken bullet wraps from semi-structured documents."""
+
+    manifest = build_chunk_manifest(
+        document_id=uuid.uuid4(),
+        text=(
+            "RETENTION REQUIREMENTS\n"
+            "- Retain employee records for 7 years after\n"
+            "  account closure and audit completion.\n"
+            "- Delete temporary access logs after\n"
+            "  30 days unless a legal hold applies."
+        ),
+        source_artifact_key="artifact.txt",
+        config=ChunkingConfig(
+            max_tokens=128,
+            overlap_tokens=8,
+            strategy="structure_aware_v1",
+        ),
+    )
+
+    chunk = manifest.chunks[0]
+    assert "Retain employee records for 7 years after account closure and audit completion." in chunk.text
+    assert "Delete temporary access logs after 30 days unless a legal hold applies." in chunk.text
+    assert chunk.is_list_block is True
+
+
+def test_build_chunk_manifest_pairs_label_value_form_lines() -> None:
+    """Short label/value rows should be normalized into cleaner key-value lines."""
+
+    manifest = build_chunk_manifest(
+        document_id=uuid.uuid4(),
+        text=(
+            "POLICY DETAILS\n"
+            "Policy Name\n"
+            "Employee Data Retention Policy\n"
+            "Effective Date\n"
+            "2026-01-01\n"
+            "Owner\n"
+            "Compliance Team"
+        ),
+        source_artifact_key="artifact.txt",
+        config=ChunkingConfig(
+            max_tokens=128,
+            overlap_tokens=8,
+            strategy="structure_aware_v1",
+        ),
+    )
+
+    chunk = manifest.chunks[0]
+    assert "Policy Name: Employee Data Retention Policy" in chunk.text
+    assert "Effective Date: 2026-01-01" in chunk.text
+    assert "Owner: Compliance Team" in chunk.text
+    assert chunk.is_list_block is True
+
+
+def test_build_chunk_manifest_preserves_table_like_rows() -> None:
+    """Table-like rows should keep visible separators so downstream retrieval can use the structure."""
+
+    manifest = build_chunk_manifest(
+        document_id=uuid.uuid4(),
+        text=(
+            "RETENTION SCHEDULE\n"
+            "Record Type\tRetention Period\tOwner\n"
+            "Employee File\t7 years\tHR\n"
+            "Access Logs\t30 days\tSecurity"
+        ),
+        source_artifact_key="artifact.txt",
+        config=ChunkingConfig(
+            max_tokens=128,
+            overlap_tokens=8,
+            strategy="structure_aware_v1",
+        ),
+    )
+
+    chunk = manifest.chunks[0]
+    assert "Record Type | Retention Period | Owner" in chunk.text
+    assert "Employee File | 7 years | HR" in chunk.text
+    assert "Access Logs | 30 days | Security" in chunk.text
+    assert chunk.is_list_block is True
+
+
+def test_build_chunk_manifest_repairs_wrapped_ocrish_paragraph_lines() -> None:
+    """Broken OCR-like paragraph line wraps should be stitched back into readable sentences."""
+
+    manifest = build_chunk_manifest(
+        document_id=uuid.uuid4(),
+        text=(
+            "POLICY SUMMARY\n"
+            "This policy describes employee\n"
+            "record retention requirements across\n"
+            "departments and legal holds."
+        ),
+        source_artifact_key="artifact.txt",
+        config=ChunkingConfig(
+            max_tokens=128,
+            overlap_tokens=8,
+            strategy="structure_aware_v1",
+        ),
+    )
+
+    assert (
+        "This policy describes employee record retention requirements across departments and legal holds."
+        in manifest.chunks[0].text
+    )
+
+
 def test_derive_chunk_manifest_key_uses_chunk_artifact_path() -> None:
     """Chunk manifests should live under the deterministic artifact prefix."""
 

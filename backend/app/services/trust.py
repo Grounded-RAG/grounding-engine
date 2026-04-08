@@ -36,6 +36,8 @@ def support_summary_for_response(
         "INSUFFICIENT_QUERY_ALIGNMENT",
     }:
         return "insufficient"
+    if normalized_reasons & {"PARTIAL_EVIDENCE", "AMBIGUOUS_SUPPORT"}:
+        return "partial"
     if confidence_score < 0.65:
         return "partial"
     return "grounded"

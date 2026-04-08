@@ -218,3 +218,34 @@ def test_shape_grounded_response_trims_long_citation_quotes() -> None:
     assert response.provider_fallback_from == "gemini_v1"
     assert response.citations[0].quote.endswith("...")
     assert len(response.citations[0].quote) <= 220
+
+
+def test_shape_grounded_response_marks_partial_support_without_full_degradation() -> None:
+    """Moderate support should stay grounded but be labeled partial for trust UI."""
+
+    item = _evidence_item(
+        citation_id="E001",
+        chunk_id="chunk-1",
+        text="The policy retains employee records for seven years after closure.",
+        score=0.02,
+    )
+    package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[item],
+    )
+    draft = GroundedAnswerDraft(
+        answer_text="The policy retains employee records for seven years after closure. [E001]",
+        cited_evidence_ids=["chunk-1"],
+        citation_snippets={"chunk-1": "The policy retains employee records for seven years after closure."},
+        generator_provider="local-grounded-v1",
+        support_coverage=0.6,
+        source_diversity=1,
+    )
+
+    response = shape_grounded_response(draft=draft, evidence_package=package)
+
+    assert response.verification_status == "passed"
+    assert response.support_summary == "partial"
+    assert response.degraded_reasons == ["PARTIAL_EVIDENCE"]
+    assert response.confidence_label in {"low", "medium"}

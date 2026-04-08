@@ -249,6 +249,105 @@
     ]
   },
   {
+    "name": "policy_requirements_question_returns_structured_list",
+    "query": "What are the retention requirements?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Employee records: retain for 7 years after account closure",
+      "Access logs: delete after 30 days unless a legal hold applies",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-policy",
+        "text": "RETENTION REQUIREMENTS\nEmployee records: retain for 7 years after account closure.\nAccess logs: delete after 30 days unless a legal hold applies.",
+        "score": 0.92
+      }
+    ]
+  },
+  {
+    "name": "biology_definition_question_returns_definition",
+    "query": "What does EGFR mean?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "EGFR is the epidermal growth factor receptor",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-biology",
+        "text": "EGFR is the epidermal growth factor receptor, a cell-surface receptor involved in signaling pathways.",
+        "score": 0.9
+      }
+    ]
+  },
+  {
+    "name": "manual_setup_question_returns_step_list",
+    "query": "What are the setup steps?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Connect the power cable",
+      "Install the desktop agent",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-manual",
+        "text": "SETUP STEPS\n1. Connect the power cable.\n2. Install the desktop agent.\n3. Sign in with your workspace account.",
+        "score": 0.91
+      }
+    ]
+  },
+  {
+    "name": "product_feature_question_returns_feature_list",
+    "query": "What features are included?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Real-time alerts",
+      "Audit logs",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-product",
+        "text": "FEATURES\nReal-time alerts\nRole-based access control\nAudit logs\nExportable reports",
+        "score": 0.9
+      }
+    ]
+  },
+  {
+    "name": "mixed_dataset_summary_mentions_multiple_documents",
+    "query": "What is the dataset about?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "customer support policy",
+      "api integration guide"
+    ],
+    "expected_citation_ids": ["E001", "E002"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-policy-summary",
+        "text": "CUSTOMER SUPPORT POLICY\nEscalation paths and response time targets.",
+        "score": 0.86
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-api-summary",
+        "text": "API INTEGRATION GUIDE\nAuthentication, rate limits, and webhook handling.",
+        "score": 0.84
+      }
+    ]
+  },
+  {
     "name": "unrelated_query_without_alignment_fails_generation",
     "query": "What is the weather today?",
     "expected_type": "generation_error",

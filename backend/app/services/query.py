@@ -14,7 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext
 from app.core.llm_client import GroundedGenerationError
-from app.core.query_analysis import build_query_plan, query_plan_metadata, QueryPlan
+from app.core.query_analysis import (
+    ConversationContext,
+    build_conversation_context,
+    build_query_plan,
+    query_plan_metadata,
+    QueryPlan,
+)
 from app.models import ExecutionTier, MessageRole, Namespace, QueryTrace, UserFacingMode
 from app.schemas.query import GroundedAnswerResponse, QueryRequest
 from app.services.messages import MessageServiceError, list_conversation_messages
@@ -220,14 +226,14 @@ async def _persist_query_trace(
     return trace
 
 
-async def _resolve_previous_user_query(
+async def _resolve_conversation_context(
     *,
     session: AsyncSession,
     tenant_id: uuid.UUID,
     conversation_id: uuid.UUID | None,
     current_query: str,
-) -> str | None:
-    """Return the prior user query for safe follow-up expansion when available."""
+) -> ConversationContext | None:
+    """Return a lightweight rolling conversation context for follow-up expansion."""
 
     if conversation_id is None:
         return None
@@ -240,14 +246,29 @@ async def _resolve_previous_user_query(
     except MessageServiceError:
         return None
 
-    user_messages = [message for message in messages if message.role is MessageRole.USER]
-    if not user_messages:
+    history = list(messages)
+    if (
+        history
+        and history[-1].role is MessageRole.USER
+        and history[-1].content.strip() == current_query.strip()
+    ):
+        history = history[:-1]
+    if not history:
         return None
-    if user_messages and user_messages[-1].content.strip() == current_query.strip():
-        user_messages = user_messages[:-1]
-    if not user_messages:
-        return None
-    return user_messages[-1].content
+    recent_user_queries = [
+        message.content
+        for message in history
+        if message.role is MessageRole.USER
+    ][-4:]
+    recent_assistant_messages = [
+        message.content
+        for message in history
+        if message.role is MessageRole.ASSISTANT
+    ][-2:]
+    return build_conversation_context(
+        recent_user_queries=recent_user_queries,
+        recent_assistant_messages=recent_assistant_messages,
+    )
 
 
 async def _update_query_trace_timings(
@@ -335,7 +356,7 @@ async def execute_standard_query(
 
     query_plan = build_query_plan(
         query_request.query,
-        previous_user_query=await _resolve_previous_user_query(
+        conversation_context=await _resolve_conversation_context(
             session=session,
             tenant_id=tenant_context.tenant_id,
             conversation_id=conversation_id,

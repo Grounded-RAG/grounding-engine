@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.core.query_analysis import (
+    build_conversation_context,
     build_query_plan,
     build_query_profile,
     is_action_query,
@@ -46,6 +47,15 @@ def test_build_query_profile_marks_collection_queries_generically() -> None:
     """Collection-style questions should be recognized from generic attribute wording."""
 
     profile = build_query_profile("What are the supported languages?")
+
+    assert profile.query_kind == "list"
+    assert is_collection_query(profile) is True
+
+
+def test_build_query_profile_detects_included_features_query_as_collection() -> None:
+    """Collection phrasing like 'what features are included' should still route as list queries."""
+
+    profile = build_query_profile("What features are included?")
 
     assert profile.query_kind == "list"
     assert is_collection_query(profile) is True
@@ -136,3 +146,74 @@ def test_build_query_profile_detects_count_queries() -> None:
 
     assert is_count_query(profile) is True
     assert "projects" in profile.attribute_terms or "project" in profile.attribute_terms
+
+
+def test_build_query_plan_preserves_document_reference_follow_up_scope() -> None:
+    """Document-order follow-ups should inherit summary scope from the prior turn."""
+
+    plan = build_query_plan(
+        "what about the second document",
+        previous_user_query="What is the dataset about?",
+    )
+
+    assert plan.used_conversation_context is True
+    assert plan.profile.document_reference_rank == 2
+    assert plan.profile.query_kind == "summary"
+    assert "document_reference_rank=2" in plan.explanation
+
+
+def test_build_query_plan_reuses_previous_context_for_reference_follow_up() -> None:
+    """Reference-heavy follow-ups should preserve the prior contextual target when needed."""
+
+    plan = build_query_plan(
+        "did it mention pattern miner there",
+        previous_user_query="What did she do at iCog Labs?",
+    )
+
+    assert plan.used_conversation_context is True
+    assert "icog labs" in plan.resolved_query_text.casefold()
+
+
+def test_build_query_plan_uses_long_history_conversation_context() -> None:
+    """Follow-ups should be able to recover context from a small rolling history window."""
+
+    conversation_context = build_conversation_context(
+        recent_user_queries=[
+            "What is her work experience?",
+            "What did she do at iCog Labs?",
+            "What about the internship?",
+        ],
+        recent_assistant_messages=[
+            "She worked as an AI Engineer at iCog Labs and later as a Backend | AI Developer Intern at iCog Labs.",
+        ],
+    )
+
+    assert conversation_context is not None
+    plan = build_query_plan(
+        "did it mention pattern miner there",
+        conversation_context=conversation_context,
+    )
+
+    assert plan.used_conversation_context is True
+    assert "icog labs" in plan.resolved_query_text.casefold()
+    assert "pattern miner" in plan.resolved_query_text.casefold()
+
+
+def test_build_query_plan_preserves_document_reference_from_recent_history() -> None:
+    """Reference-only follow-ups should inherit a recent document ordinal when available."""
+
+    conversation_context = build_conversation_context(
+        recent_user_queries=[
+            "What is the dataset about?",
+            "What about the second document?",
+        ],
+    )
+
+    assert conversation_context is not None
+    plan = build_query_plan(
+        "did it mention pricing there",
+        conversation_context=conversation_context,
+    )
+
+    assert plan.used_conversation_context is True
+    assert "second document" in plan.resolved_query_text.casefold()

@@ -111,12 +111,14 @@ _ATTRIBUTE_PATTERNS = [
     re.compile(r"^(?:what|which)\s+(?:is|are|was|were)\s+(?:the\s+)?(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"),
     re.compile(r"^(?:list|show\s+me|give\s+me|tell\s+me)\s+(?:the\s+)?(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"),
     re.compile(r"^(?:how\s+many|number\s+of|count\s+(?:the\s+)?)\s*(?P<attribute>.+?)(?:\s+(?:are|does|do|did|has|have|had|can|could|should|would)\b|$)"),
+    re.compile(r"^(?:what|which)\s+(?P<attribute>.+?)\s+(?:are|is)\s+(?:include|included|available|list|listed|provide|provided|support|supported)\b"),
     re.compile(r"^(?:what|which)\s+(?P<attribute>.+?)\s+(?:does|do|did|has|have|had|can|could|should|would)\b"),
     re.compile(r"^(?:who\s+is\s+(?:the\s+)?)(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"),
 ]
 _FOLLOW_UP_PREFIXES = ("and ", "also ", "how about", "what about", "what else", "and what", "and how")
 _REFERENCE_ONLY_PATTERN = re.compile(r"^(?:and\s+)?(?:what\s+about\s+)?(?:it|that|this|those|these|them|there|here)\b")
 _REFERENCE_MARKER_PATTERN = re.compile(r"\b(?:it|that|this|those|these|them|there|here|former|latter|second|first)\b")
+_DOCUMENT_REFERENCE_PATTERN = re.compile(r"\b(?P<ordinal>first|second|third)\s+document\b")
 _CONTEXT_PREPOSITION_PATTERN = re.compile(r"\b(?:at|in|on|for|with|about|under|within|inside)\s+(?P<context>.+)$")
 _CONTEXT_BREAK_TOKENS = {"and", "another", "any", "because", "but", "else", "if", "only", "or", "than", "there", "whether"}
 _ACTION_HINT_TERMS = {
@@ -148,6 +150,7 @@ class QueryProfile:
     context_terms: frozenset[str]
     semantic_tags: frozenset[str]
     query_kind: QueryKind
+    document_reference_rank: int | None = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +164,20 @@ class QueryPlan:
     retrieval_queries: tuple[str, ...]
     explanation: str
     used_conversation_context: bool
+
+
+@dataclass(frozen=True)
+class ConversationContext:
+    """Small deterministic memory distilled from recent conversation turns."""
+
+    recent_user_queries: tuple[str, ...]
+    recent_assistant_messages: tuple[str, ...]
+    carried_attribute_terms: tuple[str, ...]
+    carried_context_terms: tuple[str, ...]
+    carried_semantic_tags: tuple[str, ...]
+    carried_focus_terms: tuple[str, ...]
+    last_query_kind: QueryKind | None
+    last_document_reference_rank: int | None = None
 
 
 def _normalize_token(token: str) -> str:
@@ -182,6 +199,20 @@ def _normalize_text(text: str) -> str:
 
 
 def _dedupe_texts(values: list[str]) -> tuple[str, ...]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = _normalize_text(value)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(value.strip())
+    return tuple(deduped)
+
+
+def _dedupe_preserve_order(values: list[str]) -> tuple[str, ...]:
+    """Return non-empty values with stable first-seen ordering."""
+
     deduped: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -325,6 +356,16 @@ def _extract_context_terms(*, normalized_text: str) -> set[str]:
     return context_terms
 
 
+def _document_reference_rank(normalized_text: str) -> int | None:
+    """Extract a lightweight 1-based document ordinal reference when present."""
+
+    match = _DOCUMENT_REFERENCE_PATTERN.search(normalized_text)
+    if not match:
+        return None
+    ordinal = match.group("ordinal")
+    return {"first": 1, "second": 2, "third": 3}.get(ordinal)
+
+
 def _extract_attribute_terms(*, normalized_text: str, terms: set[str]) -> set[str]:
     """Extract generic attribute phrases like work experience or pricing model."""
 
@@ -377,6 +418,35 @@ def _build_semantic_tags(*, normalized_text: str, terms: set[str]) -> set[str]:
         ):
             semantic_tags.add(canonical)
     return semantic_tags
+
+
+def _assistant_focus_terms(text: str) -> list[str]:
+    """Extract a few salient phrases from assistant replies for follow-up grounding."""
+
+    candidates: list[str] = []
+    lines = [line.strip(" -*:\t") for line in text.splitlines() if line.strip()]
+    for line in lines[:8]:
+        if _is_heading_only_line(line):
+            continue
+        if _looks_like_name_line(line):
+            candidates.append(line)
+            continue
+        if ":" in line and len(line) <= 120:
+            label, value = line.split(":", 1)
+            label_terms = tokenize_meaningful_terms(label)
+            value_terms = tokenize_meaningful_terms(value)
+            if label_terms and value_terms:
+                candidates.append(f"{label.strip()}: {value.strip()}")
+                continue
+        for match in re.finditer(
+            r"\b[A-Z][A-Za-z0-9&+/#'-]*(?:\s+[A-Z][A-Za-z0-9&+/#'-]*){1,3}\b",
+            line,
+        ):
+            phrase = match.group(0).strip()
+            if _is_heading_only_line(phrase):
+                continue
+            candidates.append(phrase)
+    return list(_dedupe_preserve_order(candidates))[:8]
 
 
 def _is_summary_query(*, normalized_text: str, terms: set[str]) -> bool:
@@ -475,6 +545,8 @@ def _is_follow_up_like_query(profile: QueryProfile) -> bool:
         return True
     if _REFERENCE_MARKER_PATTERN.search(normalized):
         return True
+    if profile.document_reference_rank is not None:
+        return True
     return (
         len(profile.terms) <= 2
         and not profile.attribute_terms
@@ -487,29 +559,121 @@ def _resolve_follow_up_context(
     query_text: str,
     profile: QueryProfile,
     previous_user_query: str | None,
+    conversation_context: ConversationContext | None = None,
 ) -> tuple[str, bool]:
     """Optionally enrich an underspecified follow-up using the prior user turn."""
 
-    if previous_user_query is None:
+    if conversation_context is None and previous_user_query is not None:
+        conversation_context = build_conversation_context(
+            recent_user_queries=[previous_user_query],
+        )
+    if conversation_context is None:
         return query_text, False
     if not _is_follow_up_like_query(profile):
         return query_text, False
 
-    previous_profile = build_query_profile(previous_user_query)
     context_fragments: list[str] = []
-    if not profile.attribute_terms and previous_profile.attribute_terms:
-        context_fragments.extend(sorted(previous_profile.attribute_terms))
-    if not profile.context_terms and previous_profile.context_terms:
-        context_fragments.extend(sorted(previous_profile.context_terms))
-    if not profile.semantic_tags and previous_profile.semantic_tags:
-        context_fragments.extend(sorted(previous_profile.semantic_tags))
-    if not context_fragments:
-        context_fragments.extend(sorted(previous_profile.terms)[:4])
+    if (
+        profile.document_reference_rank is None
+        and conversation_context.last_document_reference_rank is not None
+        and _REFERENCE_MARKER_PATTERN.search(profile.normalized_text)
+    ):
+        ordinal = {
+            1: "first document",
+            2: "second document",
+            3: "third document",
+        }.get(conversation_context.last_document_reference_rank)
+        if ordinal is not None:
+            context_fragments.append(ordinal)
+    if not profile.attribute_terms and conversation_context.carried_attribute_terms:
+        context_fragments.extend(conversation_context.carried_attribute_terms[:2])
+    if not profile.context_terms and conversation_context.carried_context_terms:
+        context_fragments.extend(conversation_context.carried_context_terms[:2])
+    if not profile.semantic_tags and conversation_context.carried_semantic_tags:
+        context_fragments.extend(conversation_context.carried_semantic_tags[:2])
+    if (
+        profile.document_reference_rank is not None
+        and conversation_context.last_query_kind == "summary"
+    ):
+        context_fragments.extend(["dataset", "summary", "overview"])
+    if (
+        not profile.context_terms
+        and profile.query_kind in {"action", "comparison", "entity", "open"}
+        and conversation_context.carried_focus_terms
+    ):
+        context_fragments.extend(conversation_context.carried_focus_terms[:4])
     if not context_fragments:
         return query_text, False
 
-    resolved_query_text = f"{query_text.strip()} context {' '.join(context_fragments)}"
+    resolved_query_text = f"{query_text.strip()} context {' '.join(_dedupe_preserve_order(context_fragments))}"
     return resolved_query_text.strip(), True
+
+
+def build_conversation_context(
+    *,
+    recent_user_queries: list[str] | tuple[str, ...],
+    recent_assistant_messages: list[str] | tuple[str, ...] = (),
+) -> ConversationContext | None:
+    """Compress recent conversation turns into a small reusable memory object."""
+
+    user_queries = [query.strip() for query in recent_user_queries if query and query.strip()]
+    assistant_messages = [
+        message.strip()
+        for message in recent_assistant_messages
+        if message and message.strip()
+    ]
+    if not user_queries and not assistant_messages:
+        return None
+
+    recent_profiles = [build_query_profile(query) for query in user_queries[-4:]]
+    ordered_recent_profiles = list(reversed(recent_profiles))
+
+    carried_attribute_terms: list[str] = []
+    carried_context_terms: list[str] = []
+    carried_semantic_tags: list[str] = []
+    carried_focus_terms: list[str] = []
+
+    for profile in ordered_recent_profiles:
+        carried_attribute_terms.extend(sorted(profile.attribute_terms))
+        carried_context_terms.extend(sorted(profile.context_terms))
+        carried_semantic_tags.extend(sorted(profile.semantic_tags))
+        for attribute in sorted(profile.attribute_terms):
+            carried_focus_terms.append(attribute)
+        for context in sorted(profile.context_terms):
+            carried_focus_terms.append(context)
+        for term in sorted(profile.terms):
+            if (
+                len(term) >= 4
+                and term not in _GENERIC_QUERY_VOCABULARY
+                and term not in _ATTRIBUTE_NOISE_TOKENS
+            ):
+                carried_focus_terms.append(term)
+
+    recent_assistant_phrases: list[str] = []
+    for message in reversed(assistant_messages[-2:]):
+        recent_assistant_phrases.extend(_assistant_focus_terms(message))
+
+    for phrase in recent_assistant_phrases:
+        carried_focus_terms.append(phrase)
+        normalized_phrase = _normalize_text(phrase)
+        if " " in normalized_phrase:
+            carried_context_terms.append(normalized_phrase)
+
+    most_recent_profile = ordered_recent_profiles[0] if ordered_recent_profiles else None
+    return ConversationContext(
+        recent_user_queries=tuple(user_queries[-4:]),
+        recent_assistant_messages=tuple(assistant_messages[-2:]),
+        carried_attribute_terms=_dedupe_preserve_order(carried_attribute_terms),
+        carried_context_terms=_dedupe_preserve_order(carried_context_terms),
+        carried_semantic_tags=_dedupe_preserve_order(carried_semantic_tags),
+        carried_focus_terms=_dedupe_preserve_order(carried_focus_terms),
+        last_query_kind=most_recent_profile.query_kind if most_recent_profile is not None else None,
+        last_document_reference_rank=(
+            most_recent_profile.document_reference_rank
+            if most_recent_profile is not None
+            else None
+        ),
+    )
 
 
 def build_query_profile(query_text: str) -> QueryProfile:
@@ -518,6 +682,7 @@ def build_query_profile(query_text: str) -> QueryProfile:
     normalized_text = _normalize_text(query_text)
     terms = tokenize_meaningful_terms(query_text)
     context_terms = _extract_context_terms(normalized_text=normalized_text)
+    document_reference_rank = _document_reference_rank(normalized_text)
     attribute_terms = _extract_attribute_terms(
         normalized_text=normalized_text,
         terms=terms,
@@ -601,6 +766,7 @@ def build_query_profile(query_text: str) -> QueryProfile:
         context_terms=frozenset(context_terms),
         semantic_tags=frozenset(semantic_tags),
         query_kind=query_kind,
+        document_reference_rank=document_reference_rank,
     )
 
 
@@ -698,6 +864,8 @@ def explain_query_plan(plan: QueryPlan) -> str:
         explanation_parts.append(
             "context=" + ", ".join(sorted(plan.profile.context_terms))
         )
+    if plan.profile.document_reference_rank is not None:
+        explanation_parts.append(f"document_reference_rank={plan.profile.document_reference_rank}")
     if plan.profile.semantic_tags:
         explanation_parts.append(
             "semantic_tags=" + ", ".join(sorted(plan.profile.semantic_tags))
@@ -713,6 +881,7 @@ def build_query_plan(
     query_text: str,
     *,
     previous_user_query: str | None = None,
+    conversation_context: ConversationContext | None = None,
 ) -> QueryPlan:
     """Build one Standard query plan with lightweight rewriting and explanation."""
 
@@ -721,6 +890,7 @@ def build_query_plan(
         query_text=query_text,
         profile=initial_profile,
         previous_user_query=previous_user_query,
+        conversation_context=conversation_context,
     )
     profile = (
         initial_profile
@@ -758,6 +928,7 @@ def query_plan_metadata(plan: QueryPlan) -> dict[str, Any]:
         "query_kind": plan.profile.query_kind,
         "attribute_terms": list(sorted(plan.profile.attribute_terms)),
         "context_terms": list(sorted(plan.profile.context_terms)),
+        "document_reference_rank": plan.profile.document_reference_rank,
         "semantic_tags": list(sorted(plan.profile.semantic_tags)),
         "retrieval_query_text": plan.retrieval_query_text,
         "retrieval_queries": list(plan.retrieval_queries),

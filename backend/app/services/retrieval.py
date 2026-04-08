@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from sqlalchemy import or_, select, text
@@ -623,6 +623,15 @@ async def retrieve_hybrid_candidates(
             namespace_id=namespace_id,
             limit=max(final_limit, settings.evidence_package_limit * 2),
         )
+        if profile.document_reference_rank is not None:
+            target_index = profile.document_reference_rank - 1
+            adjusted_summary_hits: list[FusedRetrievedChunk] = []
+            for index, hit in enumerate(summary_hits):
+                scale = 1.5 if index == target_index else 0.75
+                adjusted_summary_hits.append(
+                    replace(hit, fused_score=max(hit.fused_score * scale, 0.0001))
+                )
+            summary_hits = adjusted_summary_hits
         existing_chunk_ids = {hit.chunk_id for hit in fused_hits}
         fused_hits = list(fused_hits) + [
             hit for hit in summary_hits if hit.chunk_id not in existing_chunk_ids

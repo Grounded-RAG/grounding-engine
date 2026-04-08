@@ -143,7 +143,7 @@ def _looks_like_label_only_line(line: str) -> bool:
         or _looks_like_table_line(stripped)
         or _looks_like_key_value_line(stripped)
         or any(character.isdigit() for character in stripped)
-        or len(stripped.split()) > 5
+        or len(stripped.split()) > 3
     ):
         return False
     return stripped == stripped.title() or stripped.isupper()
@@ -165,10 +165,10 @@ def _pair_label_value_lines(lines: list[str]) -> list[str]:
         if (
             _looks_like_label_only_line(line)
             and next_line
-            and not _looks_like_label_only_line(next_line)
             and not _HEADING_LINE_PATTERN.fullmatch(next_line)
             and not _BULLET_LINE_PATTERN.match(next_line)
             and not _looks_like_table_line(next_line)
+            and not _looks_like_key_value_line(next_line)
         ):
             paired.append(f"{line.rstrip(':')}: {next_line}")
             index += 2
@@ -188,6 +188,7 @@ def _should_merge_with_previous_line(previous_line: str, current_line: str) -> b
     if (
         not previous
         or not current
+        or _HEADING_LINE_PATTERN.fullmatch(previous)
         or _HEADING_LINE_PATTERN.fullmatch(current)
         or _BULLET_LINE_PATTERN.match(current)
         or _looks_like_table_line(previous)
