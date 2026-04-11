@@ -36,6 +36,7 @@ Use these files as the source of truth:
 
 - `docs/PRODUCT_FLOW.md`
 - `docs/SOLUTION_ARCHITECTURE.md`
+- `docs/STANDARD_TIER_CURRENT_STATE.md`
 - `docs/SYSTEM_DESIGN.md`
 - `docs/IMPLEMENTATION_PLAN.md`
 - `docs/PHASE_1_5_BACKEND_PLAN.md`
@@ -75,8 +76,10 @@ The next concrete backend phase is `Phase 2`.
 Current delivered state:
 
 1. Phase 1 Standard backend is complete
-2. Phase 1.5 product-shell backend is complete
-3. the frontend shell is now integrated against the current backend contracts
+2. the current Standard implementation handoff is documented in:
+   - `docs/STANDARD_TIER_CURRENT_STATE.md`
+3. Phase 1.5 product-shell backend is complete
+4. the frontend shell is now integrated against the current backend contracts
 
 Phase 2 build order:
 
