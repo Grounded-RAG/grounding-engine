@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from app.config import get_settings
 from app.core.gemini_generator import GeminiGenerationError, generate_gemini_draft
@@ -67,6 +68,9 @@ _FIELD_ANSWER_NOISE = {
     "person",
     "the",
 }
+
+_OUTLINE_HEADING_PATTERN = re.compile(r"^\d+(?:\.\d+)*[.)]?\s+[A-Z][A-Za-z0-9/&,\- ]{2,}$")
+_HEADING_ONLY_PATTERN = re.compile(r"^[A-Z][A-Z0-9/&,\- ]{2,}$")
 
 
 @dataclass(frozen=True)
@@ -155,6 +159,13 @@ def _provider_draft_is_query_aligned(
             draft=draft,
         )
 
+    if is_collection_query(profile):
+        return _provider_collection_is_query_aligned(
+            query_text=query_text,
+            cited_items=cited_items,
+            draft=draft,
+        )
+
     if is_comparison_query(profile) or is_entity_context_query(profile):
         return _provider_boolean_like_is_query_aligned(
             query_text=query_text,
@@ -204,6 +215,16 @@ def _provider_draft_is_query_aligned(
         return aligned_count >= 1
 
     return aligned_count >= 1
+
+
+def _looks_like_heading_only(text: str) -> bool:
+    stripped = re.sub(r"\s+", " ", text).strip().rstrip(":")
+    if not stripped:
+        return False
+    return bool(
+        _HEADING_ONLY_PATTERN.fullmatch(stripped)
+        or _OUTLINE_HEADING_PATTERN.fullmatch(stripped)
+    )
 
 
 def _significant_terms(text: str, *, noise_terms: set[str]) -> set[str]:
@@ -291,6 +312,55 @@ def _provider_action_is_query_aligned(
         cited_items=cited_items,
         draft=draft,
     )
+
+
+def _provider_collection_is_query_aligned(
+    *,
+    query_text: str,
+    cited_items: list,
+    draft: GroundedAnswerDraft,
+) -> bool:
+    profile = build_query_profile(query_text)
+    normalized_answer = re.sub(r"\s+", " ", draft.answer_text).strip()
+    if len(normalized_answer.split()) < 4:
+        return False
+    if len(normalized_answer.split()) > 120:
+        return False
+
+    answer_lines = [
+        line.strip(" -*:\t")
+        for line in re.split(r"[\n;]+", draft.answer_text)
+        if line.strip()
+    ]
+    non_heading_lines = [line for line in answer_lines if not _looks_like_heading_only(line)]
+    if not non_heading_lines:
+        return False
+
+    if not any(
+        has_strong_intent_signal(item.text, profile=profile)
+        or score_text_against_query(
+            draft.citation_snippets.get(item.chunk_id, item.text),
+            profile=profile,
+            chunk_index=item.chunk_index,
+        ) >= 8.0
+        for item in cited_items
+    ):
+        return False
+
+    answer_terms = _significant_terms(draft.answer_text, noise_terms=_FIELD_ANSWER_NOISE)
+    evidence_terms: set[str] = set()
+    for item in cited_items:
+        evidence_terms.update(_significant_terms(item.text, noise_terms=set()))
+
+    if len(answer_terms & evidence_terms) < 2:
+        return False
+
+    unsupported_terms = {
+        term
+        for term in answer_terms
+        if term not in evidence_terms and term not in profile.semantic_tags
+    }
+    return len(unsupported_terms) <= 4
 
 
 def _provider_boolean_like_is_query_aligned(

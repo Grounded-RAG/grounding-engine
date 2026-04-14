@@ -63,6 +63,7 @@ def _build_prompt(*, query_text: str, evidence_package: EvidencePackage) -> str:
     """Render a grounded instruction block for Gemini."""
 
     profile = build_query_profile(query_text)
+    answer_style_instructions = _answer_style_instructions(profile.query_kind)
     evidence_sections: list[str] = []
     for item in evidence_package.items:
         evidence_sections.append(
@@ -73,6 +74,11 @@ def _build_prompt(*, query_text: str, evidence_package: EvidencePackage) -> str:
                     f"document_id={item.document_id}",
                     f"chunk_index={item.chunk_index}",
                     f"sources={','.join(item.sources)}",
+                    f"section_title={item.section_title or 'none'}",
+                    f"section_slug={item.section_slug or 'none'}",
+                    f"chunk_role={item.chunk_role}",
+                    f"starts_with_heading={str(item.starts_with_heading).lower()}",
+                    f"is_list_block={str(item.is_list_block).lower()}",
                     f"text={item.text}",
                 ]
             )
@@ -87,6 +93,7 @@ def _build_prompt(*, query_text: str, evidence_package: EvidencePackage) -> str:
             "Prefer the single chunk or small set of chunks that directly answer the question.",
             "If the question asks for a specific field like a name, degree, skill set, role, company, email, or date, extract only that field.",
             "Do not concatenate unrelated bullets just because they were retrieved.",
+            "Use section_title, chunk_role, and list structure when they help identify the right evidence.",
             "If support is weak, say that briefly but still remain grounded.",
             "Return JSON with keys: answer_text, cited_evidence_ids, citation_snippets.",
             "citation_snippets must be an array of objects with keys: chunk_id and snippet.",
@@ -97,10 +104,50 @@ def _build_prompt(*, query_text: str, evidence_package: EvidencePackage) -> str:
             f"attribute_terms={','.join(sorted(profile.attribute_terms)) or 'none'}",
             "focus_hints:",
             "\n".join(query_focus_hints(profile)) or "none",
+            "answer_style:",
+            "\n".join(answer_style_instructions),
             "evidence:",
             "\n\n".join(evidence_sections),
         ]
     )
+
+
+def _answer_style_instructions(query_kind: str) -> list[str]:
+    """Return short answer-shape instructions tuned to the query kind."""
+
+    if query_kind == "summary":
+        return [
+            "Write a concise 1-2 sentence summary of what the dataset or document is about.",
+            "Prefer the document title, subject, and major sections over generic headings like Introduction or References.",
+            "Do not dump raw chunk text.",
+        ]
+    if query_kind == "list":
+        return [
+            "Return only the relevant items, methods, tools, features, requirements, or skills.",
+            "Prefer short structured items over long paragraphs.",
+            "Do not include generic section labels as answer items.",
+        ]
+    if query_kind == "action":
+        return [
+            "State the concrete responsibilities, contributions, or actions supported by the evidence.",
+            "If the evidence supports a role or company, include that briefly and then the actions.",
+        ]
+    if query_kind in {"boolean", "comparison", "entity"}:
+        return [
+            "Start with Yes. or No. when the evidence clearly supports it.",
+            "Then give one brief grounded explanation using only the cited evidence.",
+        ]
+    if query_kind == "count":
+        return [
+            "Return the grounded count first, then mention the counted items when they are clear.",
+        ]
+    if query_kind == "definition":
+        return [
+            "Only answer if the evidence explicitly defines or explains the concept.",
+        ]
+    return [
+        "Answer concisely and stay strictly within the cited evidence.",
+    ]
 
 
 def _extract_text_from_candidate(payload: dict[str, object]) -> str:

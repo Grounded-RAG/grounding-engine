@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 
 from app.config import get_settings
-from app.core.embeddings import DenseEmbedding, EmbeddingError
+from app.core.embeddings import DenseEmbedding, EmbeddingError, EmbeddingPurpose
 from app.core.provider_retry import run_with_retries
 
 
@@ -16,7 +16,11 @@ class OpenAICompatibleEmbeddingError(EmbeddingError):
     """Raised when the OpenAI-compatible embedding backend cannot return vectors."""
 
 
-async def embed_texts_openai_compatible(texts: list[str]) -> list[DenseEmbedding]:
+async def embed_texts_openai_compatible(
+    texts: list[str],
+    *,
+    purpose: EmbeddingPurpose = "generic",
+) -> list[DenseEmbedding]:
     """Embed a batch of texts using an OpenAI-compatible embeddings endpoint."""
 
     settings = get_settings()
@@ -24,6 +28,7 @@ async def embed_texts_openai_compatible(texts: list[str]) -> list[DenseEmbedding
         raise OpenAICompatibleEmbeddingError("OPENAI_API_KEY is not configured.")
     if not texts:
         return []
+    del purpose
 
     request_payload = {
         "model": settings.openai_embedding_model,

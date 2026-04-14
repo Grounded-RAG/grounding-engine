@@ -114,8 +114,9 @@ async def test_dense_retrieve_chunks_maps_qdrant_points(monkeypatch) -> None:
     namespace_id = uuid.uuid4()
     document_id = uuid.uuid4()
 
-    async def fake_embed_texts(texts: list[str]):
+    async def fake_embed_texts(texts: list[str], *, purpose: str = "generic"):
         assert texts == ["alpha query"]
+        assert purpose == "query"
         from app.core.embeddings import DenseEmbedding
 
         return [DenseEmbedding(text="alpha query", vector=[0.1, 0.2, 0.3])]

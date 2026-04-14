@@ -852,3 +852,60 @@ async def test_generate_answer_from_evidence_rejects_weak_provider_summary_answe
 
     assert draft.answer_text.startswith("The dataset contains")
     assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
+
+
+@pytest.mark.asyncio()
+async def test_generate_answer_from_evidence_rejects_heading_only_provider_collection_answer(monkeypatch) -> None:
+    """Provider list answers should fall back when they mostly echo headings instead of grounded items."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-paper-tools"],
+        selected_evidence_ids=["chunk-paper-tools"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-paper-tools",
+                text=(
+                    "The What-If Tool demonstrates how visual analytics can support model debugging, "
+                    "feature sensitivity analysis, and fairness inspection with low coding overhead. "
+                    "Together with SHAP and LIME, it shows how XAI tooling is entering practical engineering workflows."
+                ),
+            ),
+        ],
+    )
+
+    monkeypatch.setattr(
+        "app.services.generation.resolve_generation_backend",
+        lambda: GenerationBackend(
+            provider_name="gemini_v1",
+            implementation="gemini",
+        ),
+    )
+
+    async def fake_generate_gemini_draft(**kwargs):
+        del kwargs
+        from app.pipeline.contracts import GroundedAnswerDraft
+
+        return GroundedAnswerDraft(
+            answer_text="2. Methods, Technologies, and Tools [E001]",
+            cited_evidence_ids=["chunk-paper-tools"],
+            citation_snippets={
+                "chunk-paper-tools": "2. Methods, Technologies, and Tools",
+            },
+            generator_provider="gemini:gemini-2.5-flash",
+            support_coverage=1.0,
+            source_diversity=1,
+        )
+
+    monkeypatch.setattr(
+        "app.services.generation.generate_gemini_draft",
+        fake_generate_gemini_draft,
+    )
+
+    draft = await generate_answer_from_evidence(
+        query_text="What are the tools?",
+        evidence_package=evidence_package,
+    )
+
+    assert "What-If Tool" in draft.answer_text
+    assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"

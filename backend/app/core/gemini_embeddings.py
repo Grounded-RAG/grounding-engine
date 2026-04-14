@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 
 from app.config import get_settings
-from app.core.embeddings import DenseEmbedding, EmbeddingError
+from app.core.embeddings import DenseEmbedding, EmbeddingError, EmbeddingPurpose
 from app.core.provider_retry import run_with_retries
 
 
@@ -17,7 +17,14 @@ class GeminiEmbeddingError(EmbeddingError):
     """Raised when the Gemini embedding backend cannot return vectors."""
 
 
-async def _embed_one(text: str) -> DenseEmbedding:
+_GEMINI_TASK_TYPE_BY_PURPOSE: dict[EmbeddingPurpose, str] = {
+    "document": "RETRIEVAL_DOCUMENT",
+    "query": "RETRIEVAL_QUERY",
+    "generic": "SEMANTIC_SIMILARITY",
+}
+
+
+async def _embed_one(text: str, *, purpose: EmbeddingPurpose) -> DenseEmbedding:
     settings = get_settings()
     if not settings.gemini_api_key:
         raise GeminiEmbeddingError("GEMINI_API_KEY is not configured.")
@@ -32,6 +39,7 @@ async def _embed_one(text: str) -> DenseEmbedding:
         "content": {
             "parts": [{"text": text}],
         },
+        "taskType": _GEMINI_TASK_TYPE_BY_PURPOSE[purpose],
         "outputDimensionality": settings.dense_embedding_dimensions,
     }
     request = urllib.request.Request(
@@ -80,7 +88,11 @@ async def _embed_one(text: str) -> DenseEmbedding:
     )
 
 
-async def embed_texts_gemini(texts: list[str]) -> list[DenseEmbedding]:
+async def embed_texts_gemini(
+    texts: list[str],
+    *,
+    purpose: EmbeddingPurpose = "generic",
+) -> list[DenseEmbedding]:
     """Embed texts with Gemini, preserving order."""
 
-    return [await _embed_one(text) for text in texts]
+    return [await _embed_one(text, purpose=purpose) for text in texts]

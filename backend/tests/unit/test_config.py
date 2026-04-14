@@ -108,6 +108,20 @@ def test_settings_emit_startup_warnings_for_fallback_prone_standard_config() -> 
     assert any("CHUNKING_STRATEGY" in warning for warning in warnings)
 
 
+def test_settings_warn_when_embedding_provider_is_strict_without_api_key() -> None:
+    """Embedding warnings should explain strict provider failure when fallback is disabled."""
+
+    settings = Settings(
+        embedding_backend="gemini_v1",
+        gemini_api_key=None,
+        embedding_provider_fallback_enabled=False,
+    )
+
+    warnings = settings.startup_warnings()
+
+    assert any("dense retrieval will fail" in warning for warning in warnings)
+
+
 def test_settings_reject_negative_provider_retry_backoff() -> None:
     """Provider retry backoff should stay non-negative."""
 

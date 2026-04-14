@@ -247,7 +247,7 @@ async def dense_retrieve_chunks(
 
     candidate_limit = limit or get_settings().retrieval_candidate_limit
     try:
-        query_embedding = (await embed_texts([query_text]))[0]
+        query_embedding = (await embed_texts([query_text], purpose="query"))[0]
         points = search_dense_points(
             query_vector=query_embedding.vector,
             tenant_id=tenant_id,

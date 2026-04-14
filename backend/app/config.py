@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     qdrant_collection: str = "grounded_chunks"
     qdrant_check_compatibility: bool = False
     embedding_backend: EmbeddingBackend = "local_hash_v1"
+    embedding_provider_fallback_enabled: bool = False
     dense_embedding_dimensions: int = 128
     openai_embedding_model: str = "text-embedding-3-small"
     retrieval_candidate_limit: int = 8
@@ -291,20 +292,34 @@ class Settings(BaseSettings):
                 "Standard generation will fall back to local grounded generation."
             )
         if self.embedding_backend == "gemini_v1" and not self.gemini_api_key:
-            warnings.append(
+            message = (
                 "EMBEDDING_BACKEND=gemini_v1 is configured without GEMINI_API_KEY; "
-                "dense retrieval will fall back to local hash embeddings."
             )
+            if self.embedding_provider_fallback_enabled:
+                warnings.append(
+                    message + "dense retrieval will fall back to local hash embeddings."
+                )
+            else:
+                warnings.append(
+                    message + "dense retrieval will fail until Gemini embeddings are configured."
+                )
         if self.generator_backend == "openai_compatible_v1" and not self.openai_api_key:
             warnings.append(
                 "GENERATOR_BACKEND=openai_compatible_v1 is configured without OPENAI_API_KEY; "
                 "Standard generation will fall back to local grounded generation."
             )
         if self.embedding_backend == "openai_compatible_v1" and not self.openai_api_key:
-            warnings.append(
+            message = (
                 "EMBEDDING_BACKEND=openai_compatible_v1 is configured without OPENAI_API_KEY; "
-                "dense retrieval will fall back to local hash embeddings."
             )
+            if self.embedding_provider_fallback_enabled:
+                warnings.append(
+                    message + "dense retrieval will fall back to local hash embeddings."
+                )
+            else:
+                warnings.append(
+                    message + "dense retrieval will fail until provider embeddings are configured."
+                )
         if self.chunking_strategy == "deterministic_token_window_v1":
             warnings.append(
                 "CHUNKING_STRATEGY is using the deterministic token-window baseline. "

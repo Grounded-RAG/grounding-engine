@@ -31,13 +31,15 @@ async def test_embed_texts_falls_back_from_openai_backend(monkeypatch) -> None:
 
     monkeypatch.setenv("EMBEDDING_BACKEND", "openai_compatible_v1")
     monkeypatch.setenv("DENSE_EMBEDDING_DIMENSIONS", "8")
+    monkeypatch.setenv("EMBEDDING_PROVIDER_FALLBACK_ENABLED", "true")
 
     from app.config import get_settings
 
     get_settings.cache_clear()
     try:
-        async def fake_embed_texts_openai_compatible(texts: list[str]):
+        async def fake_embed_texts_openai_compatible(texts: list[str], *, purpose: str = "generic"):
             del texts
+            del purpose
             raise OpenAICompatibleEmbeddingError("provider unavailable")
 
         monkeypatch.setattr(
@@ -60,13 +62,15 @@ async def test_embed_texts_falls_back_from_gemini_backend(monkeypatch) -> None:
 
     monkeypatch.setenv("EMBEDDING_BACKEND", "gemini_v1")
     monkeypatch.setenv("DENSE_EMBEDDING_DIMENSIONS", "8")
+    monkeypatch.setenv("EMBEDDING_PROVIDER_FALLBACK_ENABLED", "true")
 
     from app.config import get_settings
 
     get_settings.cache_clear()
     try:
-        async def fake_embed_texts_gemini(texts: list[str]):
+        async def fake_embed_texts_gemini(texts: list[str], *, purpose: str = "generic"):
             del texts
+            del purpose
             raise GeminiEmbeddingError("provider unavailable")
 
         monkeypatch.setattr(
@@ -165,6 +169,17 @@ async def test_dense_index_document_reads_manifest_and_upserts_points(
         captured["deleted_document_id"] = document_id
 
     monkeypatch.setattr("app.services.dense_indexing.download_bytes", fake_download_bytes)
+    async def fake_embed_texts(texts: list[str], *, purpose: str = "generic"):
+        from app.core.embeddings import DenseEmbedding
+
+        assert texts == ["alpha beta", "gamma delta"]
+        assert purpose == "document"
+        return [
+            DenseEmbedding(text="alpha beta", vector=[0.1] * 16),
+            DenseEmbedding(text="gamma delta", vector=[0.2] * 16),
+        ]
+
+    monkeypatch.setattr("app.services.dense_indexing.embed_texts", fake_embed_texts)
     monkeypatch.setattr(
         "app.services.dense_indexing.delete_dense_points_for_document",
         fake_delete_dense_points_for_document,
@@ -198,6 +213,146 @@ async def test_dense_index_document_reads_manifest_and_upserts_points(
     assert points[0].payload["section_title"] == "OVERVIEW"
     assert points[0].payload["section_slug"] == "overview"
     assert points[0].payload["chunk_role"] == "section_header"
+
+
+@pytest.mark.asyncio()
+async def test_dense_index_document_embeds_chunks_as_documents(monkeypatch) -> None:
+    """Dense indexing should request document-style embeddings for chunk text."""
+
+    context = IngestionJobContext(
+        job_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        namespace_id=uuid.uuid4(),
+        object_key="tenants/t1/namespaces/n1/documents/d1/source/manual.txt",
+        mime_type="text/plain",
+        title="Manual",
+        source_uri=None,
+        attempt_count=1,
+    )
+    manifest = ChunkManifest.from_payload(
+        {
+            "document_id": str(context.document_id),
+            "source_artifact_key": "tenants/t1/namespaces/n1/documents/d1/artifacts/extracted/text.txt",
+            "chunking_strategy": "deterministic_token_window_v1",
+            "chunks": [
+                {
+                    "chunk_id": "chunk-1",
+                    "chunk_index": 0,
+                    "text": "alpha beta",
+                    "token_count": 2,
+                    "character_count": 10,
+                    "start_token": 0,
+                    "end_token": 1,
+                    "section_title": None,
+                    "section_slug": None,
+                    "chunk_role": "body",
+                    "starts_with_heading": False,
+                    "is_list_block": False,
+                }
+            ],
+        }
+    )
+
+    async def fake_download_bytes(key: str) -> bytes:
+        del key
+        return json.dumps(manifest.to_payload()).encode("utf-8")
+
+    async def fake_embed_texts(texts: list[str], *, purpose: str = "generic"):
+        from app.core.embeddings import DenseEmbedding
+
+        assert texts == ["alpha beta"]
+        assert purpose == "document"
+        return [DenseEmbedding(text="alpha beta", vector=[0.1] * 8)]
+
+    monkeypatch.setattr("app.services.dense_indexing.download_bytes", fake_download_bytes)
+    monkeypatch.setattr("app.services.dense_indexing.embed_texts", fake_embed_texts)
+    monkeypatch.setattr(
+        "app.services.dense_indexing.delete_dense_points_for_document",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.dense_indexing.upsert_dense_points",
+        lambda **kwargs: 1,
+    )
+    monkeypatch.setenv("DENSE_EMBEDDING_DIMENSIONS", "8")
+
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        result = await dense_index_document(context)
+    finally:
+        get_settings.cache_clear()
+
+    assert result.points_indexed == 1
+
+
+@pytest.mark.asyncio()
+async def test_embed_texts_uses_retrieval_task_types_for_gemini(monkeypatch) -> None:
+    """Gemini embeddings should use retrieval-specific task types for docs and queries."""
+
+    monkeypatch.setenv("EMBEDDING_BACKEND", "gemini_v1")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("DENSE_EMBEDDING_DIMENSIONS", "8")
+
+    from app.config import get_settings
+
+    requests: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            del exc_type, exc, tb
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps({"embedding": {"values": [0.1] * 8}}).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        del timeout
+        requests.append(json.loads(request.data.decode("utf-8")))
+        return FakeResponse()
+
+    get_settings.cache_clear()
+    try:
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        await embed_texts(["document text"], purpose="document")
+        await embed_texts(["query text"], purpose="query")
+    finally:
+        get_settings.cache_clear()
+
+    assert requests[0]["taskType"] == "RETRIEVAL_DOCUMENT"
+    assert requests[1]["taskType"] == "RETRIEVAL_QUERY"
+
+
+@pytest.mark.asyncio()
+async def test_embed_texts_raises_when_provider_backend_is_strict(monkeypatch) -> None:
+    """Configured remote embeddings should fail cleanly when provider fallback is disabled."""
+
+    monkeypatch.setenv("EMBEDDING_BACKEND", "gemini_v1")
+    monkeypatch.setenv("EMBEDDING_PROVIDER_FALLBACK_ENABLED", "false")
+    monkeypatch.setenv("DENSE_EMBEDDING_DIMENSIONS", "8")
+
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        async def fake_embed_texts_gemini(texts: list[str], *, purpose: str = "generic"):
+            del texts, purpose
+            raise GeminiEmbeddingError("provider unavailable")
+
+        monkeypatch.setattr(
+            "app.core.gemini_embeddings.embed_texts_gemini",
+            fake_embed_texts_gemini,
+        )
+
+        with pytest.raises(GeminiEmbeddingError, match="provider unavailable"):
+            await embed_texts(["alpha beta"], purpose="query")
+    finally:
+        get_settings.cache_clear()
 
 
 @pytest.mark.asyncio()

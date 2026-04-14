@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from typing import Literal
 
 from app.config import get_settings
+from app.core.telemetry import get_logger
+
+EmbeddingPurpose = Literal["document", "query", "generic"]
+logger = get_logger("app.embeddings")
 
 
 class EmbeddingError(RuntimeError):
@@ -48,7 +53,11 @@ def build_dense_embedding(text: str, *, dimensions: int) -> list[float]:
     return [component / magnitude for component in vector]
 
 
-async def embed_texts(texts: list[str]) -> list[DenseEmbedding]:
+async def embed_texts(
+    texts: list[str],
+    *,
+    purpose: EmbeddingPurpose = "generic",
+) -> list[DenseEmbedding]:
     """Embed a batch of texts using the configured dense embedding backend."""
 
     settings = get_settings()
@@ -61,9 +70,17 @@ async def embed_texts(texts: list[str]) -> list[DenseEmbedding]:
         )
 
         try:
-            return await embed_texts_gemini(texts)
-        except GeminiEmbeddingError:
-            pass
+            return await embed_texts_gemini(texts, purpose=purpose)
+        except GeminiEmbeddingError as exc:
+            logger.warning(
+                "embedding_provider_failed",
+                configured_backend="gemini_v1",
+                purpose=purpose,
+                fallback_enabled=settings.embedding_provider_fallback_enabled,
+                error=str(exc),
+            )
+            if not settings.embedding_provider_fallback_enabled:
+                raise
 
     if settings.embedding_backend == "openai_compatible_v1":
         from app.core.openai_embeddings import (
@@ -72,9 +89,17 @@ async def embed_texts(texts: list[str]) -> list[DenseEmbedding]:
         )
 
         try:
-            return await embed_texts_openai_compatible(texts)
-        except OpenAICompatibleEmbeddingError:
-            pass
+            return await embed_texts_openai_compatible(texts, purpose=purpose)
+        except OpenAICompatibleEmbeddingError as exc:
+            logger.warning(
+                "embedding_provider_failed",
+                configured_backend="openai_compatible_v1",
+                purpose=purpose,
+                fallback_enabled=settings.embedding_provider_fallback_enabled,
+                error=str(exc),
+            )
+            if not settings.embedding_provider_fallback_enabled:
+                raise
 
     return [
         DenseEmbedding(text=text, vector=build_dense_embedding(text, dimensions=dimensions))

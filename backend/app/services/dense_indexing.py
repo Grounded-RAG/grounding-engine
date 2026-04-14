@@ -104,7 +104,10 @@ async def dense_index_document(
         )
 
     try:
-        embeddings = await embed_texts([chunk.text for chunk in manifest.chunks])
+        embeddings = await embed_texts(
+            [chunk.text for chunk in manifest.chunks],
+            purpose="document",
+        )
     except EmbeddingError as exc:
         raise IngestionProcessorError(
             "DENSE_EMBEDDING_FAILED",
