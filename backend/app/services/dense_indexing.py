@@ -74,6 +74,33 @@ def _build_dense_point(
     )
 
 
+def _embedding_text_for_chunk(
+    *,
+    context: IngestionJobContext,
+    manifest: ChunkManifest,
+    chunk_index: int,
+) -> str:
+    """Build a retrieval-oriented embedding input with light structural context."""
+
+    chunk = manifest.chunks[chunk_index]
+    prefix_lines: list[str] = []
+    normalized_chunk_text = chunk.text.casefold()
+
+    if context.title and context.title.casefold() not in normalized_chunk_text:
+        prefix_lines.append(f"Document title: {context.title}")
+    if chunk.section_title and chunk.section_title.casefold() not in normalized_chunk_text:
+        prefix_lines.append(f"Section: {chunk.section_title}")
+    if chunk.chunk_role != "body":
+        prefix_lines.append(f"Chunk role: {chunk.chunk_role.replace('_', ' ')}")
+    if chunk.is_list_block:
+        prefix_lines.append("Structure: list")
+    elif chunk.starts_with_heading:
+        prefix_lines.append("Structure: headed section")
+
+    prefix_lines.append(chunk.text)
+    return "\n".join(prefix_lines)
+
+
 async def dense_index_document(
     context: IngestionJobContext,
 ) -> DenseIndexingResult:
@@ -105,7 +132,14 @@ async def dense_index_document(
 
     try:
         embeddings = await embed_texts(
-            [chunk.text for chunk in manifest.chunks],
+            [
+                _embedding_text_for_chunk(
+                    context=context,
+                    manifest=manifest,
+                    chunk_index=chunk_index,
+                )
+                for chunk_index, _ in enumerate(manifest.chunks)
+            ],
             purpose="document",
         )
     except EmbeddingError as exc:

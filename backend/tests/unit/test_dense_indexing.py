@@ -11,7 +11,11 @@ from app.core.embeddings import build_dense_embedding, embed_texts
 from app.core.gemini_embeddings import GeminiEmbeddingError
 from app.core.openai_embeddings import OpenAICompatibleEmbeddingError
 from app.pipeline.contracts import ChunkManifest
-from app.services.dense_indexing import _dense_point_id, dense_index_document
+from app.services.dense_indexing import (
+    _dense_point_id,
+    _embedding_text_for_chunk,
+    dense_index_document,
+)
 from app.services.ingestion import IngestionJobContext, IngestionProcessorError
 
 
@@ -96,6 +100,57 @@ def test_dense_point_id_is_stable_uuid() -> None:
     assert uuid.UUID(point_id)
 
 
+def test_embedding_text_for_chunk_includes_light_structural_context() -> None:
+    """Document embeddings should include useful title/section context without changing stored text."""
+
+    context = IngestionJobContext(
+        job_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        namespace_id=uuid.uuid4(),
+        object_key="tenants/t1/namespaces/n1/documents/d1/source/manual.txt",
+        mime_type="text/plain",
+        title="Employee Retention Policy",
+        source_uri=None,
+        attempt_count=1,
+    )
+    manifest = ChunkManifest.from_payload(
+        {
+            "document_id": str(context.document_id),
+            "source_artifact_key": "artifact.txt",
+            "chunking_strategy": "structure_aware_v1",
+            "chunks": [
+                {
+                    "chunk_id": "chunk-1",
+                    "chunk_index": 0,
+                    "text": "Employee records must be retained for 7 years.",
+                    "token_count": 8,
+                    "character_count": 46,
+                    "start_token": 0,
+                    "end_token": 7,
+                    "section_title": "RETENTION REQUIREMENTS",
+                    "section_slug": "retention-requirements",
+                    "chunk_role": "section_list",
+                    "starts_with_heading": True,
+                    "is_list_block": True,
+                }
+            ],
+        }
+    )
+
+    embedding_text = _embedding_text_for_chunk(
+        context=context,
+        manifest=manifest,
+        chunk_index=0,
+    )
+
+    assert "Document title: Employee Retention Policy" in embedding_text
+    assert "Section: RETENTION REQUIREMENTS" in embedding_text
+    assert "Chunk role: section list" in embedding_text
+    assert "Structure: list" in embedding_text
+    assert embedding_text.endswith("Employee records must be retained for 7 years.")
+
+
 @pytest.mark.asyncio()
 async def test_dense_index_document_reads_manifest_and_upserts_points(
     monkeypatch,
@@ -172,7 +227,9 @@ async def test_dense_index_document_reads_manifest_and_upserts_points(
     async def fake_embed_texts(texts: list[str], *, purpose: str = "generic"):
         from app.core.embeddings import DenseEmbedding
 
-        assert texts == ["alpha beta", "gamma delta"]
+        assert texts[0].endswith("alpha beta")
+        assert texts[1].endswith("gamma delta")
+        assert any(text.startswith("Document title: Manual") for text in texts)
         assert purpose == "document"
         return [
             DenseEmbedding(text="alpha beta", vector=[0.1] * 16),
@@ -261,7 +318,8 @@ async def test_dense_index_document_embeds_chunks_as_documents(monkeypatch) -> N
     async def fake_embed_texts(texts: list[str], *, purpose: str = "generic"):
         from app.core.embeddings import DenseEmbedding
 
-        assert texts == ["alpha beta"]
+        assert texts[0].endswith("alpha beta")
+        assert "Document title: Manual" in texts[0]
         assert purpose == "document"
         return [DenseEmbedding(text="alpha beta", vector=[0.1] * 8)]
 
