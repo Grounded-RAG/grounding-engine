@@ -14,7 +14,9 @@ from app.core.query_analysis import (
     is_count_query,
     is_dataset_summary_query,
     is_entity_context_query,
+    is_exact_qa_mode,
     is_field_extraction_query,
+    needs_multi_chunk_exact_support,
     score_text_against_query,
     tokenize_meaningful_terms,
 )
@@ -42,7 +44,12 @@ def package_evidence(
     requested_limit = limit or get_settings().evidence_package_limit
     if query_text:
         profile = build_query_profile(query_text)
-        if is_field_extraction_query(profile) and not is_collection_query(profile):
+        if is_exact_qa_mode(profile):
+            if needs_multi_chunk_exact_support(profile):
+                selection_limit = min(max(requested_limit, 2), 2)
+            else:
+                selection_limit = 1
+        elif is_field_extraction_query(profile) and not is_collection_query(profile):
             selection_limit = 1
         elif any(
             (
@@ -160,6 +167,12 @@ def _select_hits_for_query(
         if strong_intent_hits:
             ranked_hits = strong_intent_hits
     if is_field_extraction_query(profile) and not is_collection_query(profile):
+        if needs_multi_chunk_exact_support(profile):
+            return _select_structured_bundle_hits(
+                ranked_hits,
+                profile=profile,
+                limit=min(max(limit, 2), 2),
+            )
         return [ranked_hits[0].hit]
     if any(
         (
@@ -176,6 +189,21 @@ def _select_hits_for_query(
             limit=limit,
         )
     if is_dataset_summary_query(profile):
+        unique_document_ids = {entry.hit.document_id for entry in ranked_hits}
+        if len(unique_document_ids) <= 1:
+            selected_hits = _select_diverse_hits(
+                ranked_hits,
+                limit=limit,
+                prefer_document_diversity=False,
+            )
+            return sorted(
+                selected_hits,
+                key=lambda hit: (
+                    hit.chunk_index,
+                    -hit.fused_score,
+                    hit.chunk_id,
+                ),
+            )
         ranked_hits = _collapse_to_document_representatives(ranked_hits)
         selected_hits = _select_diverse_hits(
             ranked_hits,

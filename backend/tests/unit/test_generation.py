@@ -7,9 +7,14 @@ import uuid
 import pytest
 
 from app.core.llm_client import GroundedGenerationError, generate_grounded_draft
-from app.core.gemini_generator import GeminiGenerationError, _parse_result
+from app.core.gemini_generator import (
+    GeminiGenerationError,
+    _build_prompt,
+    _generation_config_for_mode,
+    _parse_result,
+)
 from app.core.openai_generator import OpenAICompatibleGenerationError
-from app.pipeline.contracts import EvidenceItem, EvidencePackage
+from app.pipeline.contracts import EvidenceItem, EvidencePackage, GroundedAnswerDraft
 from app.services.generation import GenerationBackend, generate_answer_from_evidence
 
 
@@ -431,7 +436,8 @@ def test_generate_grounded_draft_summarizes_paper_like_dataset_using_title_and_t
     )
 
     assert "Explainable AI in Software Engineering" in draft.answer_text
-    assert "The dataset contains" in draft.answer_text
+    assert "The dataset is about" in draft.answer_text
+    assert "This paper examines how explainable AI methods help software teams debug" in draft.answer_text
     assert "The dataset contains Introduction" not in draft.answer_text
 
 
@@ -511,6 +517,67 @@ def test_generate_grounded_draft_ignores_outline_headings_for_challenge_lists() 
     assert "evaluation of explanations" in draft.answer_text
 
 
+def test_generate_grounded_draft_ignores_title_case_section_headings_for_collection_answers() -> None:
+    """Title-case section headers should not become the final list items."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-challenges"],
+        selected_evidence_ids=["chunk-challenges"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-challenges",
+                text=(
+                    "New Challenges in Software Engineering\n"
+                    "One challenge is that inaccurate explanations can create false trust in high-stakes systems.\n"
+                    "Another challenge is that generative AI outputs are open-ended, so engineers need ways to surface uncertainty, hallucination risks, and retrieval gaps.\n"
+                    "A further challenge is that teams must integrate explanations into testing, monitoring, documentation, and CI/CD workflows."
+                ),
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What are the challenges?",
+        evidence_package=evidence_package,
+    )
+
+    assert "New Challenges in Software Engineering" not in draft.answer_text
+    assert "false trust in high-stakes systems" in draft.answer_text
+    assert "retrieval gaps" in draft.answer_text
+
+
+def test_generate_grounded_draft_renders_multiple_collection_families_cleanly() -> None:
+    """Questions like methods-and-tools should include both item families, not just the header."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-methods-tools"],
+        selected_evidence_ids=["chunk-methods-tools"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-methods-tools",
+                text=(
+                    "Methods, Technologies, and Tools\n"
+                    "XAI methods include intrinsic approaches such as decision trees, linear models, and rule-based systems.\n"
+                    "Post-hoc methods include LIME, SHAP, and counterfactual explanations.\n"
+                    "Common tools include Captum for PyTorch models, InterpretML for glassbox models and visualizations, and Google's What-If Tool for interactive analysis."
+                ),
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What are the methods, the tools?",
+        evidence_package=evidence_package,
+    )
+
+    assert "The listed methods and tools are" in draft.answer_text
+    assert "decision trees" in draft.answer_text
+    assert "LIME, SHAP, and counterfactual explanations" in draft.answer_text
+    assert "Captum" in draft.answer_text
+
+
 def test_generate_grounded_draft_answers_mixed_boolean_action_role_question() -> None:
     """Role + where + what-did questions should return a grounded action answer."""
 
@@ -574,6 +641,108 @@ def test_generate_grounded_draft_renders_count_questions_from_structured_items()
     assert "StyleCraft" in draft.answer_text
 
 
+def test_generate_grounded_draft_extracts_explicit_count_from_prose_sentence() -> None:
+    """Count questions should return a direct numeric phrase when prose states the answer explicitly."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-fleet"],
+        selected_evidence_ids=["chunk-fleet"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-fleet",
+                text="Fleet Details\nThe city purchased 12 electric vans from Voltara Mobility for the pilot.",
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="How many electric vans were purchased?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text == "12 electric vans [E001]"
+
+
+def test_generate_grounded_draft_extracts_exact_supplier_name_from_prose_sentence() -> None:
+    """Supplier/company lookups should return the organization, not the whole paragraph."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-fleet"],
+        selected_evidence_ids=["chunk-fleet"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-fleet",
+                text="Fleet Details\nThe city purchased 12 electric vans from Voltara Mobility for the pilot.",
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="Which company supplied the vans?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text == "The company is Voltara Mobility [E001]"
+
+
+def test_generate_grounded_draft_computes_numeric_difference_for_comparison_question() -> None:
+    """Difference questions should compute the grounded arithmetic result instead of paraphrasing both sentences."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-old-cost", "chunk-new-cost"],
+        selected_evidence_ids=["chunk-old-cost", "chunk-new-cost"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-old-cost",
+                text="Costs and Savings\nBefore the pilot, the city spent about $18,400 on fuel over six months.",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-new-cost",
+                text="Costs and Savings\nDuring the pilot, electricity costs totaled $6,900 over six months.",
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What was the difference between old fuel cost and new electricity cost over six months?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text == "The difference is $11,500 [E001] [E002]."
+
+
+def test_generate_grounded_draft_answers_start_and_end_date_range_cleanly() -> None:
+    """Start/end date questions should synthesize a grounded range instead of dropping one endpoint."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-start", "chunk-end"],
+        selected_evidence_ids=["chunk-start", "chunk-end"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-start",
+                text="Pilot Overview\nIn January 2025, the city of Lydon launched the electric van pilot.",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-end",
+                text="Pilot Overview\nThe pilot lasted for six months and ended in June 2025.",
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="When did the pilot start and end?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text == "It started in January 2025 [E001] and ended in June 2025 [E002]."
+
+
 def test_parse_gemini_result_accepts_array_citation_snippets() -> None:
     """Gemini JSON parsing should accept schema-friendly citation snippet arrays."""
 
@@ -605,6 +774,69 @@ def test_parse_gemini_result_rejects_empty_array_citation_snippets() -> None:
                 "citation_snippets": [],
             }
         )
+
+
+def test_build_gemini_prompt_enforces_strict_refusal_and_minimal_evidence_payload() -> None:
+    """The Gemini prompt should carry the hard refusal rule and a reduced evidence payload."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-1",
+                text="The city purchased 12 electric vans from Voltara Mobility.",
+            ),
+        ],
+    )
+
+    prompt = _build_prompt(
+        query_text="Which company supplied the vans?",
+        evidence_package=evidence_package,
+    )
+
+    assert "I could not find the answer in the provided context." in prompt
+    assert "If the answer exists explicitly in the evidence, you MUST extract it directly." in prompt
+    assert "document_id=" not in prompt
+    assert "chunk_role=" not in prompt
+    assert "text=The city purchased 12 electric vans from Voltara Mobility." in prompt
+    assert "answer_mode=exact_qa" in prompt
+
+
+def test_build_gemini_prompt_uses_broader_mode_for_summary_queries() -> None:
+    """Broader questions should use the summary/list prompt mode instead of exact extraction mode."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-1",
+                text="Explainable AI in Software Engineering\nThis paper examines trustworthy XAI methods for engineering teams.",
+            ),
+        ],
+    )
+
+    prompt = _build_prompt(
+        query_text="What is the dataset about?",
+        evidence_package=evidence_package,
+    )
+
+    assert "answer_mode=summary_list" in prompt
+    assert "[section:" not in prompt
+
+
+def test_generation_config_for_exact_qa_is_deterministic() -> None:
+    """Exact QA should use deterministic provider settings for more stable extraction."""
+
+    assert _generation_config_for_mode("exact_qa") == {
+        "temperature": 0,
+        "topP": 0.05,
+        "topK": 1,
+        "maxOutputTokens": 120,
+    }
 
 
 @pytest.mark.asyncio()
@@ -732,6 +964,55 @@ async def test_generate_answer_from_evidence_falls_back_from_gemini_backend(monk
 
 
 @pytest.mark.asyncio()
+async def test_generate_answer_from_evidence_rejects_provider_banned_phrase_and_falls_back(monkeypatch) -> None:
+    """Weak provider phrasing should be rejected before it reaches users."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-1",
+                text="The city purchased 12 electric vans from Voltara Mobility.",
+            ),
+        ],
+    )
+
+    monkeypatch.setattr(
+        "app.services.generation.resolve_generation_backend",
+        lambda: GenerationBackend(
+            provider_name="gemini_v1",
+            implementation="gemini",
+        ),
+    )
+
+    async def fake_generate_gemini_draft(**kwargs):
+        del kwargs
+        return GroundedAnswerDraft(
+            answer_text="I found relevant information about Voltara Mobility.",
+            cited_evidence_ids=["chunk-1"],
+            citation_snippets={"chunk-1": "The city purchased 12 electric vans from Voltara Mobility."},
+            generator_provider="gemini:gemini-2.5-flash",
+            support_coverage=1.0,
+            source_diversity=1,
+        )
+
+    monkeypatch.setattr(
+        "app.services.generation.generate_gemini_draft",
+        fake_generate_gemini_draft,
+    )
+
+    draft = await generate_answer_from_evidence(
+        query_text="Which company supplied the vans?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text == "The company is Voltara Mobility [E001]"
+    assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
+
+
+@pytest.mark.asyncio()
 async def test_generate_answer_from_evidence_rejects_weak_provider_field_answer(monkeypatch) -> None:
     """Provider answers that cite irrelevant field evidence should fall back to deterministic grounding."""
 
@@ -852,6 +1133,65 @@ async def test_generate_answer_from_evidence_rejects_weak_provider_summary_answe
 
     assert draft.answer_text.startswith("The dataset contains")
     assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
+
+
+@pytest.mark.asyncio()
+async def test_generate_answer_from_evidence_allows_two_chunk_provider_answer_for_start_end_lookup(
+    monkeypatch,
+) -> None:
+    """Exact multi-part lookups should allow two cited chunks when both are needed."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-start", "chunk-end"],
+        selected_evidence_ids=["chunk-start", "chunk-end"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-start",
+                text="Pilot Overview\nIn January 2025, the city of Lydon launched the electric van pilot.",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-end",
+                text="Pilot Overview\nThe pilot lasted for six months and ended in June 2025.",
+            ),
+        ],
+    )
+
+    monkeypatch.setattr(
+        "app.services.generation.resolve_generation_backend",
+        lambda: GenerationBackend(
+            provider_name="gemini_v1",
+            implementation="gemini",
+        ),
+    )
+
+    async def fake_generate_gemini_draft(**kwargs):
+        del kwargs
+        return GroundedAnswerDraft(
+            answer_text="It started in January 2025 and ended in June 2025.",
+            cited_evidence_ids=["chunk-start", "chunk-end"],
+            citation_snippets={
+                "chunk-start": "In January 2025, the city of Lydon launched the electric van pilot.",
+                "chunk-end": "The pilot lasted for six months and ended in June 2025.",
+            },
+            generator_provider="gemini:gemini-2.5-flash",
+            support_coverage=1.0,
+            source_diversity=1,
+        )
+
+    monkeypatch.setattr(
+        "app.services.generation.generate_gemini_draft",
+        fake_generate_gemini_draft,
+    )
+
+    draft = await generate_answer_from_evidence(
+        query_text="When did the pilot start and end?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text == "It started in January 2025 and ended in June 2025."
+    assert draft.generator_provider == "gemini:gemini-2.5-flash"
 
 
 @pytest.mark.asyncio()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
 
 from app.core.query_analysis import (
@@ -35,6 +36,91 @@ _SENTENCE_SPLIT_PATTERN = re.compile(r"(?<!\d\.)(?<=[.!?])\s+|\n+|[\u2022\u00B7]
 _HEADING_ONLY_PATTERN = re.compile(r"^[A-Z][A-Z0-9/&,\- ]{2,}$")
 _OUTLINE_HEADING_PATTERN = re.compile(r"^\d+(?:\.\d+)*[.)]?\s+[A-Z][A-Za-z0-9/&,\- ]{2,}$")
 _SUMMARY_NAMEISH_PATTERN = re.compile(r"^[A-Z][A-Za-z'\u2019-]+(?:\s+[A-Z][A-Za-z'\u2019-]+){1,4}$")
+_DATE_PHRASE_PATTERN = re.compile(
+    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}\b|"
+    r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+    re.IGNORECASE,
+)
+_ORGANIZATION_PATTERNS = (
+    re.compile(r"\b(?:from|by|via|through)\s+([A-Z][A-Za-z0-9&'.-]*(?:\s+[A-Z][A-Za-z0-9&'.-]*){0,5})"),
+    re.compile(r"\b(?:supplied|provided|delivered|operated|manufactured)\s+by\s+([A-Z][A-Za-z0-9&'.-]*(?:\s+[A-Z][A-Za-z0-9&'.-]*){0,5})", re.IGNORECASE),
+)
+_NUMBER_TOKEN_PATTERN = re.compile(r"\$?\d[\d,]*(?:\.\d+)?%?|[A-Za-z][A-Za-z0-9+/#&.-]*")
+_NUMERIC_VALUE_PATTERN = re.compile(r"^\$?\d[\d,]*(?:\.\d+)?%?$")
+_NUMBER_PHRASE_STOPWORDS = {
+    "after", "and", "as", "at", "because", "before", "between", "by", "during",
+    "for", "from", "if", "in", "into", "of", "on", "or", "over", "since", "than",
+    "that", "through", "to", "under", "until", "via", "when", "where", "which",
+    "while", "with",
+}
+_DATE_QUERY_TERMS = {"date", "day", "month", "start", "end", "when", "year"}
+_MONEY_QUERY_TERMS = {
+    "amount", "budget", "cost", "costs", "dollar", "dollars", "electricity",
+    "expense", "expenses", "fee", "fees", "fuel", "price", "prices", "revenue",
+    "salary", "save", "saved", "savings", "spend", "spent",
+}
+_MEASUREMENT_QUERY_TERMS = {
+    "battery", "capacity", "distance", "hour", "hours", "kilometer", "kilometers",
+    "km", "kwh", "mile", "miles", "range", "throughput",
+}
+_ORGANIZATION_QUERY_TERMS = {"company", "supplier", "vendor", "organization", "provider"}
+_DIFFERENCE_QUERY_TERMS = {"difference", "minus", "subtract", "saved", "savings"}
+_TITLE_CASE_HEADING_STOPWORDS = {
+    "a", "an", "and", "for", "in", "of", "on", "or", "the", "to", "with",
+}
+_TITLE_CASE_HEADING_CUES = {
+    "abstract",
+    "achievement",
+    "achievements",
+    "appendix",
+    "award",
+    "awards",
+    "background",
+    "certificate",
+    "certificates",
+    "challenge",
+    "challenges",
+    "component",
+    "components",
+    "conclusion",
+    "discussion",
+    "experience",
+    "feature",
+    "features",
+    "framework",
+    "frameworks",
+    "introduction",
+    "method",
+    "methods",
+    "opportunities",
+    "overview",
+    "policy",
+    "policies",
+    "project",
+    "projects",
+    "requirement",
+    "requirements",
+    "result",
+    "results",
+    "section",
+    "sections",
+    "service",
+    "services",
+    "skill",
+    "skills",
+    "technology",
+    "technologies",
+    "tool",
+    "tools",
+    "detail",
+    "details",
+    "feedback",
+    "finding",
+    "findings",
+    "operations",
+    "savings",
+}
 _GENERIC_SECTION_LABELS = {
     "abstract",
     "acknowledgements",
@@ -100,6 +186,46 @@ def _looks_like_outline_heading(line: str) -> bool:
     return title_like_count >= max(2, len(words) - 1)
 
 
+def _looks_like_title_case_heading(line: str) -> bool:
+    stripped = line.strip().rstrip(":")
+    if (
+        not stripped
+        or stripped.endswith((".", "!", "?", ";"))
+        or "@" in stripped
+        or any(char.isdigit() for char in stripped)
+    ):
+        return False
+
+    raw_words = stripped.split()
+    if len(raw_words) < 2 or len(raw_words) > 10:
+        return False
+
+    alpha_words = [
+        re.sub(r"^[^A-Za-z]+|[^A-Za-z]+$", "", word)
+        for word in raw_words
+    ]
+    alpha_words = [word for word in alpha_words if word]
+    if len(alpha_words) < 2:
+        return False
+
+    title_like_words = 0
+    for word in alpha_words:
+        normalized = word.casefold()
+        if normalized in _TITLE_CASE_HEADING_STOPWORDS:
+            title_like_words += 1
+            continue
+        if word[:1].isupper():
+            title_like_words += 1
+
+    if title_like_words < max(2, len(alpha_words) - 1):
+        return False
+
+    return any(
+        word.casefold().strip("',.&/-") in _TITLE_CASE_HEADING_CUES
+        for word in alpha_words
+    )
+
+
 def _is_heading_only_line(line: str) -> bool:
     stripped = line.strip().rstrip(":")
     return bool(
@@ -107,6 +233,7 @@ def _is_heading_only_line(line: str) -> bool:
         and (
             _HEADING_ONLY_PATTERN.fullmatch(stripped)
             or _looks_like_outline_heading(stripped)
+            or _looks_like_title_case_heading(stripped)
         )
     )
 
@@ -324,7 +451,12 @@ def _format_collection_lines(lines: list[str], *, profile: QueryProfile) -> str:
         line for line in filtered_lines if ":" in line or len(line.split()) <= 10
     ]
     if structured_lines:
-        return "; ".join(structured_lines[:5]).strip()
+        structured_keys = {_normalize_line(line) for line in structured_lines}
+        combined_lines = list(structured_lines)
+        combined_lines.extend(
+            line for line in filtered_lines if _normalize_line(line) not in structured_keys
+        )
+        return "; ".join(combined_lines[:3]).strip()
     return "; ".join(filtered_lines[:3]).strip()
 
 
@@ -377,7 +509,10 @@ def _clean_snippet_for_query(snippet: str, *, profile: QueryProfile) -> str:
 
     if is_collection_query(profile):
         rendered = _format_collection_lines(lines, profile=profile)
-        return rendered or " ".join(lines[:3]).strip()
+        if rendered:
+            return rendered
+        non_heading_lines = [line for line in lines if not _is_heading_only_line(line)]
+        return " ".join((non_heading_lines or lines)[:3]).strip()
 
     stripped_first = _strip_attribute_prefix(lines[0], profile=profile)
     if stripped_first and stripped_first != lines[0]:
@@ -490,6 +625,333 @@ def _summary_subject_phrase(*, item: EvidenceItem, cleaned_snippet: str) -> str:
     return cleaned_snippet.rstrip(".")
 
 
+def _query_requests_date_range(profile: QueryProfile) -> bool:
+    normalized = profile.normalized_text
+    return (
+        ("start" in normalized and "end" in normalized)
+        or ("begin" in normalized and "end" in normalized)
+        or ("launch" in normalized and "end" in normalized)
+    )
+
+
+def _query_prefers_money(profile: QueryProfile) -> bool:
+    normalized = profile.normalized_text
+    return any(term in normalized for term in _MONEY_QUERY_TERMS)
+
+
+def _query_prefers_measurement(profile: QueryProfile) -> bool:
+    normalized = profile.normalized_text
+    return any(term in normalized for term in _MEASUREMENT_QUERY_TERMS)
+
+
+def _query_prefers_organization(profile: QueryProfile) -> bool:
+    normalized = profile.normalized_text
+    return any(term in normalized for term in _ORGANIZATION_QUERY_TERMS)
+
+
+def _query_requests_difference(profile: QueryProfile) -> bool:
+    normalized = profile.normalized_text
+    return any(term in normalized for term in _DIFFERENCE_QUERY_TERMS)
+
+
+def _extract_date_phrases(text: str) -> list[str]:
+    return _dedupe_preserving_order([
+        match.group(0).strip()
+        for match in _DATE_PHRASE_PATTERN.finditer(text)
+    ])
+
+
+def _extract_numeric_phrases(text: str) -> list[str]:
+    tokens = _NUMBER_TOKEN_PATTERN.findall(text)
+    phrases: list[str] = []
+    for index, token in enumerate(tokens):
+        if not _NUMERIC_VALUE_PATTERN.fullmatch(token):
+            continue
+        phrase_tokens = [token]
+        for next_token in tokens[index + 1 : index + 5]:
+            normalized = next_token.casefold()
+            if (
+                _NUMERIC_VALUE_PATTERN.fullmatch(next_token)
+                or normalized in _NUMBER_PHRASE_STOPWORDS
+            ):
+                break
+            phrase_tokens.append(next_token)
+        phrases.append(" ".join(phrase_tokens).rstrip("."))
+    return _dedupe_preserving_order(phrases)
+
+
+def _parse_decimal_value(value: str) -> Decimal | None:
+    normalized = value.strip().replace(",", "")
+    normalized = normalized.lstrip("$").rstrip("%")
+    if not normalized:
+        return None
+    try:
+        return Decimal(normalized)
+    except InvalidOperation:
+        return None
+
+
+def _format_decimal_value(
+    value: Decimal,
+    *,
+    currency: bool = False,
+    percent: bool = False,
+    unit: str | None = None,
+) -> str:
+    if value == value.to_integral_value():
+        rendered = f"{int(value):,}"
+    else:
+        rendered = format(value.normalize(), "f").rstrip("0").rstrip(".")
+    if currency:
+        rendered = f"${rendered}"
+    if percent:
+        rendered = f"{rendered}%"
+    if unit:
+        rendered = f"{rendered} {unit}".strip()
+    return rendered
+
+
+def _phrase_trailing_unit(phrase: str) -> str | None:
+    parts = phrase.split()
+    if len(parts) <= 1:
+        return None
+    unit = " ".join(parts[1:]).strip()
+    return unit or None
+
+
+def _select_best_numeric_phrase(
+    *,
+    profile: QueryProfile,
+    top_support: list[tuple[float, EvidenceItem, str]],
+) -> tuple[str, str] | None:
+    best_candidate: tuple[float, str, str] | None = None
+    for _, item, _ in top_support:
+        for sentence in _sentence_candidates(item.text):
+            sentence_score = score_text_against_query(
+                sentence,
+                profile=profile,
+                chunk_index=item.chunk_index,
+            )
+            if sentence_score <= 0 and not any(character.isdigit() for character in sentence):
+                continue
+            normalized_sentence = _normalize_line(sentence)
+            for phrase in _extract_numeric_phrases(sentence):
+                normalized_phrase = _normalize_line(phrase)
+                candidate_score = sentence_score
+                if any(attribute in normalized_phrase for attribute in profile.attribute_terms):
+                    candidate_score += 6.0
+                if any(attribute in normalized_sentence for attribute in profile.attribute_terms):
+                    candidate_score += 3.0
+                if is_count_query(profile) and len(phrase.split()) > 1:
+                    candidate_score += 2.0
+                if _query_prefers_money(profile) and phrase.startswith("$"):
+                    candidate_score += 8.0
+                if _query_prefers_measurement(profile) and any(
+                    unit in normalized_phrase for unit in ("kwh", "kilometer", "kilometers", "km", "mile", "miles", "hour", "hours")
+                ):
+                    candidate_score += 8.0
+                if not _query_prefers_money(profile) and not _query_prefers_measurement(profile):
+                    candidate_score += min(len(phrase.split()), 3)
+                candidate = (candidate_score, phrase, item.citation_id)
+                if best_candidate is None or candidate > best_candidate:
+                    best_candidate = candidate
+    if best_candidate is None:
+        return None
+    return best_candidate[1], best_candidate[2]
+
+
+def _select_best_organization_phrase(
+    *,
+    profile: QueryProfile,
+    top_support: list[tuple[float, EvidenceItem, str]],
+) -> tuple[str, str] | None:
+    best_candidate: tuple[float, str, str] | None = None
+    for _, item, _ in top_support:
+        for sentence in _sentence_candidates(item.text):
+            sentence_score = score_text_against_query(
+                sentence,
+                profile=profile,
+                chunk_index=item.chunk_index,
+            )
+            if sentence_score <= 0 and not any(character.isupper() for character in sentence):
+                continue
+            for pattern in _ORGANIZATION_PATTERNS:
+                match = pattern.search(sentence)
+                if match is None:
+                    continue
+                organization = match.group(1).strip().rstrip(".")
+                if len(organization.split()) > 6:
+                    continue
+                candidate = (sentence_score + 4.0, organization, item.citation_id)
+                if best_candidate is None or candidate > best_candidate:
+                    best_candidate = candidate
+    if best_candidate is None:
+        return None
+    return best_candidate[1], best_candidate[2]
+
+
+def _render_date_range_answer(
+    *,
+    top_support: list[tuple[float, EvidenceItem, str]],
+) -> str | None:
+    date_candidates: list[tuple[int, str, str]] = []
+    seen_dates: set[str] = set()
+    for _, item, _ in sorted(
+        top_support,
+        key=lambda entry: (entry[1].chunk_index, entry[1].citation_id),
+    ):
+        for date_phrase in _extract_date_phrases(item.text):
+            normalized = _normalize_line(date_phrase)
+            if normalized in seen_dates:
+                continue
+            seen_dates.add(normalized)
+            date_candidates.append((item.chunk_index, date_phrase, item.citation_id))
+            if len(date_candidates) >= 3:
+                break
+        if len(date_candidates) >= 3:
+            break
+    if len(date_candidates) < 2:
+        return None
+    start_date = date_candidates[0]
+    end_date = date_candidates[1]
+    return (
+        f"It started in {start_date[1]} [{start_date[2]}] "
+        f"and ended in {end_date[1]} [{end_date[2]}]."
+    ).strip()
+
+
+def _select_best_date_phrase(
+    *,
+    profile: QueryProfile,
+    top_support: list[tuple[float, EvidenceItem, str]],
+) -> tuple[str, str] | None:
+    best_candidate: tuple[float, str, str] | None = None
+    for _, item, _ in top_support:
+        for sentence in _sentence_candidates(item.text):
+            sentence_score = score_text_against_query(
+                sentence,
+                profile=profile,
+                chunk_index=item.chunk_index,
+            )
+            for date_phrase in _extract_date_phrases(sentence):
+                candidate = (sentence_score + 5.0, date_phrase, item.citation_id)
+                if best_candidate is None or candidate > best_candidate:
+                    best_candidate = candidate
+    if best_candidate is None:
+        return None
+    return best_candidate[1], best_candidate[2]
+
+
+def _render_numeric_difference_answer(
+    *,
+    profile: QueryProfile,
+    top_support: list[tuple[float, EvidenceItem, str]],
+) -> str | None:
+    if not _query_requests_difference(profile):
+        return None
+
+    numeric_candidates: list[tuple[float, Decimal, str, str]] = []
+    for _, item, _ in top_support:
+        for sentence in _sentence_candidates(item.text):
+            sentence_score = score_text_against_query(
+                sentence,
+                profile=profile,
+                chunk_index=item.chunk_index,
+            )
+            if sentence_score <= 0 and not any(character.isdigit() for character in sentence):
+                continue
+            for phrase in _extract_numeric_phrases(sentence):
+                numeric_value = _parse_decimal_value(phrase.split()[0])
+                if numeric_value is None:
+                    continue
+                candidate_score = sentence_score
+                if phrase.startswith("$"):
+                    candidate_score += 6.0
+                numeric_candidates.append((candidate_score, numeric_value, phrase, item.citation_id))
+
+    if len(numeric_candidates) < 2:
+        return None
+
+    numeric_candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+    chosen: list[tuple[Decimal, str, str]] = []
+    seen_values: set[Decimal] = set()
+    for _, value, phrase, citation_id in numeric_candidates:
+        if value in seen_values:
+            continue
+        seen_values.add(value)
+        chosen.append((value, phrase, citation_id))
+        if len(chosen) >= 2:
+            break
+    if len(chosen) < 2:
+        return None
+
+    first_value, first_phrase, first_citation = chosen[0]
+    second_value, second_phrase, second_citation = chosen[1]
+    difference = abs(first_value - second_value)
+    currency = first_phrase.startswith("$") and second_phrase.startswith("$")
+    unit = None
+    first_unit = _phrase_trailing_unit(first_phrase)
+    second_unit = _phrase_trailing_unit(second_phrase)
+    if first_unit and second_unit and _normalize_line(first_unit) == _normalize_line(second_unit):
+        unit = first_unit
+
+    citation_order = {
+        item.citation_id: index
+        for index, (_, item, _) in enumerate(top_support)
+    }
+    ordered_citations = sorted(
+        {first_citation, second_citation},
+        key=lambda citation_id: citation_order.get(citation_id, 10_000),
+    )
+
+    rendered_difference = _format_decimal_value(
+        difference,
+        currency=currency,
+        unit=unit,
+    )
+    return (
+        f"The difference is {rendered_difference} "
+        f"{' '.join(f'[{citation_id}]' for citation_id in ordered_citations)}."
+    ).strip()
+
+
+def _render_exact_field_answer(
+    *,
+    profile: QueryProfile,
+    top_support: list[tuple[float, EvidenceItem, str]],
+) -> str | None:
+    if _query_requests_date_range(profile):
+        return _render_date_range_answer(top_support=top_support)
+
+    if _query_prefers_organization(profile):
+        organization = _select_best_organization_phrase(
+            profile=profile,
+            top_support=top_support,
+        )
+        if organization is not None:
+            value, citation_id = organization
+            return f"{value} [{citation_id}]"
+
+    if _query_prefers_money(profile) or _query_prefers_measurement(profile):
+        numeric_phrase = _select_best_numeric_phrase(
+            profile=profile,
+            top_support=top_support,
+        )
+        if numeric_phrase is not None:
+            value, citation_id = numeric_phrase
+            return f"{value} [{citation_id}]"
+
+    if primary_intent(profile) == "date":
+        date_phrase = _select_best_date_phrase(
+            profile=profile,
+            top_support=top_support,
+        )
+        if date_phrase is not None:
+            value, citation_id = date_phrase
+            return f"{value} [{citation_id}]"
+    return None
+
+
 def _render_summary_answer(
     *,
     top_support: list[tuple[float, EvidenceItem, str]],
@@ -511,9 +973,51 @@ def _render_summary_answer(
         item=primary_item,
         cleaned_snippet=cleaned_snippets[primary_item.chunk_id],
     )
+    subject_looks_like_title = (
+        _looks_like_document_title_line(primary_subject)
+        and not primary_subject.casefold().startswith("a profile for ")
+    )
     sentences = [
-        f"The dataset contains {primary_subject} [{primary_item.citation_id}]."
+        (
+            f"The dataset is about {primary_subject} [{primary_item.citation_id}]."
+            if subject_looks_like_title
+            else f"The dataset contains {primary_subject} [{primary_item.citation_id}]."
+        )
     ]
+
+    supporting_summary: tuple[str, str] | None = None
+    for _, item, _ in top_support:
+        if item.chunk_id == primary_item.chunk_id:
+            continue
+        candidate = cleaned_snippets[item.chunk_id].rstrip(".")
+        if (
+            candidate
+            and candidate.casefold() != primary_subject.casefold()
+            and not _is_heading_only_line(candidate)
+            and not _looks_like_document_title_line(candidate)
+            and len(candidate.split()) >= 6
+        ):
+            supporting_summary = (candidate, item.citation_id)
+            break
+
+    if supporting_summary is not None:
+        supporting_text, supporting_citation_id = supporting_summary
+        sentences.append(f"{supporting_text} [{supporting_citation_id}].")
+    elif subject_looks_like_title:
+        primary_sentences = [
+            _strip_reference_markers(candidate).rstrip(".")
+            for candidate in _sentence_candidates(primary_item.text)
+        ]
+        for candidate in primary_sentences:
+            if (
+                candidate
+                and candidate.casefold() != primary_subject.casefold()
+                and not _is_heading_only_line(candidate)
+                and not _looks_like_document_title_line(candidate)
+                and len(candidate.split()) >= 6
+            ):
+                sentences.append(f"{candidate} [{primary_item.citation_id}].")
+                break
 
     heading_labels: list[str] = []
     heading_citation_id = primary_item.citation_id
@@ -525,12 +1029,12 @@ def _render_summary_answer(
             if label not in heading_labels:
                 heading_labels.append(label)
 
-    if heading_labels:
+    if heading_labels and supporting_summary is None:
         rendered_labels = _human_join(heading_labels[:5])
         sentences.append(
             f"It includes sections on {rendered_labels} [{heading_citation_id}]."
         )
-    elif len(top_support) > 1:
+    elif supporting_summary is None and len(top_support) > 1:
         secondary_item = top_support[1][1]
         secondary_summary = cleaned_snippets[secondary_item.chunk_id].rstrip(".")
         if secondary_summary:
@@ -557,27 +1061,59 @@ def _render_collection_answer(
             for line in _section_candidate_lines(item.text)
             if ":" in line or len(line.split()) <= 12
         ]
-        candidate_lines = structured_lines
-        if not candidate_lines:
-            prose_candidates = sorted(
+        prose_candidates = sorted(
+            (
                 (
-                    (
-                        score_text_against_query(
-                            sentence,
-                            profile=profile,
-                            chunk_index=item.chunk_index,
-                        ),
-                        _strip_reference_markers(sentence).rstrip("."),
-                    )
-                    for sentence in _sentence_candidates(item.text)
+                    score_text_against_query(
+                        sentence,
+                        profile=profile,
+                        chunk_index=item.chunk_index,
+                    ),
+                    _strip_reference_markers(sentence).rstrip("."),
+                )
+                for sentence in _sentence_candidates(item.text)
+                if not _is_heading_only_line(sentence)
+            ),
+            key=lambda entry: (-entry[0], len(entry[1])),
+        )
+        candidate_lines = list(structured_lines)
+        candidate_keys = {_normalize_line(line) for line in candidate_lines}
+        candidate_lines.extend(
+            sentence
+            for score, sentence in prose_candidates
+            if score > 0
+            and len(sentence.split()) >= 4
+            and _normalize_line(sentence) not in candidate_keys
+        )
+        if len(profile.attribute_terms) > 1:
+            diversified_lines: list[str] = []
+            seen_diversified: set[str] = set()
+            for attribute in sorted(
+                profile.attribute_terms,
+                key=lambda value: (
+                    profile.normalized_text.find(value)
+                    if value in profile.normalized_text
+                    else 10_000,
+                    len(value),
+                    value,
                 ),
-                key=lambda entry: (-entry[0], len(entry[1])),
+            ):
+                for candidate in candidate_lines:
+                    normalized_candidate = _normalize_line(candidate)
+                    if (
+                        attribute in normalized_candidate
+                        and normalized_candidate not in seen_diversified
+                    ):
+                        diversified_lines.append(candidate)
+                        seen_diversified.add(normalized_candidate)
+                        break
+            diversified_lines.extend(
+                candidate
+                for candidate in candidate_lines
+                if _normalize_line(candidate) not in seen_diversified
             )
-            candidate_lines = [
-                sentence
-                for score, sentence in prose_candidates
-                if score > 0 and len(sentence.split()) >= 4
-            ][:4]
+            candidate_lines = diversified_lines
+        candidate_lines = candidate_lines[:4]
         if not candidate_lines:
             candidate_lines = _clean_lines(snippet)
         for line in candidate_lines:
@@ -688,6 +1224,13 @@ def _render_comparison_answer(
     top_support: list[tuple[float, EvidenceItem, str]],
     cleaned_snippets: dict[str, str],
 ) -> str:
+    numeric_difference = _render_numeric_difference_answer(
+        profile=profile,
+        top_support=top_support,
+    )
+    if numeric_difference is not None:
+        return numeric_difference
+
     matching: list[tuple[EvidenceItem, str]] = []
     non_matching: list[tuple[EvidenceItem, str]] = []
 
@@ -779,6 +1322,14 @@ def _render_count_answer(
     profile: QueryProfile,
     top_support: list[tuple[float, EvidenceItem, str]],
 ) -> str:
+    explicit_numeric = _select_best_numeric_phrase(
+        profile=profile,
+        top_support=top_support,
+    )
+    if explicit_numeric is not None:
+        value, citation_id = explicit_numeric
+        return f"{value} [{citation_id}]"
+
     countable_items: list[str] = []
     citations: list[str] = []
     for _, item, _ in top_support:
@@ -871,6 +1422,18 @@ def _render_grounded_answer(
             profile=profile,
             top_support=top_support,
         ), cleaned_snippets
+
+    if is_field_extraction_query(profile):
+        exact_field_answer = _render_exact_field_answer(
+            profile=profile,
+            top_support=top_support,
+        )
+        if exact_field_answer is not None:
+            label = requested_attribute_label(profile)
+            if label and label not in {"name", "contact", "date"}:
+                formatted_label = _format_attribute_prefix(label)
+                return f"The {formatted_label} is {exact_field_answer}".strip(), cleaned_snippets
+            return exact_field_answer, cleaned_snippets
 
     if is_field_extraction_query(profile) and len(rendered_parts) == 1:
         label = requested_attribute_label(profile)
@@ -990,6 +1553,34 @@ def generate_grounded_draft(
             covered_query_terms.update(profile.terms & snippet_terms)
         if len(top_support) >= max_support_items:
             break
+
+    if is_dataset_summary_query(profile):
+        summary_title_entry = next(
+            (
+                entry
+                for entry in ranked_support
+                if _looks_like_document_title_line(entry[2])
+                or any(
+                    _looks_like_document_title_line(line)
+                    for line in _clean_lines(entry[1].text)[:2]
+                )
+                or entry[1].chunk_index == 0
+            ),
+            None,
+        )
+        if summary_title_entry is not None and all(
+            item.chunk_id != summary_title_entry[1].chunk_id
+            for _, item, _ in top_support
+        ):
+            top_support = [summary_title_entry, *top_support]
+            top_support = sorted(
+                top_support,
+                key=lambda entry: (
+                    entry[1].chunk_index,
+                    -entry[0],
+                    entry[1].chunk_id,
+                ),
+            )[:max_support_items]
 
     if is_boolean_query(profile):
         strongest_overlap = max(

@@ -167,6 +167,112 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
 
 
 @pytest.mark.asyncio()
+async def test_execute_standard_query_uses_raw_user_question_for_generation(monkeypatch) -> None:
+    """Generation should answer the raw user question even when retrieval needed follow-up resolution."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="what about that")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    from app.models import MessageRole
+
+    message = type(
+        "MessageStub",
+        (),
+        {"role": MessageRole.USER, "content": "What are the supported programming languages?"},
+    )()
+
+    captured: dict[str, str] = {}
+
+    async def fake_messages(**kwargs):
+        del kwargs
+        return [message]
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    def fake_package_evidence(retrieval_bundle, *, query_text=None, limit=None):
+        del retrieval_bundle, limit
+        assert query_text is not None
+        assert "language" in query_text.casefold()
+        return EvidencePackage(
+            retrieved_chunk_ids=["chunk-1"],
+            selected_evidence_ids=["chunk-1"],
+            items=[
+                type(
+                    "EvidenceItemStub",
+                    (),
+                    {
+                        "citation_id": "E001",
+                        "chunk_id": "chunk-1",
+                        "tenant_id": tenant_context.tenant_id,
+                        "namespace_id": namespace_id,
+                        "document_id": uuid.uuid4(),
+                        "chunk_index": 0,
+                        "text": "Programming Languages: Python, Go, TypeScript",
+                        "score": 0.95,
+                        "sources": ("dense", "sparse"),
+                        "section_title": "TECHNICAL SKILLS",
+                        "section_slug": "technical-skills",
+                        "chunk_role": "section_header",
+                        "starts_with_heading": True,
+                        "is_list_block": True,
+                    },
+                )()
+            ],
+        )
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+        del evidence_package
+        captured["query_text"] = query_text
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": "The listed programming languages are Python, Go, and TypeScript [E001]",
+                "cited_evidence_ids": ["chunk-1"],
+                "citation_snippets": {"chunk-1": "Programming Languages: Python, Go, TypeScript"},
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 1.0,
+                "source_diversity": 2,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.query.list_conversation_messages",
+        fake_messages,
+    )
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.package_evidence",
+        fake_package_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        conversation_id=conversation_id,
+    )
+
+    assert captured["query_text"] == "what about that"
+
+
+@pytest.mark.asyncio()
 async def test_execute_standard_query_persists_agent_chat_context(monkeypatch) -> None:
     """Agent chat should persist agent, conversation, and selected mode on the trace."""
 

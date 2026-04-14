@@ -147,6 +147,64 @@ def test_package_evidence_keeps_single_best_hit_for_field_query_even_with_larger
     assert package.selected_evidence_ids == ["chunk-name"]
 
 
+def test_package_evidence_keeps_two_supporting_chunks_for_start_end_lookup() -> None:
+    """Exact multi-part lookups should keep both supporting chunks when the answer spans them."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    bundle = RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[
+            FusedRetrievedChunk(
+                chunk_id="chunk-start",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=0,
+                text="Pilot Overview\nIn January 2025, the city of Lydon launched the electric van pilot.",
+                fused_score=0.91,
+                sources=("dense", "sparse"),
+                section_title="Pilot Overview",
+                section_slug="pilot-overview",
+                chunk_role="section_body",
+            ),
+            FusedRetrievedChunk(
+                chunk_id="chunk-end",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=1,
+                text="Pilot Overview\nThe pilot lasted for six months and ended in June 2025.",
+                fused_score=0.87,
+                sources=("dense",),
+                section_title="Pilot Overview",
+                section_slug="pilot-overview",
+                chunk_role="section_body",
+            ),
+            FusedRetrievedChunk(
+                chunk_id="chunk-other",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=uuid.uuid4(),
+                chunk_index=0,
+                text="Recommendations\nExpand the program in 2026.",
+                fused_score=0.72,
+                sources=("sparse",),
+            ),
+        ],
+    )
+
+    package = package_evidence(
+        bundle,
+        query_text="When did the pilot start and end?",
+        limit=1,
+    )
+
+    assert package.selected_evidence_ids == ["chunk-start", "chunk-end"]
+
+
 def test_package_evidence_renders_stable_prompt_context() -> None:
     """Evidence packages should render a stable prompt context for generation."""
 
@@ -233,6 +291,58 @@ def test_package_evidence_prefers_diverse_chunks_for_dataset_summary() -> None:
     )
 
     assert package.selected_evidence_ids == ["doc-a-header", "doc-b-header"]
+
+
+def test_package_evidence_keeps_supporting_chunks_for_single_document_summary() -> None:
+    """Single-document summaries should keep the lead chunk and a supporting topic chunk."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    bundle = RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[
+            FusedRetrievedChunk(
+                chunk_id="doc-header",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=0,
+                text="Explainable AI in Software Engineering",
+                fused_score=0.95,
+                sources=("dense", "sparse"),
+            ),
+            FusedRetrievedChunk(
+                chunk_id="doc-intro",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=1,
+                text="Introduction\nThis paper examines how explainable AI methods help software teams debug and validate AI-enabled systems.",
+                fused_score=0.9,
+                sources=("dense",),
+            ),
+            FusedRetrievedChunk(
+                chunk_id="doc-later",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=3,
+                text="Methods, Technologies, and Tools\nCaptum, InterpretML, and the What-If Tool are discussed.",
+                fused_score=0.72,
+                sources=("sparse",),
+            ),
+        ],
+    )
+
+    package = package_evidence(
+        bundle,
+        query_text="What is the dataset about?",
+        limit=2,
+    )
+
+    assert package.selected_evidence_ids == ["doc-header", "doc-intro"]
 
 
 def test_package_evidence_keeps_complementary_list_chunks() -> None:

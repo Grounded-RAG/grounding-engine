@@ -61,6 +61,46 @@ def test_build_query_profile_detects_included_features_query_as_collection() -> 
     assert is_collection_query(profile) is True
 
 
+def test_build_query_profile_splits_multi_collection_attributes_cleanly() -> None:
+    """Collection questions with multiple requested item families should preserve both concepts."""
+
+    profile = build_query_profile("What are the methods, the tools?")
+
+    assert profile.query_kind == "list"
+    assert "method" in profile.attribute_terms
+    assert "tool" in profile.attribute_terms
+    assert requested_attribute_label(profile) == "methods and tools"
+
+
+def test_build_query_profile_detects_company_lookup_query() -> None:
+    """Supplier/company questions should route as focused lookups, not open chat."""
+
+    profile = build_query_profile("Which company supplied the vans?")
+
+    assert profile.query_kind == "lookup"
+    assert "company" in profile.attribute_terms
+    assert requested_attribute_label(profile) == "company"
+
+
+def test_build_query_profile_detects_difference_question_as_comparison() -> None:
+    """Difference questions should route to comparison handling rather than generic lookup."""
+
+    profile = build_query_profile(
+        "What was the difference between old fuel cost and new electricity cost over six months?"
+    )
+
+    assert profile.query_kind == "comparison"
+
+
+def test_build_query_profile_detects_when_start_end_query_as_date_lookup() -> None:
+    """When-start-end questions should keep date semantics for exact date-range answers."""
+
+    profile = build_query_profile("When did the pilot start and end?")
+
+    assert profile.query_kind == "lookup"
+    assert "date" in profile.semantic_tags
+
+
 def test_build_query_profile_prefers_universal_contact_semantics() -> None:
     """Universal semantic tags like contact should survive noisy wording."""
 
@@ -76,7 +116,8 @@ def test_build_query_plan_creates_retrieval_rewrites_for_lookup_query() -> None:
     plan = build_query_plan("What is the pricing model of this service?")
 
     assert plan.profile.query_kind == "lookup"
-    assert len(plan.retrieval_queries) >= 2
+    assert len(plan.retrieval_queries) == 2
+    assert plan.retrieval_queries[0] == "what is the pricing model of this service"
     assert any("pricing model" in query.casefold() for query in plan.retrieval_queries)
     assert "kind=lookup" in plan.explanation
 

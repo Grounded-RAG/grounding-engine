@@ -10,7 +10,11 @@ import urllib.request
 from dataclasses import dataclass
 
 from app.config import get_settings
-from app.core.query_analysis import build_query_profile, query_focus_hints
+from app.core.query_analysis import (
+    build_query_profile,
+    is_exact_qa_mode,
+    query_focus_hints,
+)
 from app.pipeline.contracts import EvidencePackage, GroundedAnswerDraft
 from app.core.provider_retry import run_with_retries
 
@@ -59,47 +63,77 @@ def _build_schema() -> dict[str, object]:
     }
 
 
+def _answer_mode(profile) -> str:
+    """Return the high-level answer mode for provider prompting."""
+
+    return "exact_qa" if is_exact_qa_mode(profile) else "summary_list"
+
+
 def _build_prompt(*, query_text: str, evidence_package: EvidencePackage) -> str:
     """Render a grounded instruction block for Gemini."""
 
     profile = build_query_profile(query_text)
-    answer_style_instructions = _answer_style_instructions(profile.query_kind)
+    answer_mode = _answer_mode(profile)
+    answer_style_instructions = _answer_style_instructions(
+        query_kind=profile.query_kind,
+        answer_mode=answer_mode,
+    )
     evidence_sections: list[str] = []
     for item in evidence_package.items:
+        rendered_text = item.text.strip()
+        if answer_mode != "exact_qa" and item.section_title:
+            rendered_text = f"[section: {item.section_title}]\n{rendered_text}"
         evidence_sections.append(
             "\n".join(
                 [
                     f"citation_id={item.citation_id}",
                     f"chunk_id={item.chunk_id}",
-                    f"document_id={item.document_id}",
-                    f"chunk_index={item.chunk_index}",
-                    f"sources={','.join(item.sources)}",
-                    f"section_title={item.section_title or 'none'}",
-                    f"section_slug={item.section_slug or 'none'}",
-                    f"chunk_role={item.chunk_role}",
-                    f"starts_with_heading={str(item.starts_with_heading).lower()}",
-                    f"is_list_block={str(item.is_list_block).lower()}",
-                    f"text={item.text}",
+                    f"text={rendered_text}",
                 ]
             )
         )
 
     return "\n\n".join(
         [
-            "You are a grounded answer generator.",
-            "Use only the supplied evidence.",
-            "Do not use outside knowledge.",
-            "Answer only the user's actual question, not every retrieved fact.",
-            "Prefer the single chunk or small set of chunks that directly answer the question.",
-            "If the question asks for a specific field like a name, degree, skill set, role, company, email, or date, extract only that field.",
-            "Do not concatenate unrelated bullets just because they were retrieved.",
-            "Use section_title, chunk_role, and list structure when they help identify the right evidence.",
-            "If support is weak, say that briefly but still remain grounded.",
-            "Return JSON with keys: answer_text, cited_evidence_ids, citation_snippets.",
-            "citation_snippets must be an array of objects with keys: chunk_id and snippet.",
-            "Return strict JSON only.",
+            *(
+                [
+                    "You are a strict grounded answer extractor.",
+                    "Use ONLY the supplied evidence.",
+                    "Do not use outside knowledge.",
+                    "Answer ONLY the user's actual question.",
+                    "If the answer exists explicitly in the evidence, you MUST extract it directly.",
+                    "If the question asks for a name, company, date, count, amount, or exact value, answer_text MUST be only that direct answer.",
+                    "If the question asks for two exact values, answer_text MUST contain only those requested values in one short answer.",
+                    "Do NOT summarize, generalize, or add extra facts.",
+                    "Do NOT say the answer is missing if the value appears in the evidence.",
+                    "Never use phrases like 'I found relevant', 'not enough structured evidence', 'based on the context', or 'The date is'.",
+                    "If the answer is missing, answer_text MUST be exactly: I could not find the answer in the provided context.",
+                    "If arithmetic is required, extract the needed numbers from evidence, compute internally, and return only the final result in answer_text.",
+                    "You MUST follow the JSON schema exactly.",
+                    "answer_text MUST be short and direct.",
+                    "citation_snippets must contain short exact supporting snippets, not paraphrases.",
+                    "Return strict JSON only.",
+                ]
+                if answer_mode == "exact_qa"
+                else [
+                    "You are a grounded answer writer.",
+                    "Use ONLY the supplied evidence.",
+                    "Do not use outside knowledge.",
+                    "Answer ONLY the user's actual question.",
+                    "Prefer the smallest number of chunks needed to answer correctly.",
+                    "If the answer exists explicitly in the evidence, extract it directly when possible.",
+                    "Do NOT copy long paragraphs or include unrelated details.",
+                    "Never use phrases like 'I found relevant', 'not enough structured evidence', 'based on the context', or 'The date is'.",
+                    "If the answer is missing, answer_text MUST be exactly: I could not find the answer in the provided context.",
+                    "You MUST follow the JSON schema exactly.",
+                    "answer_text MUST be concise.",
+                    "citation_snippets must contain short exact supporting snippets, not paraphrases.",
+                    "Return strict JSON only.",
+                ]
+            ),
             f"query={query_text}",
             f"query_kind={profile.query_kind}",
+            f"answer_mode={answer_mode}",
             f"semantic_tags={','.join(sorted(profile.semantic_tags)) or 'none'}",
             f"attribute_terms={','.join(sorted(profile.attribute_terms)) or 'none'}",
             "focus_hints:",
@@ -112,8 +146,23 @@ def _build_prompt(*, query_text: str, evidence_package: EvidencePackage) -> str:
     )
 
 
-def _answer_style_instructions(query_kind: str) -> list[str]:
+def _answer_style_instructions(*, query_kind: str, answer_mode: str) -> list[str]:
     """Return short answer-shape instructions tuned to the query kind."""
+
+    if answer_mode == "exact_qa":
+        if query_kind == "count":
+            return [
+                "Return only the count or the count plus unit when the unit is explicit.",
+                "Do not explain.",
+            ]
+        if query_kind == "lookup":
+            return [
+                "Return only the requested field or exact value.",
+                "Use the minimum number of evidence chunks needed.",
+            ]
+        return [
+            "Return only the exact answer supported by the evidence.",
+        ]
 
     if query_kind == "summary":
         return [
@@ -136,18 +185,44 @@ def _answer_style_instructions(query_kind: str) -> list[str]:
         return [
             "Start with Yes. or No. when the evidence clearly supports it.",
             "Then give one brief grounded explanation using only the cited evidence.",
+            "If arithmetic is needed to answer the comparison, compute it using only the supplied evidence.",
         ]
     if query_kind == "count":
         return [
-            "Return the grounded count first, then mention the counted items when they are clear.",
+            "Return only the count or the count plus unit when the unit is explicit.",
+            "Do not explain.",
+            "Do not say you cannot count when an explicit numeric value appears in the evidence.",
         ]
     if query_kind == "definition":
         return [
             "Only answer if the evidence explicitly defines or explains the concept.",
         ]
+    if query_kind == "lookup":
+        return [
+            "Return only the requested field or exact value.",
+            "Do not add extra details.",
+        ]
     return [
         "Answer concisely and stay strictly within the cited evidence.",
     ]
+
+
+def _generation_config_for_mode(answer_mode: str) -> dict[str, object]:
+    """Return deterministic generation settings for the requested answer mode."""
+
+    if answer_mode == "exact_qa":
+        return {
+            "temperature": 0,
+            "topP": 0.05,
+            "topK": 1,
+            "maxOutputTokens": 120,
+        }
+    return {
+        "temperature": 0.2,
+        "topP": 0.8,
+        "topK": 20,
+        "maxOutputTokens": 256,
+    }
 
 
 def _extract_text_from_candidate(payload: dict[str, object]) -> str:
@@ -235,6 +310,8 @@ async def generate_gemini_draft(
     settings = get_settings()
     if not settings.gemini_api_key:
         raise GeminiGenerationError("GEMINI_API_KEY is not configured.")
+    profile = build_query_profile(query_text)
+    answer_mode = _answer_mode(profile)
 
     model_name = settings.gemini_model
     if not model_name.startswith("models/"):
@@ -257,6 +334,7 @@ async def generate_gemini_draft(
             }
         ],
         "generationConfig": {
+            **_generation_config_for_mode(answer_mode),
             "responseMimeType": "application/json",
             "responseSchema": _build_schema(),
         },

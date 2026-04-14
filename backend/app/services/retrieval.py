@@ -291,6 +291,38 @@ async def dense_retrieve_chunks(
     return hits
 
 
+def _dedupe_retrieval_hits(hits: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """Keep the best occurrence of each chunk within one retrieval source."""
+
+    if not hits:
+        return []
+
+    best_by_chunk: dict[str, RetrievedChunk] = {}
+    for hit in hits:
+        current = best_by_chunk.get(hit.chunk_id)
+        if current is None or (hit.rank, -hit.score, hit.chunk_index, hit.chunk_id) < (
+            current.rank,
+            -current.score,
+            current.chunk_index,
+            current.chunk_id,
+        ):
+            best_by_chunk[hit.chunk_id] = hit
+
+    ordered_hits = sorted(
+        best_by_chunk.values(),
+        key=lambda hit: (
+            hit.rank,
+            -hit.score,
+            hit.chunk_index,
+            hit.chunk_id,
+        ),
+    )
+    return [
+        replace(hit, rank=index)
+        for index, hit in enumerate(ordered_hits, start=1)
+    ]
+
+
 def fuse_retrieval_hits(
     *hits_groups: Iterable[RetrievedChunk],
     limit: int | None = None,
@@ -602,6 +634,8 @@ async def retrieve_hybrid_candidates(
                 limit=overfetch_limit,
             )
         )
+    sparse_hits = _dedupe_retrieval_hits(sparse_hits)
+    dense_hits = _dedupe_retrieval_hits(dense_hits)
     fused_hits = fuse_retrieval_hits(
         sparse_hits,
         dense_hits,

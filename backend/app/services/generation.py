@@ -23,6 +23,7 @@ from app.core.query_analysis import (
     is_entity_context_query,
     is_field_extraction_query,
     is_count_query,
+    needs_multi_chunk_exact_support,
     score_text_against_query,
     tokenize_meaningful_terms,
 )
@@ -71,6 +72,12 @@ _FIELD_ANSWER_NOISE = {
 
 _OUTLINE_HEADING_PATTERN = re.compile(r"^\d+(?:\.\d+)*[.)]?\s+[A-Z][A-Za-z0-9/&,\- ]{2,}$")
 _HEADING_ONLY_PATTERN = re.compile(r"^[A-Z][A-Z0-9/&,\- ]{2,}$")
+_BANNED_PROVIDER_PHRASES = {
+    "based on the context",
+    "i found relevant",
+    "not enough structured evidence",
+    "the date is",
+}
 
 
 @dataclass(frozen=True)
@@ -139,6 +146,9 @@ def _provider_draft_is_query_aligned(
     """Validate provider-generated drafts before they reach the user."""
 
     profile = build_query_profile(query_text)
+    normalized_answer = re.sub(r"\s+", " ", draft.answer_text.casefold()).strip()
+    if any(phrase in normalized_answer for phrase in _BANNED_PROVIDER_PHRASES):
+        return False
     cited_items = [
         item for item in evidence_package.items if item.chunk_id in set(draft.cited_evidence_ids)
     ]
@@ -184,6 +194,7 @@ def _provider_draft_is_query_aligned(
         is_field_extraction_query(profile)
         and not is_collection_query(profile)
         and len(cited_items) > 1
+        and not needs_multi_chunk_exact_support(profile)
     ):
         return False
 
@@ -203,7 +214,15 @@ def _provider_draft_is_query_aligned(
             aligned_count += 1
 
     if is_field_extraction_query(profile) and not is_collection_query(profile):
-        if aligned_count != len(cited_items):
+        multi_chunk_exact = needs_multi_chunk_exact_support(profile)
+        word_limit = 24 if multi_chunk_exact else 18
+        if len(draft.answer_text.split()) > word_limit:
+            return False
+        if multi_chunk_exact:
+            if aligned_count < 1:
+                return False
+            return True
+        elif aligned_count != len(cited_items):
             return False
         return not _field_answer_has_unsupported_terms(
             query_text=query_text,
@@ -281,6 +300,8 @@ def _field_answer_has_unsupported_terms(
     if profile.attribute_terms:
         for attribute in profile.attribute_terms:
             allowed_terms.update(tokenize_meaningful_terms(attribute))
+    allowed_terms.update(tokenize_meaningful_terms(" ".join(profile.terms)))
+    allowed_terms.update(tokenize_meaningful_terms(" ".join(profile.expanded_terms)))
     allowed_terms.update(profile.semantic_tags)
 
     unsupported_terms = {

@@ -401,7 +401,7 @@ async def execute_standard_query(
     else:
         try:
             draft = await generate_answer_from_evidence(
-                query_text=query_plan.resolved_query_text,
+                query_text=query_request.query,
                 evidence_package=evidence_package,
             )
             response = shape_grounded_response(

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core.query_analysis import QueryPlan, QueryProfile
 from app.pipeline.contracts import FusedRetrievedChunk, RetrievedChunk
 from app.services.retrieval import (
     dense_retrieve_chunks,
@@ -230,6 +231,91 @@ def test_fuse_retrieval_hits_rewards_mutual_agreement() -> None:
         "sparse-only",
         "dense-only",
     }
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_dedupes_rewrite_repeats_before_fusion(monkeypatch) -> None:
+    """Repeated hits across rewrites should not inflate RRF scoring."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    shared_sparse = RetrievedChunk(
+        chunk_id="shared",
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        document_id=document_id,
+        chunk_index=0,
+        text="The pricing model is usage-based.",
+        score=0.9,
+        rank=1,
+        source="sparse",
+    )
+    shared_dense = RetrievedChunk(
+        chunk_id="shared",
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        document_id=document_id,
+        chunk_index=0,
+        text="The pricing model is usage-based.",
+        score=0.9,
+        rank=1,
+        source="dense",
+    )
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return [shared_sparse]
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return [shared_dense]
+
+    monkeypatch.setattr(
+        "app.services.retrieval.sparse_retrieve_chunks",
+        fake_sparse_retrieve_chunks,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    plan = QueryPlan(
+        raw_query_text="What is the pricing model of this service?",
+        resolved_query_text="What is the pricing model of this service?",
+        profile=QueryProfile(
+            raw_text="What is the pricing model of this service?",
+            normalized_text="what is the pricing model of this service",
+            terms=frozenset({"pricing", "model", "service"}),
+            expanded_terms=frozenset({"pricing", "model", "service"}),
+            attribute_terms=frozenset({"pricing model"}),
+            context_terms=frozenset(),
+            semantic_tags=frozenset(),
+            query_kind="lookup",
+            document_reference_rank=None,
+        ),
+        retrieval_query_text="what is the pricing model of this service",
+        retrieval_queries=(
+            "what is the pricing model of this service",
+            "pricing model service",
+        ),
+        explanation="kind=lookup",
+        used_conversation_context=False,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What is the pricing model of this service?",
+        query_plan=plan,
+        limit=4,
+    )
+
+    assert [hit.chunk_id for hit in bundle.sparse_hits] == ["shared"]
+    assert [hit.chunk_id for hit in bundle.dense_hits] == ["shared"]
+    assert bundle.fused_hits[0].chunk_id == "shared"
+    assert bundle.fused_hits[0].fused_score == pytest.approx(2 / 61, rel=1e-6)
 
 
 @pytest.mark.asyncio()

@@ -38,24 +38,22 @@ _ATTRIBUTE_NOISE_TOKENS = {
 }
 
 _CANONICAL_ATTRIBUTE_SYNONYMS = {
+    "company": {"company", "organization", "provider", "supplier", "vendor"},
     "name": {"full name", "fullname", "identity", "name", "owner", "title"},
     "contact": {"address", "contact", "email", "github", "linkedin", "mail", "number", "phone", "website"},
-    "date": {"date", "deadline", "duration", "month", "period", "schedule", "time", "timeline", "year"},
+    "date": {"date", "deadline", "duration", "end", "launch", "month", "period", "schedule", "start", "time", "timeline", "when", "year"},
     "location": {"address", "city", "country", "location", "place", "where"},
 }
 
 _COLLECTION_ATTRIBUTE_HINTS = {
     "achievement", "achievements", "award", "awards", "benefit", "benefits",
-    "capability", "capabilities", "certificate", "certificates", "component",
+    "capability", "capabilities", "certificate", "certificates", "challenge",
+    "challenges", "component",
     "components", "feature", "features", "framework", "frameworks", "language",
-    "languages", "project", "projects", "requirement", "requirements",
+    "languages", "method", "methods", "project", "projects", "requirement", "requirements",
     "responsibility", "responsibilities", "role", "roles", "section", "sections",
     "service", "services", "skill", "skills", "technology", "technologies",
     "tool", "tools",
-}
-
-_COLLECTION_LABEL_STOPWORDS = {
-    "a", "an", "and", "for", "in", "of", "or", "the", "to", "with",
 }
 
 _GENERIC_QUERY_VOCABULARY = {
@@ -112,6 +110,7 @@ _LIST_QUERY_PATTERN = re.compile(r"^(?:what\s+are|which|list|show\s+me|give\s+me
 _COUNT_QUERY_PATTERN = re.compile(r"^(?:how\s+many|number\s+of|count\s+(?:the\s+)?)\b")
 _ACTION_QUERY_PATTERN = re.compile(r"^(?:what\s+(?:did|does)\b|describe\b|summari[sz]e\b).*\b(?:do|did|does|work|responsibilit(?:y|ies)|contribution|contributions|task|tasks)\b")
 _ATTRIBUTE_PATTERNS = [
+    re.compile(r"^(?:which|what)\s+(?P<attribute>company|supplier|vendor|organization|provider)\b"),
     re.compile(r"^(?:what|which)\s+(?:is|are|was|were)\s+(?:the\s+)?(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"),
     re.compile(r"^(?:list|show\s+me|give\s+me|tell\s+me)\s+(?:the\s+)?(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"),
     re.compile(r"^(?:how\s+many|number\s+of|count\s+(?:the\s+)?)\s*(?P<attribute>.+?)(?:\s+(?:are|does|do|did|has|have|had|can|could|should|would)\b|$)"),
@@ -534,14 +533,22 @@ def _classify_query_kind(
 ) -> QueryKind:
     """Map a query into a generic question shape."""
 
-    del semantic_tags  # Captured via attribute terms and downstream scoring.
-
     if _is_summary_query(normalized_text=normalized_text, terms=terms):
         return "summary"
     if _DEFINITION_QUERY_PATTERN.match(normalized_text):
         return "definition"
     if _COUNT_QUERY_PATTERN.match(normalized_text):
         return "count"
+    if _comparison_marker_present(
+        normalized_text=normalized_text,
+        terms=terms,
+    ) and any(
+        _terms_contain_token(terms, marker)
+        for marker in {"compare", "compared", "difference", "only", "other", "versus", "vs"}
+    ):
+        return "comparison"
+    if normalized_text.startswith("when ") and ("date" in semantic_tags or _terms_contain_token(terms, "start") or _terms_contain_token(terms, "end")):
+        return "lookup"
 
     boolean_like = bool(_BOOLEAN_QUERY_PATTERN.match(normalized_text))
     if boolean_like and _comparison_marker_present(
@@ -572,7 +579,11 @@ def _classify_query_kind(
     if boolean_like:
         return "boolean"
     if _LIST_QUERY_PATTERN.match(normalized_text):
-        return "list" if attribute_terms else "open"
+        if any(_attribute_is_collection_like(attribute) for attribute in attribute_terms):
+            return "list"
+        if attribute_terms or semantic_tags:
+            return "lookup"
+        return "open"
     if any(_attribute_is_collection_like(attribute) for attribute in attribute_terms):
         return "list"
     if attribute_terms:
@@ -832,9 +843,14 @@ def build_query_profile(query_text: str) -> QueryProfile:
 def _build_retrieval_query_variants(profile: QueryProfile) -> tuple[str, ...]:
     """Build a small set of retrieval rewrites for one generic query profile."""
 
-    variants: list[str] = [build_retrieval_query_text(profile)]
+    base_query = profile.normalized_text.strip()
+    variants: list[str] = [base_query]
     core_terms = sorted(profile.terms)
     context_terms = sorted(profile.context_terms)
+    exact_qa_mode = is_exact_qa_mode(profile)
+
+    if not exact_qa_mode:
+        variants.append(build_retrieval_query_text(profile))
 
     if profile.attribute_terms:
         for attribute in sorted(profile.attribute_terms)[:2]:
@@ -845,6 +861,8 @@ def _build_retrieval_query_variants(profile: QueryProfile) -> tuple[str, ...]:
                 if term not in attribute_terms
             ][:5]
             variants.append(" ".join([attribute, *remaining_terms]).strip())
+            if exact_qa_mode:
+                break
 
     if profile.semantic_tags:
         for semantic_tag in sorted(profile.semantic_tags)[:2]:
@@ -859,6 +877,11 @@ def _build_retrieval_query_variants(profile: QueryProfile) -> tuple[str, ...]:
                     ]
                 ).strip()
             )
+            if exact_qa_mode:
+                break
+
+    if exact_qa_mode:
+        return _dedupe_texts(variants[:2])
 
     if is_definition_query(profile):
         subject_terms = sorted(profile.attribute_terms) or core_terms[:3]
@@ -956,8 +979,8 @@ def build_query_plan(
         if resolved_query_text == query_text
         else build_query_profile(resolved_query_text)
     )
-    retrieval_query_text = build_retrieval_query_text(profile)
     retrieval_queries = _build_retrieval_query_variants(profile)
+    retrieval_query_text = retrieval_queries[0] if retrieval_queries else build_retrieval_query_text(profile)
     plan = QueryPlan(
         raw_query_text=query_text,
         resolved_query_text=resolved_query_text,
@@ -1059,7 +1082,12 @@ def requested_attribute_label(profile: QueryProfile) -> str | None:
         formatted_labels: list[str] = []
         for attribute in sorted(
             profile.attribute_terms,
-            key=lambda value: (len(value.split()), len(value), value),
+            key=lambda value: (
+                profile.normalized_text.find(value) if value in profile.normalized_text else 10_000,
+                len(value.split()),
+                len(value),
+                value,
+            ),
         )[:3]:
             label = attribute.replace("_", " ").strip()
             if not label:
@@ -1099,6 +1127,29 @@ def is_field_extraction_query(profile: QueryProfile) -> bool:
 
     return profile.query_kind in {"lookup", "list"} and bool(
         profile.attribute_terms or profile.semantic_tags
+    )
+
+
+def is_exact_qa_mode(profile: QueryProfile) -> bool:
+    """Return whether the query should use strict exact-answer extraction behavior."""
+
+    return is_count_query(profile) or (
+        is_field_extraction_query(profile) and not is_collection_query(profile)
+    )
+
+
+def needs_multi_chunk_exact_support(profile: QueryProfile) -> bool:
+    """Return whether an exact lookup naturally needs more than one supporting chunk."""
+
+    normalized = profile.normalized_text
+    paired_terms = (
+        ("start", "end"),
+        ("from", "to"),
+        ("before", "after"),
+    )
+    return any(
+        all(term in normalized for term in pair)
+        for pair in paired_terms
     )
 
 
