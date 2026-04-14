@@ -148,6 +148,45 @@ def test_build_chunk_manifest_keeps_distinct_sections_separate_when_headings_cha
     )
 
 
+def test_build_chunk_manifest_splits_title_case_section_headings() -> None:
+    """Structure-aware chunking should split common title-case research headings."""
+
+    manifest = build_chunk_manifest(
+        document_id=uuid.uuid4(),
+        text=(
+            "Explainable Artificial Intelligence (XAI) in Software Engineering\n\n"
+            "Introduction\n"
+            "Explainable Artificial Intelligence is an emerging topic in software engineering.\n\n"
+            "New Challenges in Software Engineering\n"
+            "One major challenge is that explanations can sound persuasive while still being inaccurate.\n\n"
+            "Methods, Technologies, and Tools\n"
+            "Post-hoc methods include LIME, SHAP, and counterfactual explanations."
+        ),
+        source_artifact_key="artifact.txt",
+        config=ChunkingConfig(
+            max_tokens=256,
+            overlap_tokens=8,
+            strategy="structure_aware_v1",
+        ),
+    )
+
+    assert len(manifest.chunks) >= 3
+    assert any(chunk.text.startswith("Introduction\n") for chunk in manifest.chunks)
+    assert any(
+        chunk.text.startswith("New Challenges in Software Engineering\n")
+        for chunk in manifest.chunks
+    )
+    assert any(
+        chunk.text.startswith("Methods, Technologies, and Tools\n")
+        for chunk in manifest.chunks
+    )
+    assert not any(
+        "New Challenges in Software Engineering" in chunk.text
+        and "Methods, Technologies, and Tools" in chunk.text
+        for chunk in manifest.chunks
+    )
+
+
 def test_build_chunk_manifest_repairs_wrapped_bullet_lines() -> None:
     """Structure-aware chunking should repair broken bullet wraps from semi-structured documents."""
 

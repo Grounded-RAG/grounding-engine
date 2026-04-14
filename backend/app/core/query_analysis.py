@@ -54,6 +54,10 @@ _COLLECTION_ATTRIBUTE_HINTS = {
     "tool", "tools",
 }
 
+_COLLECTION_LABEL_STOPWORDS = {
+    "a", "an", "and", "for", "in", "of", "or", "the", "to", "with",
+}
+
 _GENERIC_QUERY_VOCABULARY = {
     "about", "achievement", "achievements", "address", "answer", "attribute",
     "attributes", "award", "awards", "categories", "category", "certificate",
@@ -407,7 +411,15 @@ def _extract_attribute_terms(*, normalized_text: str, terms: set[str]) -> set[st
                 continue
             cleaned_tokens.append(normalized)
         if cleaned_tokens:
-            attribute_terms.add(" ".join(cleaned_tokens[:4]))
+            normalized_attribute_tokens = cleaned_tokens[:4]
+            if (
+                len(normalized_attribute_tokens) > 1
+                and len(normalized_attribute_tokens) <= 3
+                and all(token in _COLLECTION_ATTRIBUTE_HINTS for token in normalized_attribute_tokens)
+            ):
+                attribute_terms.update(normalized_attribute_tokens)
+            else:
+                attribute_terms.add(" ".join(normalized_attribute_tokens))
 
     for canonical, synonyms in _CANONICAL_ATTRIBUTE_SYNONYMS.items():
         if any(
@@ -1042,6 +1054,30 @@ def primary_intent(profile: QueryProfile) -> str | None:
 
 def requested_attribute_label(profile: QueryProfile) -> str | None:
     """Return a human-facing requested attribute label when one exists."""
+
+    if is_collection_query(profile) and len(profile.attribute_terms) > 1:
+        formatted_labels: list[str] = []
+        for attribute in sorted(
+            profile.attribute_terms,
+            key=lambda value: (len(value.split()), len(value), value),
+        )[:3]:
+            label = attribute.replace("_", " ").strip()
+            if not label:
+                continue
+            label_tokens = label.split()
+            if (
+                len(label_tokens) == 1
+                and label_tokens[0] in _COLLECTION_ATTRIBUTE_HINTS
+                and not label.endswith("s")
+            ):
+                label = f"{label}s"
+            formatted_labels.append(label)
+        if formatted_labels:
+            if len(formatted_labels) == 1:
+                return formatted_labels[0]
+            if len(formatted_labels) == 2:
+                return f"{formatted_labels[0]} and {formatted_labels[1]}"
+            return f"{', '.join(formatted_labels[:-1])}, and {formatted_labels[-1]}"
 
     intent = primary_intent(profile)
     if intent is None:

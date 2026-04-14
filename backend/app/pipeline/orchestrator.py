@@ -28,6 +28,39 @@ _TABLE_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 _SEPARATOR_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?:[-_=|]{3,})$")
 _BULLET_MARKER_ONLY_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?:[-*\u2022\u2013\u2014]|\d+[\.\)])$")
+_HEADING_CONNECTOR_WORDS: Final[set[str]] = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "by",
+    "for",
+    "from",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "vs",
+    "with",
+}
+_LABEL_LIKE_SINGLE_WORDS: Final[set[str]] = {
+    "address",
+    "contact",
+    "date",
+    "email",
+    "github",
+    "linkedin",
+    "location",
+    "name",
+    "number",
+    "owner",
+    "phone",
+    "title",
+    "website",
+}
 
 
 @dataclass(frozen=True)
@@ -98,6 +131,62 @@ def _normalize_chunk_text(raw_text: str) -> str:
     return "\n".join(compact_lines).strip()
 
 
+def _looks_like_heading_line(line: str) -> bool:
+    """Return whether one line looks like a structural heading."""
+
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if _HEADING_LINE_PATTERN.fullmatch(stripped):
+        return True
+
+    normalized = stripped.rstrip(":").strip()
+    if (
+        not normalized
+        or len(normalized) > 80
+        or _BULLET_LINE_PATTERN.match(normalized)
+        or _TABLE_LINE_PATTERN.search(normalized)
+        or _KEY_VALUE_LINE_PATTERN.fullmatch(normalized)
+        or re.search(r"[.!?]", normalized)
+    ):
+        return False
+
+    words = normalized.split()
+    if len(words) > 8:
+        return False
+
+    alpha_words = [
+        re.sub(r"^[^A-Za-z]+|[^A-Za-z]+$", "", word)
+        for word in words
+    ]
+    alpha_words = [word for word in alpha_words if word]
+    if not alpha_words:
+        return False
+    if len(alpha_words) == 1:
+        return (
+            alpha_words[0].casefold() not in _LABEL_LIKE_SINGLE_WORDS
+            and len(alpha_words[0]) >= 4
+            and alpha_words[0][0].isupper()
+        )
+    if not (
+        any(word.casefold() in _HEADING_CONNECTOR_WORDS for word in alpha_words)
+        or any(character in normalized for character in ",/&-")
+    ):
+        return False
+
+    heading_like_words = 0
+    for word in alpha_words:
+        lower_word = word.casefold()
+        if lower_word in _HEADING_CONNECTOR_WORDS:
+            continue
+        if (word.isupper() and len(word) > 1) or word[0].isupper():
+            heading_like_words += 1
+            continue
+        return False
+
+    return heading_like_words >= 1
+
+
 def _starts_with_heading(text: str, *, start_char: int, end_char: int) -> bool:
     """Return whether a span begins with a heading-like line."""
 
@@ -105,7 +194,7 @@ def _starts_with_heading(text: str, *, start_char: int, end_char: int) -> bool:
     if not candidate:
         return False
     first_line = candidate.splitlines()[0].strip()
-    return bool(first_line and _HEADING_LINE_PATTERN.fullmatch(first_line))
+    return _looks_like_heading_line(first_line)
 
 
 def _normalize_display_line(raw_line: str) -> str:
@@ -145,7 +234,7 @@ def _looks_like_label_only_line(line: str) -> bool:
     stripped = line.strip().rstrip(":")
     if (
         not stripped
-        or _HEADING_LINE_PATTERN.fullmatch(stripped)
+        or _looks_like_heading_line(stripped)
         or _BULLET_LINE_PATTERN.match(stripped)
         or _looks_like_table_line(stripped)
         or _looks_like_key_value_line(stripped)
@@ -172,7 +261,7 @@ def _pair_label_value_lines(lines: list[str]) -> list[str]:
         if (
             _BULLET_MARKER_ONLY_PATTERN.fullmatch(line.strip())
             and next_line
-            and not _HEADING_LINE_PATTERN.fullmatch(next_line)
+            and not _looks_like_heading_line(next_line)
             and not _looks_like_table_line(next_line)
         ):
             paired.append(f"- {next_line.lstrip('-*• ').strip()}")
@@ -181,7 +270,7 @@ def _pair_label_value_lines(lines: list[str]) -> list[str]:
         if (
             _looks_like_label_only_line(line)
             and next_line
-            and not _HEADING_LINE_PATTERN.fullmatch(next_line)
+            and not _looks_like_heading_line(next_line)
             and not _BULLET_LINE_PATTERN.match(next_line)
             and not _looks_like_table_line(next_line)
             and not _looks_like_key_value_line(next_line)
@@ -213,8 +302,8 @@ def _should_merge_with_previous_line(previous_line: str, current_line: str) -> b
     if (
         not previous
         or not current
-        or _HEADING_LINE_PATTERN.fullmatch(previous)
-        or _HEADING_LINE_PATTERN.fullmatch(current)
+        or _looks_like_heading_line(previous)
+        or _looks_like_heading_line(current)
         or _BULLET_LINE_PATTERN.match(current)
         or _looks_like_table_line(current)
         or _looks_like_label_only_line(current)
@@ -245,7 +334,7 @@ def _leading_heading_title(text: str) -> str | None:
     if not lines:
         return None
     first_line = lines[0]
-    if not _HEADING_LINE_PATTERN.fullmatch(first_line):
+    if not _looks_like_heading_line(first_line):
         return None
     return re.sub(r"\s+", " ", first_line.rstrip(":")).strip() or None
 
@@ -389,12 +478,12 @@ def _char_spans_to_token_spans(
     block_starts = [0]
     for match in _PARAGRAPH_BREAK_PATTERN.finditer(text):
         block_starts.append(match.end())
-    for match in _HEADING_LINE_PATTERN.finditer(text):
-        block_starts.append(match.start())
     for match in _BULLET_LINE_PATTERN.finditer(text):
         block_starts.append(match.start())
     cursor = 0
     for raw_line in text.splitlines(keepends=True):
+        if _looks_like_heading_line(raw_line):
+            block_starts.append(cursor)
         normalized_line = _normalize_display_line(raw_line)
         if normalized_line and (
             _looks_like_key_value_line(normalized_line)
