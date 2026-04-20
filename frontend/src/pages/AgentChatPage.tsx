@@ -1,13 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertCircle,
   ArrowLeft,
   Bot,
   Database,
   FileSearch,
+  LoaderCircle,
   Plus,
+  RefreshCw,
   Send,
+  Sparkles,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -35,7 +39,11 @@ import {
   providerDisplayText,
   supportSummaryText,
 } from "@/lib/trust";
-import type { UserFacingMode } from "@/lib/types";
+import type {
+  AgentChatResponse,
+  MessageResponse,
+  UserFacingMode,
+} from "@/lib/types";
 
 const MODE_OPTIONS: Array<{ label: string; value: UserFacingMode; available: boolean }> = [
   { label: "Auto", value: "auto", available: true },
@@ -43,6 +51,90 @@ const MODE_OPTIONS: Array<{ label: string; value: UserFacingMode; available: boo
   { label: "Thinking", value: "thinking", available: false },
   { label: "Verified", value: "verified", available: false },
 ];
+
+const GENERATING_COPY = [
+  "Reviewing grounded evidence",
+  "Tracing relevant citations",
+  "Drafting the answer",
+];
+
+type LocalExchangeStatus = "pending" | "error";
+
+interface LocalExchange {
+  tempUserId: string;
+  tempAssistantId: string;
+  conversationId: string | null;
+  conversationTitle: string;
+  message: string;
+  mode: UserFacingMode;
+  datasetId?: string;
+  submittedAt: string;
+  status: LocalExchangeStatus;
+  errorMessage?: string;
+}
+
+interface ChatSubmission {
+  tempUserId: string;
+  tempAssistantId: string;
+  conversationId: string | null;
+  conversationTitle: string;
+  message: string;
+  mode: UserFacingMode;
+  datasetId?: string;
+  submittedAt: string;
+}
+
+interface ChatMutationResult {
+  response: AgentChatResponse;
+  conversationId: string;
+}
+
+interface ChatMutationError extends Error {
+  conversationId?: string | null;
+}
+
+type VisibleChatMessage =
+  | {
+      kind: "server";
+      key: string;
+      role: "user" | "assistant";
+      content: string;
+      createdAt: string;
+      runId: string | null;
+      isPending?: false;
+      isError?: false;
+    }
+  | {
+      kind: "optimistic-user";
+      key: string;
+      role: "user";
+      content: string;
+      createdAt: string;
+      runId: null;
+      isPending?: false;
+      isError?: false;
+    }
+  | {
+      kind: "pending";
+      key: string;
+      role: "assistant";
+      content: string;
+      createdAt: string;
+      runId: null;
+      isPending: true;
+      isError?: false;
+    }
+  | {
+      kind: "error";
+      key: string;
+      role: "assistant";
+      content: string;
+      createdAt: string;
+      runId: null;
+      isPending?: false;
+      isError: true;
+      retryLabel: string;
+    };
 
 function EmptyPanel({
   icon: Icon,
@@ -58,31 +150,92 @@ function EmptyPanel({
   actionLabel: string;
 }) {
   return (
-    <div className="rounded-[28px] border bg-card px-8 py-10 text-center shadow-sm">
-      <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/10">
-        <Icon className="h-6 w-6 text-accent" />
+    <div className="gradient-subtle rounded-[32px] border border-border/70 px-8 py-12 text-center shadow-[0_24px_60px_rgba(15,23,42,0.06)]">
+      <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-[22px] bg-accent/10 text-accent shadow-[0_12px_30px_rgba(16,185,129,0.12)]">
+        <Icon className="h-7 w-7" />
       </div>
-      <h3 className="mb-2 text-2xl font-semibold tracking-[-0.02em] text-foreground">{title}</h3>
+      <h3 className="mb-3 font-display text-3xl font-semibold tracking-[-0.03em] text-foreground">
+        {title}
+      </h3>
       <p className="mx-auto max-w-2xl text-sm leading-7 text-muted-foreground">{description}</p>
-      <Link to={to} className="mt-6 inline-flex">
-        <Button variant="outline" className="rounded-full">
-          {actionLabel}
-        </Button>
-      </Link>
+      <div className="mt-8">
+        <Link to={to} className="inline-flex">
+          <Button variant="outline" className="rounded-full px-6">
+            {actionLabel}
+          </Button>
+        </Link>
+      </div>
     </div>
   );
+}
+
+function TypingIndicator() {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex items-center gap-1.5">
+        <span className="chat-typing-dot" />
+        <span className="chat-typing-dot [animation-delay:0.16s]" />
+        <span className="chat-typing-dot [animation-delay:0.32s]" />
+      </div>
+      <span className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+        Generating
+      </span>
+    </div>
+  );
+}
+
+function AssistantStatusCopy({ submittedAt }: { submittedAt: string }) {
+  const cycleIndex = Math.floor((Date.now() - new Date(submittedAt).getTime()) / 1400) % GENERATING_COPY.length;
+  return <span className="text-sm text-muted-foreground">{GENERATING_COPY[cycleIndex]}</span>;
+}
+
+function buildMessageCacheEntry(
+  messageId: string,
+  conversationId: string,
+  role: "user" | "assistant",
+  content: string,
+  createdAt: string,
+  runId: string | null,
+): MessageResponse {
+  return {
+    message_id: messageId,
+    conversation_id: conversationId,
+    created_by_api_key_id: null,
+    run_id: runId,
+    role,
+    content,
+    created_at: createdAt,
+  };
+}
+
+function isSameConversation(
+  exchangeConversationId: string | null,
+  selectedConversationId: string | null,
+  hasMessages: boolean,
+) {
+  if (exchangeConversationId && selectedConversationId) {
+    return exchangeConversationId === selectedConversationId;
+  }
+
+  if (!exchangeConversationId && !selectedConversationId) {
+    return true;
+  }
+
+  return !hasMessages && !selectedConversationId;
 }
 
 export default function AgentChatPage() {
   const { id } = useParams();
   const { apiKey, workspaceId, workspaceSlug } = useAuth();
   const queryClient = useQueryClient();
+  const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
   const [draft, setDraft] = useState("");
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [selectedMode, setSelectedMode] = useState<UserFacingMode>("auto");
   const [selectedDatasetId, setSelectedDatasetId] = useState("");
   const [datasetToAttachId, setDatasetToAttachId] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [localExchange, setLocalExchange] = useState<LocalExchange | null>(null);
 
   const agentQuery = useQuery({
     queryKey: ["agent", id],
@@ -221,51 +374,102 @@ export default function AgentChatPage() {
     },
   });
 
-  const chatMutation = useMutation({
-    mutationFn: async () => {
+  const chatMutation = useMutation<ChatMutationResult, ChatMutationError, ChatSubmission>({
+    mutationFn: async (submission) => {
       if (!apiKey || !id || !agentQuery.data) {
         throw new Error("Agent chat is unavailable until the agent is loaded.");
       }
 
-      if (agentQuery.data.dataset_ids.length === 0) {
-        throw new Error("Attach a dataset to this agent before chatting.");
-      }
-
-      let conversationId = selectedConversationId;
+      let conversationId = submission.conversationId;
       if (!conversationId) {
         const newConversation = await createAgentConversation(apiKey, id, {
-          title: draft.trim().slice(0, 64),
-          mode: selectedMode,
+          title: submission.conversationTitle,
+          mode: submission.mode,
         });
         conversationId = newConversation.conversation_id;
-        setSelectedConversationId(conversationId);
       }
 
-      const datasetId =
-        agentQuery.data.dataset_ids.length === 1
-          ? agentQuery.data.dataset_ids[0]
-          : selectedDatasetId || undefined;
-
-      if (!datasetId) {
-        throw new Error("Select which attached dataset should answer this question.");
+      try {
+        const response = await sendAgentChat(apiKey, id, {
+          conversation_id: conversationId,
+          message: submission.message,
+          mode: submission.mode,
+          dataset_id: submission.datasetId,
+        });
+        return { response, conversationId };
+      } catch (error) {
+        const wrapped =
+          error instanceof Error ? (error as ChatMutationError) : (new Error("Unable to send the message.") as ChatMutationError);
+        wrapped.conversationId = conversationId;
+        throw wrapped;
       }
-
-      return sendAgentChat(apiKey, id, {
-        conversation_id: conversationId,
-        message: draft.trim(),
-        mode: selectedMode,
-        dataset_id: datasetId,
+    },
+    onMutate: (submission) => {
+      setLocalExchange({
+        ...submission,
+        status: "pending",
       });
     },
-    onSuccess: (response) => {
+    onSuccess: ({ response, conversationId }, submission) => {
       setDraft("");
       setActiveRunId(response.run_id);
+      setSelectedConversationId(conversationId);
+      setLocalExchange(null);
+
+      queryClient.setQueryData<MessageResponse[]>(
+        ["conversation", response.conversation_id, "messages"],
+        (current = []) => {
+          const existingIds = new Set(current.map((message) => message.message_id));
+          const nextMessages = [...current];
+
+          if (!existingIds.has(response.user_message_id)) {
+            nextMessages.push(
+              buildMessageCacheEntry(
+                response.user_message_id,
+                response.conversation_id,
+                "user",
+                submission.message,
+                submission.submittedAt,
+                null,
+              ),
+            );
+          }
+
+          if (!existingIds.has(response.assistant_message_id)) {
+            nextMessages.push(
+              buildMessageCacheEntry(
+                response.assistant_message_id,
+                response.conversation_id,
+                "assistant",
+                response.answer,
+                new Date().toISOString(),
+                response.run_id,
+              ),
+            );
+          }
+
+          return nextMessages;
+        },
+      );
+
       void queryClient.invalidateQueries({ queryKey: ["agent", id, "conversations"] });
       void queryClient.invalidateQueries({ queryKey: ["conversation", response.conversation_id, "messages"] });
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
-    onError: (error) => {
+    onError: (error, submission) => {
+      setLocalExchange((current) => ({
+        ...(current ?? submission),
+        conversationId: error.conversationId ?? submission.conversationId,
+        status: "error",
+        errorMessage: error.message || "Unable to send the message.",
+      }));
+
+      if (error.conversationId) {
+        setSelectedConversationId(error.conversationId);
+        void queryClient.invalidateQueries({ queryKey: ["agent", id, "conversations"] });
+      }
+
       const message = error instanceof Error ? error.message : "Unable to send the message.";
       toast.error(message);
     },
@@ -298,9 +502,138 @@ export default function AgentChatPage() {
   const availableDatasets = datasetsQuery.data ?? [];
   const conversations = conversationsQuery.data ?? [];
   const messages = messagesQuery.data ?? [];
+  const hasActiveRun = localExchange?.status === "pending" || chatMutation.isPending;
   const run = runQuery.data;
   const activeConversation =
     conversations.find((conversation) => conversation.conversation_id === selectedConversationId) ?? null;
+
+  const visibleMessages = useMemo<VisibleChatMessage[]>(() => {
+    const baseMessages: VisibleChatMessage[] = messages.map((message) => ({
+      kind: "server",
+      key: message.message_id,
+      role: message.role,
+      content: message.content,
+      createdAt: message.created_at,
+      runId: message.run_id,
+    }));
+
+    if (!localExchange) {
+      return baseMessages;
+    }
+
+    if (!isSameConversation(localExchange.conversationId, selectedConversationId, messages.length > 0)) {
+      return baseMessages;
+    }
+
+    return [
+      ...baseMessages,
+      {
+        kind: "optimistic-user",
+        key: localExchange.tempUserId,
+        role: "user",
+        content: localExchange.message,
+        createdAt: localExchange.submittedAt,
+        runId: null,
+      },
+      localExchange.status === "pending"
+        ? {
+            kind: "pending",
+            key: localExchange.tempAssistantId,
+            role: "assistant",
+            content: "",
+            createdAt: localExchange.submittedAt,
+            runId: null,
+            isPending: true,
+          }
+        : {
+            kind: "error",
+            key: localExchange.tempAssistantId,
+            role: "assistant",
+            content: localExchange.errorMessage ?? "Unable to send the message.",
+            createdAt: localExchange.submittedAt,
+            runId: null,
+            isError: true,
+            retryLabel: "Retry last message",
+          },
+    ];
+  }, [localExchange, messages, selectedConversationId]);
+
+  useEffect(() => {
+    scrollAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [visibleMessages.length, localExchange?.status, selectedConversationId]);
+
+  function prepareSubmission(messageText: string): ChatSubmission | null {
+    if (!apiKey || !id || !agentQuery.data) {
+      toast.error("Agent chat is unavailable until the agent is loaded.");
+      return null;
+    }
+
+    if (hasActiveRun) {
+      toast("Please wait for the current response to finish.");
+      return null;
+    }
+
+    if (agentQuery.data.dataset_ids.length === 0) {
+      toast.error("Attach a dataset to this agent before chatting.");
+      return null;
+    }
+
+    const message = messageText.trim();
+    if (!message) {
+      return null;
+    }
+
+    const datasetId =
+      agentQuery.data.dataset_ids.length === 1
+        ? agentQuery.data.dataset_ids[0]
+        : selectedDatasetId || undefined;
+
+    if (!datasetId) {
+      toast.error("Select which attached dataset should answer this question.");
+      return null;
+    }
+
+    const nonce = `${Date.now()}`;
+    return {
+      tempUserId: `temp-user-${nonce}`,
+      tempAssistantId: `temp-assistant-${nonce}`,
+      conversationId: selectedConversationId,
+      conversationTitle: activeConversation?.title || message.slice(0, 64) || "New conversation",
+      message,
+      mode: selectedMode,
+      datasetId,
+      submittedAt: new Date().toISOString(),
+    };
+  }
+
+  function submitMessage(messageText: string) {
+    const submission = prepareSubmission(messageText);
+    if (!submission) {
+      return;
+    }
+
+    setDraft("");
+    chatMutation.mutate(submission);
+  }
+
+  function retryLastMessage() {
+    if (!localExchange || localExchange.status !== "error") {
+      return;
+    }
+
+    const retrySubmission: ChatSubmission = {
+      tempUserId: `temp-user-${Date.now()}`,
+      tempAssistantId: `temp-assistant-${Date.now()}`,
+      conversationId: localExchange.conversationId,
+      conversationTitle: localExchange.conversationTitle,
+      message: localExchange.message,
+      mode: localExchange.mode,
+      datasetId: localExchange.datasetId,
+      submittedAt: new Date().toISOString(),
+    };
+
+    chatMutation.mutate(retrySubmission);
+  }
 
   return (
     <div className="max-w-full -m-6 md:-m-8 h-[calc(100vh-3.5rem)] grid grid-cols-1 border-y bg-background md:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)_320px]">
@@ -331,7 +664,7 @@ export default function AgentChatPage() {
             size="sm"
             className="h-11 w-full rounded-2xl"
             onClick={() => createConversationMutation.mutate("New conversation")}
-            disabled={createConversationMutation.isPending}
+            disabled={createConversationMutation.isPending || hasActiveRun}
           >
             <Plus className="mr-1 h-3.5 w-3.5" /> New Chat
           </Button>
@@ -368,7 +701,7 @@ export default function AgentChatPage() {
                         value={datasetToAttachId}
                         onChange={(event) => setDatasetToAttachId(event.target.value)}
                         className="h-10 rounded-xl border bg-background px-3 text-sm text-foreground"
-                        disabled={attachDatasetMutation.isPending}
+                        disabled={attachDatasetMutation.isPending || hasActiveRun}
                       >
                         {attachableDatasets.map((dataset) => (
                           <option key={dataset.dataset_id} value={dataset.dataset_id}>
@@ -382,7 +715,7 @@ export default function AgentChatPage() {
                         size="sm"
                         className="w-full rounded-2xl"
                         onClick={() => datasetToAttachId && attachDatasetMutation.mutate(datasetToAttachId)}
-                        disabled={attachDatasetMutation.isPending || !datasetToAttachId}
+                        disabled={attachDatasetMutation.isPending || !datasetToAttachId || hasActiveRun}
                       >
                         <Database className="mr-2 h-3.5 w-3.5" />
                         {attachDatasetMutation.isPending ? "Attaching..." : "Attach selected dataset"}
@@ -419,11 +752,12 @@ export default function AgentChatPage() {
               <button
                 key={conversation.conversation_id}
                 onClick={() => setSelectedConversationId(conversation.conversation_id)}
+                disabled={hasActiveRun}
                 className={`mb-1.5 w-full rounded-xl px-3 py-2.5 text-left transition-colors ${
                   selectedConversationId === conversation.conversation_id
                     ? "bg-accent/10 text-foreground"
                     : "text-muted-foreground hover:bg-secondary/70"
-                }`}
+                } ${hasActiveRun ? "cursor-not-allowed opacity-70" : ""}`}
               >
                 <div className="truncate text-sm font-medium">{conversation.title}</div>
                 <div className="mt-0.5 text-[10px] text-muted-foreground">
@@ -439,13 +773,19 @@ export default function AgentChatPage() {
         <div className="shrink-0 border-b bg-background/90 px-6 py-4 backdrop-blur">
           <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4">
             <div className="min-w-0">
-              <h2 className="truncate text-lg font-semibold text-foreground">
-                {activeConversation?.title || "New conversation"}
+              <h2 className="truncate font-display text-xl font-semibold tracking-[-0.03em] text-foreground">
+                {activeConversation?.title || localExchange?.conversationTitle || "New conversation"}
               </h2>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span>{agent.name}</span>
                 <span>•</span>
                 <span>{attachedDatasets.length} dataset{attachedDatasets.length === 1 ? "" : "s"} attached</span>
+                {hasActiveRun ? (
+                  <span className="inline-flex items-center gap-1.5 text-accent">
+                    <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                    Generating answer
+                  </span>
+                ) : null}
               </div>
             </div>
             <Badge variant="outline" className="hidden text-[10px] sm:inline-flex">
@@ -454,76 +794,147 @@ export default function AgentChatPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.06),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.6),rgba(248,250,252,0.3))]">
           <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-6 py-8">
             {messagesQuery.isLoading && selectedConversationId ? (
               <div className="text-sm text-muted-foreground">Loading conversation...</div>
-            ) : messages.length === 0 ? (
+            ) : visibleMessages.length === 0 ? (
               <div className="flex flex-1 items-center justify-center">
                 <EmptyPanel
-                  icon={Bot}
-                  title="Start a grounded conversation"
-                  description="Ask a question about the datasets attached to this agent. Grounded will create a run with citations, confidence, and traceable answer metadata."
+                  icon={Sparkles}
+                  title="Ask something grounded"
+                  description="Send a question and we’ll show your message immediately, keep the thread active while the agent works, and return a citation-backed answer when the run finishes."
                   to={workspacePath(workspaceSlug, "/datasets")}
                   actionLabel={attachedDatasets.length === 0 ? "Open datasets" : "Review datasets"}
                 />
               </div>
             ) : (
-              messages.map((message) => {
-                const isAssistant = message.role === "assistant";
-                return (
-                  <div key={message.message_id} className={`mb-8 flex ${isAssistant ? "justify-start" : "justify-end"}`}>
-                    {isAssistant ? (
-                      <div className="w-full max-w-3xl">
-                        <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-                          <Bot className="h-3.5 w-3.5 text-accent" />
-                          <span>{agent.name}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => message.run_id && setActiveRunId(message.run_id)}
-                          className="w-full rounded-[26px] border bg-card px-6 py-5 text-left shadow-sm transition-colors hover:border-accent/40"
-                        >
-                          <p className="whitespace-pre-line text-[15px] leading-8 text-foreground">
-                            {message.content}
-                          </p>
-                          <div className="mt-4 flex flex-wrap items-center gap-2">
-                            {message.run_id ? (
-                              <Badge variant="accent" className="text-[10px]">
-                                <FileSearch className="mr-0.5 h-2.5 w-2.5" /> Inspect run
+              <div className="space-y-7 pb-4">
+                {visibleMessages.map((message) => {
+                  const isAssistant = message.role === "assistant";
+
+                  if (isAssistant) {
+                    return (
+                      <div key={message.key} className="flex justify-start animate-fade-up">
+                        <div className="w-full max-w-3xl">
+                          <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                            <Bot className="h-3.5 w-3.5 text-accent" />
+                            <span>{agent.name}</span>
+                            {message.isPending ? (
+                              <Badge variant="outline" className="h-6 rounded-full px-2 text-[10px]">
+                                Working
                               </Badge>
                             ) : null}
-                            <span className="text-[10px] text-muted-foreground">
-                              {formatRelativeOrDate(message.created_at)}
-                            </span>
+                            {message.isError ? (
+                              <Badge variant="warning" className="h-6 rounded-full px-2 text-[10px]">
+                                Needs retry
+                              </Badge>
+                            ) : null}
                           </div>
-                        </button>
+                          <div
+                            className={`w-full rounded-[28px] border px-6 py-5 text-left shadow-sm transition-all ${
+                              message.isPending
+                                ? "border-accent/20 bg-card/90 shadow-[0_18px_45px_rgba(16,185,129,0.08)]"
+                                : message.isError
+                                  ? "border-destructive/20 bg-card"
+                                  : "bg-card hover:border-accent/40"
+                            }`}
+                          >
+                            {message.isPending ? (
+                              <div className="space-y-4">
+                                <TypingIndicator />
+                                <AssistantStatusCopy submittedAt={message.createdAt} />
+                              </div>
+                            ) : message.isError ? (
+                              <div className="space-y-4">
+                                <div className="flex items-start gap-3 rounded-2xl border border-destructive/10 bg-destructive/5 px-4 py-3 text-destructive">
+                                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                                  <div className="min-w-0">
+                                    <p className="text-sm font-medium text-foreground">We couldn’t complete that run.</p>
+                                    <p className="mt-1 text-sm leading-6 text-muted-foreground">{message.content}</p>
+                                  </div>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-3">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="rounded-full"
+                                    onClick={retryLastMessage}
+                                    disabled={hasActiveRun}
+                                  >
+                                    <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                                    {message.retryLabel}
+                                  </Button>
+                                  <span className="text-[11px] text-muted-foreground">
+                                    You can also edit the prompt and resend once you’re ready.
+                                  </span>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <p className="whitespace-pre-line text-[15px] leading-8 text-foreground">
+                                  {message.content}
+                                </p>
+                                <div className="mt-4 flex flex-wrap items-center gap-2">
+                                  {message.runId ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setActiveRunId(message.runId)}
+                                      className="inline-flex"
+                                    >
+                                      <Badge variant="accent" className="text-[10px]">
+                                        <FileSearch className="mr-0.5 h-2.5 w-2.5" /> Inspect run
+                                      </Badge>
+                                    </button>
+                                  ) : null}
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {formatRelativeOrDate(message.createdAt)}
+                                  </span>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                    ) : (
-                      <div className="max-w-xl rounded-[26px] bg-secondary px-6 py-4">
-                        <p className="whitespace-pre-line text-[15px] leading-7 text-foreground">{message.content}</p>
+                    );
+                  }
+
+                  return (
+                    <div key={message.key} className="flex justify-end animate-fade-up">
+                      <div className="max-w-2xl rounded-[28px] border border-transparent bg-foreground px-6 py-4 text-primary-foreground shadow-[0_18px_45px_rgba(15,23,42,0.14)]">
+                        <p className="whitespace-pre-line text-[15px] leading-7">{message.content}</p>
+                        <div className="mt-3 text-right text-[10px] text-primary-foreground/70">
+                          {formatRelativeOrDate(message.createdAt)}
+                        </div>
                       </div>
-                    )}
-                  </div>
-                );
-              })
+                    </div>
+                  );
+                })}
+                <div ref={scrollAnchorRef} />
+              </div>
             )}
           </div>
         </div>
 
         <div className="shrink-0 border-t bg-background/95 px-6 py-4 backdrop-blur">
-          <div className="mx-auto w-full max-w-5xl rounded-[30px] border bg-card p-4 shadow-[0_20px_50px_rgba(15,23,42,0.08)]">
+          <div className="mx-auto w-full max-w-5xl rounded-[30px] border bg-card p-4 shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
             <Textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="Ask a grounded question..."
-              className="min-h-[88px] resize-none border-0 bg-transparent px-2 py-2 text-base shadow-none focus-visible:ring-0"
+              placeholder={hasActiveRun ? "The assistant is working on your current request..." : "Ask a grounded question..."}
+              disabled={hasActiveRun}
+              aria-busy={hasActiveRun}
+              className={`min-h-[96px] resize-none border-0 bg-transparent px-2 py-2 text-base shadow-none focus-visible:ring-0 ${
+                hasActiveRun ? "cursor-not-allowed opacity-70" : ""
+              }`}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-                  if (draft.trim()) {
-                    chatMutation.mutate();
+                  if (hasActiveRun) {
+                    toast("Please wait for the current response to finish.");
+                    return;
                   }
+                  submitMessage(draft);
                 }
               }}
             />
@@ -536,6 +947,7 @@ export default function AgentChatPage() {
                     value={selectedDatasetId}
                     onChange={(event) => setSelectedDatasetId(event.target.value)}
                     className="h-9 rounded-full border bg-background px-3 text-foreground"
+                    disabled={hasActiveRun}
                   >
                     {attachedDatasets.map((dataset) => (
                       <option key={dataset.dataset_id} value={dataset.dataset_id}>
@@ -551,6 +963,12 @@ export default function AgentChatPage() {
                 ) : (
                   <span className="px-1">Attach a dataset to enable grounded answers.</span>
                 )}
+                {hasActiveRun ? (
+                  <span className="inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-2 text-[11px] font-medium text-accent">
+                    <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                    Response in progress
+                  </span>
+                ) : null}
               </div>
 
               <div className="flex flex-wrap items-center justify-end gap-2">
@@ -559,14 +977,14 @@ export default function AgentChatPage() {
                     key={mode.value}
                     type="button"
                     onClick={() => mode.available && setSelectedMode(mode.value)}
-                    disabled={!mode.available}
+                    disabled={!mode.available || hasActiveRun}
                     className={`rounded-full px-4 py-2 text-xs font-medium transition-all ${
                       selectedMode === mode.value
                         ? "bg-accent text-accent-foreground"
                         : mode.available
                           ? "border border-border bg-background text-foreground hover:bg-secondary"
                           : "border border-border bg-background text-muted-foreground/40 cursor-not-allowed"
-                    }`}
+                    } ${hasActiveRun && mode.available ? "opacity-60" : ""}`}
                   >
                     {mode.label}
                     {!mode.available ? <span className="ml-1 text-[9px]">soon</span> : null}
@@ -576,10 +994,10 @@ export default function AgentChatPage() {
                   variant="pill-accent"
                   size="icon"
                   className="h-11 w-11 rounded-full"
-                  disabled={!draft.trim() || chatMutation.isPending}
-                  onClick={() => chatMutation.mutate()}
+                  disabled={!draft.trim() || hasActiveRun}
+                  onClick={() => submitMessage(draft)}
                 >
-                  <Send className="h-4 w-4" />
+                  {hasActiveRun ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 </Button>
               </div>
             </div>
