@@ -14,21 +14,13 @@ from app.core.openai_generator import (
 )
 from app.core.query_analysis import (
     build_query_profile,
-    has_strong_intent_signal,
-    is_action_query,
-    is_collection_query,
-    is_comparison_query,
+    final_answer_mode,
     is_dataset_summary_query,
-    is_definition_query,
-    is_entity_context_query,
-    is_field_extraction_query,
-    is_count_query,
     needs_multi_chunk_exact_support,
-    score_text_against_query,
     tokenize_meaningful_terms,
 )
-from app.pipeline.contracts import EvidencePackage, GroundedAnswerDraft
 from app.core.telemetry import get_logger
+from app.pipeline.contracts import EvidenceItem, EvidencePackage, GroundedAnswerDraft
 
 
 logger = get_logger("app.generation")
@@ -78,6 +70,7 @@ _BANNED_PROVIDER_PHRASES = {
     "not enough structured evidence",
     "the date is",
 }
+_UNSUPPORTED_REFUSAL_TEXT = "I could not find the answer in the provided context."
 
 
 @dataclass(frozen=True)
@@ -137,103 +130,12 @@ def resolve_generation_backend() -> GenerationBackend:
         ) from exc
 
 
-def _provider_draft_is_query_aligned(
-    *,
-    query_text: str,
-    evidence_package: EvidencePackage,
-    draft: GroundedAnswerDraft,
-) -> bool:
-    """Validate provider-generated drafts before they reach the user."""
+def _normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().casefold()
 
-    profile = build_query_profile(query_text)
-    normalized_answer = re.sub(r"\s+", " ", draft.answer_text.casefold()).strip()
-    if any(phrase in normalized_answer for phrase in _BANNED_PROVIDER_PHRASES):
-        return False
-    cited_items = [
-        item for item in evidence_package.items if item.chunk_id in set(draft.cited_evidence_ids)
-    ]
-    if not cited_items:
-        return False
 
-    if is_dataset_summary_query(profile):
-        return _provider_summary_is_query_aligned(
-            evidence_package=evidence_package,
-            cited_items=cited_items,
-            draft=draft,
-        )
-
-    if is_action_query(profile):
-        return _provider_action_is_query_aligned(
-            query_text=query_text,
-            cited_items=cited_items,
-            draft=draft,
-        )
-
-    if is_collection_query(profile):
-        return _provider_collection_is_query_aligned(
-            query_text=query_text,
-            cited_items=cited_items,
-            draft=draft,
-        )
-
-    if is_comparison_query(profile) or is_entity_context_query(profile):
-        return _provider_boolean_like_is_query_aligned(
-            query_text=query_text,
-            cited_items=cited_items,
-            draft=draft,
-        )
-
-    if is_count_query(profile):
-        return _provider_count_is_query_aligned(
-            query_text=query_text,
-            cited_items=cited_items,
-            draft=draft,
-        )
-
-    if (
-        is_field_extraction_query(profile)
-        and not is_collection_query(profile)
-        and len(cited_items) > 1
-        and not needs_multi_chunk_exact_support(profile)
-    ):
-        return False
-
-    aligned_count = 0
-    for item in cited_items:
-        snippet = draft.citation_snippets.get(item.chunk_id, item.text)
-        if (
-            has_strong_intent_signal(snippet, profile=profile)
-            or has_strong_intent_signal(item.text, profile=profile)
-            or score_text_against_query(
-                snippet,
-                profile=profile,
-                chunk_index=item.chunk_index,
-            )
-            >= 8.0
-        ):
-            aligned_count += 1
-
-    if is_field_extraction_query(profile) and not is_collection_query(profile):
-        multi_chunk_exact = needs_multi_chunk_exact_support(profile)
-        word_limit = 24 if multi_chunk_exact else 18
-        if len(draft.answer_text.split()) > word_limit:
-            return False
-        if multi_chunk_exact:
-            if aligned_count < 1:
-                return False
-            return True
-        elif aligned_count != len(cited_items):
-            return False
-        return not _field_answer_has_unsupported_terms(
-            query_text=query_text,
-            cited_items=cited_items,
-            draft=draft,
-        )
-
-    if is_definition_query(profile):
-        return aligned_count >= 1
-
-    return aligned_count >= 1
+def _strip_answer_citations(text: str) -> str:
+    return re.sub(r"\[[^\]]+\]", "", text).strip()
 
 
 def _looks_like_heading_only(text: str) -> bool:
@@ -254,175 +156,344 @@ def _significant_terms(text: str, *, noise_terms: set[str]) -> set[str]:
     }
 
 
-def _provider_summary_is_query_aligned(
+def _snippet_matches_evidence(*, snippet: str, evidence_text: str) -> bool:
+    normalized_snippet = _normalize_text(snippet)
+    normalized_evidence = _normalize_text(evidence_text)
+    if not normalized_snippet or not normalized_evidence:
+        return False
+    return normalized_snippet in normalized_evidence
+
+
+def _answer_supported_by_snippets(
+    *,
+    answer_text: str,
+    snippets: list[str],
+    multi_chunk: bool = False,
+    noise_terms: set[str] | None = None,
+) -> bool:
+    """Return whether the answer is directly supported by the cited snippets."""
+
+    answer_core = _normalize_text(_strip_answer_citations(answer_text))
+    if not answer_core:
+        return False
+    normalized_snippets = [_normalize_text(snippet) for snippet in snippets if snippet.strip()]
+    if any(answer_core in snippet for snippet in normalized_snippets):
+        return True
+
+    terms = _significant_terms(answer_core, noise_terms=noise_terms or set())
+    if not terms:
+        return False
+    combined_terms: set[str] = set()
+    for snippet in normalized_snippets:
+        combined_terms.update(tokenize_meaningful_terms(snippet))
+    if multi_chunk:
+        date_number_tokens = [
+            token.casefold()
+            for token in re.findall(
+                r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{4}|\d[\d,]*(?:\.\d+)?)\b",
+                answer_core,
+                flags=re.IGNORECASE,
+            )
+        ]
+        if date_number_tokens and all(token in " ".join(normalized_snippets) for token in date_number_tokens):
+            return True
+        return terms <= combined_terms
+    return any(terms <= tokenize_meaningful_terms(snippet) for snippet in normalized_snippets)
+
+
+def _resolve_cited_items(
     *,
     evidence_package: EvidencePackage,
-    cited_items: list,
     draft: GroundedAnswerDraft,
-) -> bool:
-    """Require provider summaries to cover more than one shallow fragment."""
+) -> tuple[list[EvidenceItem], str | None]:
+    """Resolve cited chunk IDs into evidence items with strict chunk-ID semantics."""
 
-    answer_terms = _significant_terms(
-        draft.answer_text,
-        noise_terms=_SUMMARY_ANSWER_NOISE,
-    )
-    if len(draft.answer_text.split()) < 8 or len(answer_terms) < 2:
-        return False
+    if len(set(draft.cited_evidence_ids)) != len(draft.cited_evidence_ids):
+        return [], "provider returned duplicate cited chunk IDs"
 
-    if len(evidence_package.items) > 1 and len(cited_items) < 2:
-        return False
-
-    evidence_terms: set[str] = set()
-    for item in cited_items:
-        evidence_terms.update(
-            _significant_terms(item.text, noise_terms=_SUMMARY_ANSWER_NOISE)
-        )
-
-    return len(answer_terms & evidence_terms) >= 2
+    item_by_chunk_id = {item.chunk_id: item for item in evidence_package.items}
+    cited_items: list[EvidenceItem] = []
+    for chunk_id in draft.cited_evidence_ids:
+        item = item_by_chunk_id.get(chunk_id)
+        if item is None:
+            return [], "provider returned unknown cited chunk IDs"
+        cited_items.append(item)
+    return cited_items, None
 
 
-def _field_answer_has_unsupported_terms(
+def _validate_citation_contract(
     *,
-    query_text: str,
-    cited_items: list,
+    evidence_package: EvidencePackage,
     draft: GroundedAnswerDraft,
-) -> bool:
-    """Reject provider field answers that add extra unsupported content."""
+) -> tuple[list[EvidenceItem], list[str], str | None]:
+    """Validate cited chunk IDs and snippet grounding."""
 
-    profile = build_query_profile(query_text)
-    answer_terms = _significant_terms(
-        draft.answer_text,
-        noise_terms=_FIELD_ANSWER_NOISE,
-    )
-    allowed_terms = set()
-    for item in cited_items:
-        allowed_terms.update(_significant_terms(item.text, noise_terms=set()))
-    if profile.attribute_terms:
-        for attribute in profile.attribute_terms:
-            allowed_terms.update(tokenize_meaningful_terms(attribute))
-    allowed_terms.update(tokenize_meaningful_terms(" ".join(profile.terms)))
-    allowed_terms.update(tokenize_meaningful_terms(" ".join(profile.expanded_terms)))
-    allowed_terms.update(profile.semantic_tags)
-
-    unsupported_terms = {
-        term for term in answer_terms if term not in allowed_terms
-    }
-    return len(unsupported_terms) > 1
-
-
-def _provider_action_is_query_aligned(
-    *,
-    query_text: str,
-    cited_items: list,
-    draft: GroundedAnswerDraft,
-) -> bool:
-    profile = build_query_profile(query_text)
-    if len(draft.answer_text.split()) < 8:
-        return False
-    if not any(
-        has_strong_intent_signal(
-            draft.citation_snippets.get(item.chunk_id, item.text),
-            profile=profile,
-        )
-        or has_strong_intent_signal(item.text, profile=profile)
-        for item in cited_items
-    ):
-        return False
-    return not _field_answer_has_unsupported_terms(
-        query_text=query_text,
-        cited_items=cited_items,
+    cited_items, error = _resolve_cited_items(
+        evidence_package=evidence_package,
         draft=draft,
     )
+    if error is not None:
+        return [], [], error
 
-
-def _provider_collection_is_query_aligned(
-    *,
-    query_text: str,
-    cited_items: list,
-    draft: GroundedAnswerDraft,
-) -> bool:
-    profile = build_query_profile(query_text)
-    normalized_answer = re.sub(r"\s+", " ", draft.answer_text).strip()
-    if len(normalized_answer.split()) < 4:
-        return False
-    if len(normalized_answer.split()) > 120:
-        return False
-
-    answer_lines = [
-        line.strip(" -*:\t")
-        for line in re.split(r"[\n;]+", draft.answer_text)
-        if line.strip()
-    ]
-    non_heading_lines = [line for line in answer_lines if not _looks_like_heading_only(line)]
-    if not non_heading_lines:
-        return False
-
-    if not any(
-        has_strong_intent_signal(item.text, profile=profile)
-        or score_text_against_query(
-            draft.citation_snippets.get(item.chunk_id, item.text),
-            profile=profile,
-            chunk_index=item.chunk_index,
-        ) >= 8.0
-        for item in cited_items
-    ):
-        return False
-
-    answer_terms = _significant_terms(draft.answer_text, noise_terms=_FIELD_ANSWER_NOISE)
-    evidence_terms: set[str] = set()
+    snippets: list[str] = []
     for item in cited_items:
-        evidence_terms.update(_significant_terms(item.text, noise_terms=set()))
+        snippet = draft.citation_snippets.get(item.chunk_id)
+        if not snippet or not snippet.strip():
+            return [], [], "provider omitted citation snippets for cited chunks"
+        if not _snippet_matches_evidence(snippet=snippet, evidence_text=item.text):
+            return [], [], "provider citation snippet was not grounded in cited evidence"
+        snippets.append(snippet.strip())
 
-    if len(answer_terms & evidence_terms) < 2:
-        return False
-
-    unsupported_terms = {
-        term
-        for term in answer_terms
-        if term not in evidence_terms and term not in profile.semantic_tags
-    }
-    return len(unsupported_terms) <= 4
+    if set(draft.citation_snippets) != {item.chunk_id for item in cited_items}:
+        return [], [], "provider citation snippets did not align exactly with cited chunk IDs"
+    return cited_items, snippets, None
 
 
-def _provider_boolean_like_is_query_aligned(
+def _validate_refusal_draft(draft: GroundedAnswerDraft) -> str | None:
+    """Validate explicit refusal behavior."""
+
+    answer_core = _normalize_text(_strip_answer_citations(draft.answer_text))
+    if answer_core != _UNSUPPORTED_REFUSAL_TEXT.casefold():
+        return "provider refusal text was not exact"
+    if draft.cited_evidence_ids or draft.citation_snippets:
+        return "provider refusal cited evidence"
+    return None
+
+
+def _validate_exact_lookup_draft(
+    *,
+    profile,
+    cited_items: list[EvidenceItem],
+    snippets: list[str],
+    draft: GroundedAnswerDraft,
+) -> str | None:
+    """Validate exact-lookup provider answers."""
+
+    multi_chunk = needs_multi_chunk_exact_support(profile)
+    if not multi_chunk and len(cited_items) != 1:
+        return "exact lookup cited too many chunks"
+    if multi_chunk and len(cited_items) > 2:
+        return "multi-part exact lookup cited too many chunks"
+    if len(_strip_answer_citations(draft.answer_text).split()) > (24 if multi_chunk else 18):
+        return "exact lookup answer was too long"
+    if any(_looks_like_heading_only(snippet) for snippet in snippets):
+        return "exact lookup cited heading-only support"
+    if not _answer_supported_by_snippets(
+        answer_text=draft.answer_text,
+        snippets=snippets,
+        multi_chunk=multi_chunk,
+        noise_terms=_FIELD_ANSWER_NOISE,
+    ):
+        return "exact lookup answer was not directly supported by snippets"
+    return None
+
+
+def _validate_event_lookup_draft(
+    *,
+    snippets: list[str],
+    draft: GroundedAnswerDraft,
+) -> str | None:
+    """Validate event lookup answers."""
+
+    answer_core = _strip_answer_citations(draft.answer_text)
+    if len(answer_core.split()) < 5 or len(answer_core.split()) > 32:
+        return "event lookup answer length was unreasonable"
+    if len(re.findall(r"[.!?]", answer_core)) > 1:
+        return "event lookup answer contained multiple sentences"
+    if any(_looks_like_heading_only(snippet) for snippet in snippets):
+        return "event lookup cited heading-only support"
+    if not _answer_supported_by_snippets(
+        answer_text=draft.answer_text,
+        snippets=snippets,
+        noise_terms=_FIELD_ANSWER_NOISE,
+    ):
+        return "event lookup answer was not supported by snippets"
+    return None
+
+
+def _validate_list_or_recommendation_draft(
+    *,
+    snippets: list[str],
+    draft: GroundedAnswerDraft,
+) -> str | None:
+    """Validate list/recommendation answers."""
+
+    answer_core = _strip_answer_citations(draft.answer_text)
+    if len(answer_core.split()) < 3 or len(answer_core.split()) > 90:
+        return "list or recommendation answer length was unreasonable"
+    items = [
+        part.strip(" -*\t")
+        for part in re.split(r"[;\n]+", answer_core)
+        if part.strip()
+    ]
+    if not items:
+        return "list or recommendation answer contained no items"
+    if any(_looks_like_heading_only(item) for item in items):
+        return "list or recommendation answer echoed headings"
+
+    combined_terms: set[str] = set()
+    for snippet in snippets:
+        combined_terms.update(tokenize_meaningful_terms(snippet))
+
+    for item in items:
+        item_terms = _significant_terms(item, noise_terms=_FIELD_ANSWER_NOISE)
+        if item_terms and not (item_terms & combined_terms):
+            return "list or recommendation item lacked cited support"
+    return None
+
+
+def _validate_summary_draft(
+    *,
+    evidence_package: EvidencePackage,
+    cited_items: list[EvidenceItem],
+    snippets: list[str],
+    draft: GroundedAnswerDraft,
+) -> str | None:
+    """Validate concise synthesis answers."""
+
+    answer_core = _strip_answer_citations(draft.answer_text)
+    if len(answer_core.split()) < 8 or len(answer_core.split()) > 80:
+        return "summary answer length was unreasonable"
+    if len(evidence_package.items) > 1 and len(cited_items) < 2:
+        return "summary answer cited too little evidence"
+    answer_terms = _significant_terms(answer_core, noise_terms=_SUMMARY_ANSWER_NOISE)
+    snippet_terms: set[str] = set()
+    for snippet in snippets:
+        snippet_terms.update(_significant_terms(snippet, noise_terms=_SUMMARY_ANSWER_NOISE))
+    if len(answer_terms & snippet_terms) < 2:
+        return "summary answer lacked enough evidence overlap"
+    return None
+
+
+def _validate_boolean_like_draft(
+    *,
+    snippets: list[str],
+    draft: GroundedAnswerDraft,
+) -> str | None:
+    """Validate boolean/comparison/entity-context answers."""
+
+    answer_core = _strip_answer_citations(draft.answer_text).strip()
+    if not answer_core.casefold().startswith(("yes", "no")):
+        return "boolean-like answer did not start with yes or no"
+    if not _answer_supported_by_snippets(
+        answer_text=draft.answer_text,
+        snippets=snippets,
+        noise_terms=_FIELD_ANSWER_NOISE,
+    ):
+        return "boolean-like answer was not supported by snippets"
+    return None
+
+
+def _validate_arithmetic_draft(
+    *,
+    snippets: list[str],
+    draft: GroundedAnswerDraft,
+) -> str | None:
+    """Validate arithmetic answers conservatively.
+
+    Provider arithmetic is only accepted when the final numeric answer is already
+    explicitly present in cited support. Otherwise we prefer local deterministic math.
+    """
+
+    answer_core = _strip_answer_citations(draft.answer_text)
+    if not re.search(r"\d", answer_core):
+        return "arithmetic answer did not contain a numeric result"
+    if not _answer_supported_by_snippets(
+        answer_text=draft.answer_text,
+        snippets=snippets,
+        noise_terms=_FIELD_ANSWER_NOISE,
+    ):
+        return "arithmetic answer was not explicitly present in cited support"
+    return None
+
+
+def _validate_open_draft(
+    *,
+    snippets: list[str],
+    draft: GroundedAnswerDraft,
+) -> str | None:
+    """Validate general grounded answers conservatively."""
+
+    answer_core = _strip_answer_citations(draft.answer_text)
+    if len(answer_core.split()) > 100:
+        return "open answer was too long"
+    if not _answer_supported_by_snippets(
+        answer_text=draft.answer_text,
+        snippets=snippets,
+        multi_chunk=True,
+        noise_terms=_FIELD_ANSWER_NOISE,
+    ):
+        return "open answer was not sufficiently supported by snippets"
+    return None
+
+
+def _provider_validation_error(
     *,
     query_text: str,
-    cited_items: list,
+    evidence_package: EvidencePackage,
     draft: GroundedAnswerDraft,
-) -> bool:
-    profile = build_query_profile(query_text)
-    normalized_answer = draft.answer_text.casefold().strip()
-    if not normalized_answer.startswith(("yes", "no")):
-        return False
-    return any(
-        score_text_against_query(
-            draft.citation_snippets.get(item.chunk_id, item.text),
-            profile=profile,
-            chunk_index=item.chunk_index,
-        )
-        >= 8.0
-        for item in cited_items
+) -> str | None:
+    """Return a provider validation error string, or None when the draft is acceptable."""
+
+    normalized_answer = _normalize_text(_strip_answer_citations(draft.answer_text))
+    if any(phrase in normalized_answer for phrase in _BANNED_PROVIDER_PHRASES):
+        return "provider answer contained banned weak phrasing"
+
+    refusal_error = None
+    if normalized_answer == _UNSUPPORTED_REFUSAL_TEXT.casefold():
+        refusal_error = _validate_refusal_draft(draft)
+        return refusal_error
+
+    if not draft.cited_evidence_ids:
+        return "provider non-refusal omitted cited chunk IDs"
+
+    cited_items, snippets, citation_error = _validate_citation_contract(
+        evidence_package=evidence_package,
+        draft=draft,
     )
+    if citation_error is not None:
+        return citation_error
 
-
-def _provider_count_is_query_aligned(
-    *,
-    query_text: str,
-    cited_items: list,
-    draft: GroundedAnswerDraft,
-) -> bool:
     profile = build_query_profile(query_text)
-    if not any(character.isdigit() for character in draft.answer_text):
-        return False
-    return any(
-        has_strong_intent_signal(item.text, profile=profile)
-        or score_text_against_query(
-            item.text,
+    answer_mode = final_answer_mode(profile)
+
+    if answer_mode == "exact_lookup":
+        return _validate_exact_lookup_draft(
             profile=profile,
-            chunk_index=item.chunk_index,
+            cited_items=cited_items,
+            snippets=snippets,
+            draft=draft,
         )
-        >= 8.0
-        for item in cited_items
+    if answer_mode == "event_lookup":
+        return _validate_event_lookup_draft(
+            snippets=snippets,
+            draft=draft,
+        )
+    if answer_mode == "list_or_recommendation":
+        return _validate_list_or_recommendation_draft(
+            snippets=snippets,
+            draft=draft,
+        )
+    if answer_mode == "summary" or is_dataset_summary_query(profile):
+        return _validate_summary_draft(
+            evidence_package=evidence_package,
+            cited_items=cited_items,
+            snippets=snippets,
+            draft=draft,
+        )
+    if answer_mode == "boolean_like":
+        return _validate_boolean_like_draft(
+            snippets=snippets,
+            draft=draft,
+        )
+    if answer_mode == "arithmetic_qa":
+        return _validate_arithmetic_draft(
+            snippets=snippets,
+            draft=draft,
+        )
+    return _validate_open_draft(
+        snippets=snippets,
+        draft=draft,
     )
 
 
@@ -439,28 +510,30 @@ async def generate_answer_from_evidence(
             query_text=query_text,
             evidence_package=evidence_package,
         )
-        if backend.implementation != "local" and not _provider_draft_is_query_aligned(
-            query_text=query_text,
-            evidence_package=evidence_package,
-            draft=draft,
-        ):
-            raise GroundedGenerationError(
-                "Provider generation returned weakly aligned support."
+        if backend.implementation != "local":
+            validation_error = _provider_validation_error(
+                query_text=query_text,
+                evidence_package=evidence_package,
+                draft=draft,
             )
+            if validation_error is not None:
+                raise GroundedGenerationError(validation_error)
         return draft
-    except GroundedGenerationError:
+    except GroundedGenerationError as exc:
         if backend.implementation == "local":
             raise
         logger.warning(
             "generation_provider_fallback",
             configured_backend=backend.provider_name,
             fallback_backend="local_grounded_v1",
+            reason=str(exc),
         )
-    except (GeminiGenerationError, OpenAICompatibleGenerationError):
+    except (GeminiGenerationError, OpenAICompatibleGenerationError) as exc:
         logger.warning(
             "generation_provider_fallback",
             configured_backend=backend.provider_name,
             fallback_backend="local_grounded_v1",
+            reason=str(exc),
         )
     fallback_draft = generate_grounded_draft(
         query_text=query_text,

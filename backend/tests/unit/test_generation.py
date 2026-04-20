@@ -9,9 +9,12 @@ import pytest
 from app.core.llm_client import GroundedGenerationError, generate_grounded_draft
 from app.core.gemini_generator import (
     GeminiGenerationError,
+    REFUSAL_TEXT,
     _build_prompt,
+    _coerce_json_text,
     _generation_config_for_mode,
     _parse_result,
+    _validate_result_against_evidence,
 )
 from app.core.openai_generator import OpenAICompatibleGenerationError
 from app.pipeline.contracts import EvidenceItem, EvidencePackage, GroundedAnswerDraft
@@ -228,7 +231,7 @@ def test_generate_grounded_draft_can_extract_name_like_answer() -> None:
     )
 
     assert draft.cited_evidence_ids[0] == "chunk-name"
-    assert draft.answer_text.startswith("The person's name is Samrawit Gebremaryam Bahta")
+    assert draft.answer_text == "Samrawit Gebremaryam Bahta [E001]"
     assert "[E001]" in draft.answer_text
     assert "[E002]" not in draft.answer_text
 
@@ -263,7 +266,7 @@ def test_generate_grounded_draft_prefers_skills_section_over_incidental_skill_wo
     )
 
     assert draft.cited_evidence_ids[0] == "chunk-skills"
-    assert draft.answer_text.startswith("The listed technical skills are")
+    assert draft.answer_text.startswith("AI & Machine Learning: PyTorch")
     assert "PyTorch" in draft.answer_text
     assert "[E002]" in draft.answer_text
     assert "[E001]" not in draft.answer_text
@@ -321,7 +324,7 @@ def test_generate_grounded_draft_does_not_misclassify_experience_query_as_name()
         evidence_package=evidence_package,
     )
 
-    assert draft.answer_text.startswith("The work experience is")
+    assert draft.answer_text.startswith("AI Engineer at iCog Labs")
     assert "AI Engineer at iCog Labs" in draft.answer_text
     assert "The person's name is" not in draft.answer_text
     assert draft.cited_evidence_ids == ["chunk-experience"]
@@ -465,7 +468,6 @@ def test_generate_grounded_draft_renders_collection_answers_from_prose_sentences
         evidence_package=evidence_package,
     )
 
-    assert draft.answer_text.startswith("The listed challenges are")
     assert "false sense of trust" in draft.answer_text
     assert "generative AI and large language models" in draft.answer_text
 
@@ -572,7 +574,7 @@ def test_generate_grounded_draft_renders_multiple_collection_families_cleanly() 
         evidence_package=evidence_package,
     )
 
-    assert "The listed methods and tools are" in draft.answer_text
+    assert "decision trees" in draft.answer_text
     assert "decision trees" in draft.answer_text
     assert "LIME, SHAP, and counterfactual explanations" in draft.answer_text
     assert "Captum" in draft.answer_text
@@ -636,9 +638,7 @@ def test_generate_grounded_draft_renders_count_questions_from_structured_items()
         evidence_package=evidence_package,
     )
 
-    assert draft.answer_text.startswith("The evidence shows 2 projects:")
-    assert "Traveler's Pocket Pal" in draft.answer_text
-    assert "StyleCraft" in draft.answer_text
+    assert draft.answer_text == "2 projects [E001]"
 
 
 def test_generate_grounded_draft_extracts_explicit_count_from_prose_sentence() -> None:
@@ -684,7 +684,7 @@ def test_generate_grounded_draft_extracts_exact_supplier_name_from_prose_sentenc
         evidence_package=evidence_package,
     )
 
-    assert draft.answer_text == "The company is Voltara Mobility [E001]"
+    assert draft.answer_text == "Voltara Mobility [E001]"
 
 
 def test_generate_grounded_draft_computes_numeric_difference_for_comparison_question() -> None:
@@ -712,7 +712,7 @@ def test_generate_grounded_draft_computes_numeric_difference_for_comparison_ques
         evidence_package=evidence_package,
     )
 
-    assert draft.answer_text == "The difference is $11,500 [E001] [E002]."
+    assert draft.answer_text == "$11,500 [E001] [E002]"
 
 
 def test_generate_grounded_draft_answers_start_and_end_date_range_cleanly() -> None:
@@ -743,13 +743,132 @@ def test_generate_grounded_draft_answers_start_and_end_date_range_cleanly() -> N
     assert draft.answer_text == "It started in January 2025 [E001] and ended in June 2025 [E002]."
 
 
+def test_generate_grounded_draft_extracts_time_range_without_location_prefix() -> None:
+    """Time-range lookups should return the exact range without malformed wrappers."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-hours"],
+        selected_evidence_ids=["chunk-hours"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-hours",
+                text="Charging and Operations\nThe vans were usually charged from 10:00 PM to 4:30 AM at the depot.",
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="During what hours were the vans usually charged?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text == "10:00 PM to 4:30 AM [E001]"
+
+
+def test_generate_grounded_draft_renders_recommendations_as_short_items() -> None:
+    """Recommendation questions should return the actual recommendations, not a date token."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-recommend"],
+        selected_evidence_ids=["chunk-recommend"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-recommend",
+                text=(
+                    "Committee Recommendation\n"
+                    "In August 2025, the committee recommended:\n"
+                    "- purchase 6 additional electric vans\n"
+                    "- add 3 more charging ports\n"
+                    "- create a driver guide focused on energy-efficient route planning"
+                ),
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What did the committee recommend in August 2025?",
+        evidence_package=evidence_package,
+    )
+
+    assert "purchase 6 additional electric vans" in draft.answer_text
+    assert "add 3 more charging ports" in draft.answer_text
+    assert "August 2025" not in draft.answer_text
+
+
+def test_generate_grounded_draft_refuses_unsupported_exact_lookup() -> None:
+    """Unsupported exact lookups should refuse instead of reusing a nearby sentence."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-fleet"],
+        selected_evidence_ids=["chunk-fleet"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-fleet",
+                text="The city purchased 9 electric vans from Heliox Transit for the pilot.",
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What color were the vans?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text == "I could not find the answer in the provided context."
+    assert draft.cited_evidence_ids == []
+    assert draft.citation_snippets == {}
+
+
+def test_generate_grounded_draft_computes_net_savings_from_grounded_values() -> None:
+    """Net savings questions should use deterministic arithmetic over cited evidence."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-fuel", "chunk-electricity", "chunk-maintenance", "chunk-installation"],
+        selected_evidence_ids=["chunk-fuel", "chunk-electricity", "chunk-maintenance", "chunk-installation"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-fuel",
+                text="Costs and Savings\nBefore the pilot, the city spent about $16,100 on fuel over the period.",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-electricity",
+                text="Costs and Savings\nDuring the pilot, electricity costs totaled $6,900.",
+            ),
+            _evidence_item(
+                citation_id="E003",
+                chunk_id="chunk-maintenance",
+                text="Costs and Savings\nMaintenance savings during the pilot were $3,900.",
+            ),
+            _evidence_item(
+                citation_id="E004",
+                chunk_id="chunk-installation",
+                text="Costs and Savings\nCharging installation costs were $11,200.",
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What was the net savings after including installation costs?",
+        evidence_package=evidence_package,
+    )
+
+    assert draft.answer_text == "$1,900 [E001] [E002] [E003] [E004]"
+
+
 def test_parse_gemini_result_accepts_array_citation_snippets() -> None:
     """Gemini JSON parsing should accept schema-friendly citation snippet arrays."""
 
     parsed = _parse_result(
         {
+            "is_refusal": False,
+            "answer_mode": "exact_lookup",
             "answer_text": "Grounded uses hybrid retrieval.",
-            "cited_evidence_ids": ["chunk-1"],
+            "cited_chunk_ids": ["chunk-1"],
             "citation_snippets": [
                 {"chunk_id": "chunk-1", "snippet": "Grounded uses hybrid retrieval."}
             ],
@@ -757,7 +876,9 @@ def test_parse_gemini_result_accepts_array_citation_snippets() -> None:
     )
 
     assert parsed.answer_text == "Grounded uses hybrid retrieval."
-    assert parsed.cited_evidence_ids == ["chunk-1"]
+    assert parsed.is_refusal is False
+    assert parsed.answer_mode == "exact_lookup"
+    assert parsed.cited_chunk_ids == ["chunk-1"]
     assert parsed.citation_snippets == {
         "chunk-1": "Grounded uses hybrid retrieval."
     }
@@ -766,14 +887,131 @@ def test_parse_gemini_result_accepts_array_citation_snippets() -> None:
 def test_parse_gemini_result_rejects_empty_array_citation_snippets() -> None:
     """Gemini parsing should fail cleanly when snippet arrays are empty."""
 
-    with pytest.raises(GeminiGenerationError, match="invalid citation_snippets"):
+    with pytest.raises(GeminiGenerationError, match="must align exactly"):
         _parse_result(
             {
+                "is_refusal": False,
+                "answer_mode": "exact_lookup",
                 "answer_text": "Grounded uses hybrid retrieval.",
-                "cited_evidence_ids": ["chunk-1"],
+                "cited_chunk_ids": ["chunk-1"],
                 "citation_snippets": [],
             }
         )
+
+
+def test_parse_gemini_result_allows_refusal_without_citations() -> None:
+    """Provider refusals should parse cleanly without fake citations."""
+
+    parsed = _parse_result(
+        {
+            "is_refusal": True,
+            "answer_mode": "exact_lookup",
+            "answer_text": REFUSAL_TEXT,
+            "cited_chunk_ids": [],
+            "citation_snippets": [],
+        }
+    )
+
+    assert parsed.answer_text == REFUSAL_TEXT
+    assert parsed.is_refusal is True
+    assert parsed.cited_chunk_ids == []
+    assert parsed.citation_snippets == {}
+
+
+def test_validate_result_against_evidence_rejects_unknown_chunk_id() -> None:
+    """Gemini validation should reject cited chunk IDs that are not in the evidence package."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-1",
+                text="The city purchased 12 electric vans from Voltara Mobility.",
+            ),
+        ],
+    )
+
+    parsed = _parse_result(
+        {
+            "is_refusal": False,
+            "answer_mode": "exact_lookup",
+            "answer_text": "Voltara Mobility",
+            "cited_chunk_ids": ["chunk-x"],
+            "citation_snippets": [
+                {"chunk_id": "chunk-x", "snippet": "Voltara Mobility"}
+            ],
+        }
+    )
+
+    with pytest.raises(GeminiGenerationError, match="unknown cited chunk_id"):
+        _validate_result_against_evidence(
+            result=parsed,
+            evidence_package=evidence_package,
+            expected_answer_mode="exact_lookup",
+        )
+
+
+def test_validate_result_against_evidence_rejects_ungrounded_snippet() -> None:
+    """Gemini validation should reject snippets that are not substrings of the cited chunk."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-1",
+                text="The city purchased 12 electric vans from Voltara Mobility.",
+            ),
+        ],
+    )
+
+    parsed = _parse_result(
+        {
+            "is_refusal": False,
+            "answer_mode": "exact_lookup",
+            "answer_text": "Voltara Mobility",
+            "cited_chunk_ids": ["chunk-1"],
+            "citation_snippets": [
+                {"chunk_id": "chunk-1", "snippet": "The supplier was Voltara Mobility"}
+            ],
+        }
+    )
+
+    with pytest.raises(GeminiGenerationError, match="not grounded in the chunk"):
+        _validate_result_against_evidence(
+            result=parsed,
+            evidence_package=evidence_package,
+            expected_answer_mode="exact_lookup",
+        )
+
+
+def test_coerce_json_text_recovers_fenced_json_object() -> None:
+    """Gemini JSON coercion should recover fenced JSON cleanly."""
+
+    rendered = """```json
+{"is_refusal":false,"answer_mode":"exact_lookup","answer_text":"Heliox Transit","cited_chunk_ids":["chunk-1"],"citation_snippets":[{"chunk_id":"chunk-1","snippet":"Heliox Transit"}]}
+```"""
+
+    assert _coerce_json_text(rendered) == (
+        '{"is_refusal":false,"answer_mode":"exact_lookup","answer_text":"Heliox Transit","cited_chunk_ids":["chunk-1"],'
+        '"citation_snippets":[{"chunk_id":"chunk-1","snippet":"Heliox Transit"}]}'
+    )
+
+
+def test_coerce_json_text_recovers_first_balanced_object_from_preface() -> None:
+    """Gemini JSON coercion should recover the first balanced object from noisy text."""
+
+    rendered = (
+        'Here is the JSON:\n'
+        '{"is_refusal":false,"answer_mode":"exact_lookup","answer_text":"9 electric vans","cited_chunk_ids":["chunk-1"],'
+        '"citation_snippets":[{"chunk_id":"chunk-1","snippet":"9 electric vans"}]}\n'
+        'Thanks.'
+    )
+
+    assert _coerce_json_text(rendered).startswith('{"is_refusal":false,"answer_mode":"exact_lookup","answer_text":"9 electric vans"')
 
 
 def test_build_gemini_prompt_enforces_strict_refusal_and_minimal_evidence_payload() -> None:
@@ -797,11 +1035,13 @@ def test_build_gemini_prompt_enforces_strict_refusal_and_minimal_evidence_payloa
     )
 
     assert "I could not find the answer in the provided context." in prompt
-    assert "If the answer exists explicitly in the evidence, you MUST extract it directly." in prompt
+    assert "Never return citation IDs like E001 in cited_chunk_ids." in prompt
+    assert "answer_text MUST contain only the exact supported answer." in prompt
     assert "document_id=" not in prompt
     assert "chunk_role=" not in prompt
     assert "text=The city purchased 12 electric vans from Voltara Mobility." in prompt
-    assert "answer_mode=exact_qa" in prompt
+    assert "answer_mode=exact_lookup" in prompt
+    assert "citation_id=" not in prompt
 
 
 def test_build_gemini_prompt_uses_broader_mode_for_summary_queries() -> None:
@@ -824,18 +1064,18 @@ def test_build_gemini_prompt_uses_broader_mode_for_summary_queries() -> None:
         evidence_package=evidence_package,
     )
 
-    assert "answer_mode=summary_list" in prompt
+    assert "answer_mode=summary" in prompt
     assert "[section:" not in prompt
 
 
-def test_generation_config_for_exact_qa_is_deterministic() -> None:
+def test_generation_config_for_exact_lookup_is_deterministic() -> None:
     """Exact QA should use deterministic provider settings for more stable extraction."""
 
-    assert _generation_config_for_mode("exact_qa") == {
+    assert _generation_config_for_mode("exact_lookup") == {
         "temperature": 0,
         "topP": 0.05,
         "topK": 1,
-        "maxOutputTokens": 120,
+        "maxOutputTokens": 160,
     }
 
 
@@ -1008,7 +1248,7 @@ async def test_generate_answer_from_evidence_rejects_provider_banned_phrase_and_
         evidence_package=evidence_package,
     )
 
-    assert draft.answer_text == "The company is Voltara Mobility [E001]"
+    assert draft.answer_text == "Voltara Mobility [E001]"
     assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
 
 
@@ -1067,7 +1307,7 @@ async def test_generate_answer_from_evidence_rejects_weak_provider_field_answer(
         evidence_package=evidence_package,
     )
 
-    assert draft.answer_text.startswith("The person's name is Samrawit Gebremaryam Bahta")
+    assert draft.answer_text == "Samrawit Gebremaryam Bahta [E001]"
     assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
 
 

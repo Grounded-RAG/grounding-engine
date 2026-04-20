@@ -7,15 +7,12 @@ from dataclasses import dataclass
 from app.config import get_settings
 from app.core.query_analysis import (
     build_query_profile,
+    final_answer_mode,
     has_strong_intent_signal,
     is_action_query,
-    is_collection_query,
     is_comparison_query,
     is_count_query,
-    is_dataset_summary_query,
     is_entity_context_query,
-    is_exact_qa_mode,
-    is_field_extraction_query,
     needs_multi_chunk_exact_support,
     score_text_against_query,
     tokenize_meaningful_terms,
@@ -30,6 +27,8 @@ class _ScoredHit:
 
     hit: FusedRetrievedChunk
     score: float
+    query_score: float
+    strong_intent: bool
     terms: frozenset[str]
 
 
@@ -42,33 +41,10 @@ def package_evidence(
     """Select the top fused hits and normalize them into evidence items."""
 
     requested_limit = limit or get_settings().evidence_package_limit
-    if query_text:
-        profile = build_query_profile(query_text)
-        if is_exact_qa_mode(profile):
-            if needs_multi_chunk_exact_support(profile):
-                selection_limit = min(max(requested_limit, 2), 2)
-            else:
-                selection_limit = 1
-        elif is_field_extraction_query(profile) and not is_collection_query(profile):
-            selection_limit = 1
-        elif any(
-            (
-                is_collection_query(profile),
-                is_action_query(profile),
-                is_comparison_query(profile),
-                is_entity_context_query(profile),
-                is_count_query(profile),
-            )
-        ):
-            selection_limit = min(max(requested_limit, 4), 4)
-        else:
-            selection_limit = requested_limit
-    else:
-        selection_limit = requested_limit
     selected_hits = _select_hits_for_query(
         retrieval_bundle,
         query_text=query_text,
-        limit=selection_limit,
+        limit=requested_limit,
     )
 
     selected_items = [
@@ -104,7 +80,7 @@ def _select_hits_for_query(
     query_text: str | None,
     limit: int,
 ) -> list[FusedRetrievedChunk]:
-    """Select fused hits, reranking them by answerability when a query is available."""
+    """Select fused hits with simpler mode-aware evidence policies."""
 
     if not retrieval_bundle.fused_hits:
         return []
@@ -112,45 +88,86 @@ def _select_hits_for_query(
         return retrieval_bundle.fused_hits[:limit]
 
     profile = build_query_profile(query_text)
-    top_fused_score = max(hit.fused_score for hit in retrieval_bundle.fused_hits) or 1.0
+    answer_mode = final_answer_mode(profile)
+    ranked_hits = _rank_hits(retrieval_bundle.fused_hits, profile=profile)
 
-    scored_hits = [
-        _ScoredHit(
-            hit=hit,
-            score=(
-                (hit.fused_score / top_fused_score) * 12.0
-                + score_text_against_query(
-                    hit.text,
-                    profile=profile,
-                    chunk_index=hit.chunk_index,
-                )
-                + (
-                    (4.0 - min(hit.chunk_index, 3)) * 1.5
-                    if is_dataset_summary_query(profile)
-                    else 0.0
-                )
-                + (
-                    4.5
-                    if is_dataset_summary_query(profile)
-                    and any(
-                        token in hit.text.casefold()
-                        for token in ("overview", "abstract", "summary", "title")
-                    )
-                    else 0.0
-                )
-                + (
-                    7.0
-                    if has_strong_intent_signal(hit.text, profile=profile)
-                    else (-5.0 if is_collection_query(profile) else 0.0)
-                )
-                + _section_alignment_bonus(hit=hit, profile=profile)
-                + len(hit.sources) * 1.5
-            ),
-            terms=frozenset(tokenize_meaningful_terms(hit.text)),
+    if answer_mode == "exact_lookup":
+        return _select_exact_qa_hits(ranked_hits, profile=profile, limit=limit)
+    if answer_mode == "list_or_recommendation":
+        return _select_structured_bundle_hits(ranked_hits, profile=profile, limit=max(2, min(limit, 4)))
+    if answer_mode == "summary":
+        return _select_summary_hits(ranked_hits, limit=limit)
+    if any(
+        (
+            is_action_query(profile),
+            is_comparison_query(profile),
+            is_entity_context_query(profile),
+            is_count_query(profile),
         )
-        for hit in retrieval_bundle.fused_hits
-    ]
-    ranked_hits = sorted(
+    ):
+        return _select_structured_bundle_hits(ranked_hits, profile=profile, limit=max(2, min(limit, 4)))
+    return _select_top_hits(ranked_hits, limit=limit)
+
+
+def _rank_hits(
+    fused_hits: list[FusedRetrievedChunk],
+    *,
+    profile,
+) -> list[_ScoredHit]:
+    """Rank hits with a light query-aware score instead of a second reranker."""
+
+    top_fused_score = max((hit.fused_score for hit in fused_hits), default=1.0) or 1.0
+    answer_mode = final_answer_mode(profile)
+
+    scored_hits: list[_ScoredHit] = []
+    for hit in fused_hits:
+        query_score = score_text_against_query(
+            hit.text,
+            profile=profile,
+            chunk_index=hit.chunk_index,
+        )
+        strong_intent = has_strong_intent_signal(hit.text, profile=profile)
+        base_score = (hit.fused_score / top_fused_score) * 10.0 + query_score
+
+        if strong_intent:
+            base_score += 3.0
+
+        if answer_mode == "summary":
+            if hit.chunk_index <= 1:
+                base_score += 2.0
+            if any(token in hit.text.casefold() for token in ("overview", "abstract", "summary", "title")):
+                base_score += 2.0
+        elif answer_mode == "list_or_recommendation":
+            if hit.is_list_block:
+                base_score += 2.0
+            if hit.chunk_role == "section_header":
+                base_score += 2.0
+            elif hit.chunk_role in {"section_list", "section_body"}:
+                base_score += 1.0
+            section_terms = tokenize_meaningful_terms(
+                " ".join(
+                    part
+                    for part in (
+                        hit.section_title,
+                        hit.section_slug.replace("-", " ") if hit.section_slug else None,
+                    )
+                    if part
+                )
+            )
+            if section_terms & set(profile.expanded_terms):
+                base_score += 2.0
+
+        scored_hits.append(
+            _ScoredHit(
+                hit=hit,
+                score=base_score,
+                query_score=query_score,
+                strong_intent=strong_intent,
+                terms=frozenset(tokenize_meaningful_terms(hit.text)),
+            )
+        )
+
+    return sorted(
         scored_hits,
         key=lambda entry: (
             -entry.score,
@@ -158,126 +175,63 @@ def _select_hits_for_query(
             entry.hit.chunk_id,
         ),
     )
-    if is_field_extraction_query(profile):
-        strong_intent_hits = [
-            entry
-            for entry in ranked_hits
-            if has_strong_intent_signal(entry.hit.text, profile=profile)
-        ]
-        if strong_intent_hits:
-            ranked_hits = strong_intent_hits
-    if is_field_extraction_query(profile) and not is_collection_query(profile):
-        if needs_multi_chunk_exact_support(profile):
-            return _select_structured_bundle_hits(
-                ranked_hits,
-                profile=profile,
-                limit=min(max(limit, 2), 2),
-            )
-        return [ranked_hits[0].hit]
-    if any(
-        (
-            is_collection_query(profile),
-            is_action_query(profile),
-            is_comparison_query(profile),
-            is_entity_context_query(profile),
-            is_count_query(profile),
-        )
-    ):
-        return _select_structured_bundle_hits(
-            ranked_hits,
-            profile=profile,
-            limit=limit,
-        )
-    if is_dataset_summary_query(profile):
-        unique_document_ids = {entry.hit.document_id for entry in ranked_hits}
-        if len(unique_document_ids) <= 1:
-            selected_hits = _select_diverse_hits(
-                ranked_hits,
-                limit=limit,
-                prefer_document_diversity=False,
-            )
-            return sorted(
-                selected_hits,
-                key=lambda hit: (
-                    hit.chunk_index,
-                    -hit.fused_score,
-                    hit.chunk_id,
-                ),
-            )
-        ranked_hits = _collapse_to_document_representatives(ranked_hits)
-        selected_hits = _select_diverse_hits(
-            ranked_hits,
-            limit=limit,
-            prefer_document_diversity=True,
-        )
-        return sorted(
-            selected_hits,
-            key=lambda hit: (
-                -(
-                    hit.fused_score
-                    + (
-                        4.0
-                        if any(
-                            token in hit.text.casefold()
-                            for token in ("overview", "abstract", "summary", "title")
-                        )
-                        else 0.0
-                    )
-                    + max(0, 2 - hit.chunk_index) * 0.75
-                ),
-                hit.chunk_index,
-                hit.chunk_id,
-            ),
-        )
-    return _select_diverse_hits(
-        ranked_hits,
-        limit=limit,
-        prefer_document_diversity=False,
-    )
 
 
-def _section_alignment_bonus(
+def _select_exact_qa_hits(
+    ranked_hits: list[_ScoredHit],
     *,
-    hit: FusedRetrievedChunk,
     profile,
-) -> float:
-    """Reward hits whose section metadata aligns with the query."""
+    limit: int,
+) -> list[FusedRetrievedChunk]:
+    """Choose the best exact-QA chunk and optionally one justified support chunk."""
 
-    section_fragments = [
-        fragment
-        for fragment in (
-            hit.section_title,
-            hit.section_slug.replace("-", " ") if hit.section_slug else None,
-            hit.chunk_role.replace("_", " "),
-        )
-        if fragment
-    ]
-    if not section_fragments:
-        return 0.0
+    if not ranked_hits:
+        return []
 
-    section_terms = tokenize_meaningful_terms(" ".join(section_fragments))
-    overlap = len(set(profile.expanded_terms) & section_terms)
-    if overlap <= 0:
-        return 0.0
+    primary = ranked_hits[0]
+    selected = [primary.hit]
+    max_hits = 2 if needs_multi_chunk_exact_support(profile) or limit > 1 else 1
+    if max_hits == 1:
+        return selected
 
-    score = overlap * 4.0
-    if is_collection_query(profile):
-        score += 7.0 if hit.chunk_role == "section_header" else 5.0 if hit.chunk_role == "section_list" else 3.0
-    elif is_field_extraction_query(profile):
-        score += 3.5
-    if hit.chunk_role == "section_header":
-        score += 2.0
-    return score
+    primary_terms = set(primary.terms)
+    for candidate in ranked_hits[1:]:
+        if candidate.hit.document_id != primary.hit.document_id:
+            continue
+        if candidate.hit.chunk_id == primary.hit.chunk_id:
+            continue
+        if not _exact_support_is_justified(
+            primary=primary,
+            candidate=candidate,
+            primary_terms=primary_terms,
+        ):
+            continue
+        selected.append(candidate.hit)
+        break
+    return selected
 
 
-def _text_matches_any_context(*, text: str, profile) -> bool:
-    normalized_text = " ".join(text.casefold().split())
-    text_terms = tokenize_meaningful_terms(text)
-    for context in profile.context_terms:
-        if context in normalized_text:
-            return True
-        if tokenize_meaningful_terms(context) & text_terms:
-            return True
+def _exact_support_is_justified(
+    *,
+    primary: _ScoredHit,
+    candidate: _ScoredHit,
+    primary_terms: set[str],
+) -> bool:
+    """Return whether a second exact-QA chunk adds clear support."""
+
+    same_section = bool(
+        primary.hit.section_slug
+        and candidate.hit.section_slug
+        and primary.hit.section_slug == candidate.hit.section_slug
+    )
+    adds_terms = bool(set(candidate.terms) - primary_terms)
+
+    if candidate.strong_intent and candidate.query_score >= 8.0:
+        return True
+    if same_section and candidate.query_score >= 7.5:
+        return True
+    if adds_terms and candidate.query_score >= 9.0:
+        return True
     return False
 
 
@@ -287,83 +241,125 @@ def _select_structured_bundle_hits(
     profile,
     limit: int,
 ) -> list[FusedRetrievedChunk]:
-    """Prefer coherent same-section or same-context bundles for structured questions."""
+    """Keep a tight answer-bearing cluster for list/recommendation questions."""
 
     if not ranked_hits:
         return []
 
     primary = ranked_hits[0]
-    selected: list[FusedRetrievedChunk] = [primary.hit]
-    selected_ids = {primary.hit.chunk_id}
+    selected: list[_ScoredHit] = [primary]
+    covered_terms: set[str] = set(primary.terms)
 
     for candidate in ranked_hits[1:]:
-        hit = candidate.hit
-        if hit.chunk_id in selected_ids:
-            continue
-        if hit.document_id != primary.hit.document_id:
-            continue
-
-        same_section = bool(
-            primary.hit.section_slug
-            and hit.section_slug
-            and hit.section_slug == primary.hit.section_slug
-        )
-        nearby_chunk = abs(hit.chunk_index - primary.hit.chunk_index) <= 2
-        context_match = _text_matches_any_context(text=hit.text, profile=profile)
-
-        if same_section or nearby_chunk or context_match:
-            selected.append(hit)
-            selected_ids.add(hit.chunk_id)
         if len(selected) >= limit:
-            return selected
+            break
+        if candidate.hit.document_id != primary.hit.document_id:
+            continue
+        if candidate.hit.chunk_id == primary.hit.chunk_id:
+            continue
+        if not _structured_support_is_relevant(
+            primary=primary,
+            candidate=candidate,
+            covered_terms=covered_terms,
+            profile=profile,
+        ):
+            continue
+        selected.append(candidate)
+        covered_terms.update(candidate.terms)
 
-    if len(selected) > 1 and any(
-        (
-            is_action_query(profile),
-            is_comparison_query(profile),
-            is_entity_context_query(profile),
-            is_count_query(profile),
-        )
-    ):
-        return selected[:limit]
+    return [entry.hit for entry in selected]
 
-    remaining = [entry for entry in ranked_hits if entry.hit.chunk_id not in selected_ids]
-    selected.extend(
-        _select_diverse_hits(
-            remaining,
-            limit=max(limit - len(selected), 0),
+
+def _structured_support_is_relevant(
+    *,
+    primary: _ScoredHit,
+    candidate: _ScoredHit,
+    covered_terms: set[str],
+    profile,
+) -> bool:
+    """Return whether a structured support chunk is clearly relevant."""
+
+    del profile
+    same_section = bool(
+        primary.hit.section_slug
+        and candidate.hit.section_slug
+        and primary.hit.section_slug == candidate.hit.section_slug
+    )
+    adds_terms = bool(set(candidate.terms) - covered_terms)
+
+    if candidate.strong_intent and candidate.query_score >= 7.0:
+        return True
+    if same_section and candidate.query_score >= 6.5 and adds_terms:
+        return True
+    if same_section and abs(candidate.hit.chunk_index - primary.hit.chunk_index) <= 1 and adds_terms:
+        return True
+    if candidate.hit.is_list_block and candidate.query_score >= 7.5:
+        return True
+    return False
+
+
+def _select_summary_hits(
+    ranked_hits: list[_ScoredHit],
+    *,
+    limit: int,
+) -> list[FusedRetrievedChunk]:
+    """Choose broader but coherent summary evidence."""
+
+    if not ranked_hits:
+        return []
+
+    unique_document_ids = {entry.hit.document_id for entry in ranked_hits}
+    if len(unique_document_ids) <= 1:
+        selected_hits = _select_diverse_hits(
+            ranked_hits,
+            limit=limit,
             prefer_document_diversity=False,
         )
+        return sorted(
+            selected_hits,
+            key=lambda hit: (hit.chunk_index, -hit.fused_score, hit.chunk_id),
+        )
+
+    representatives = _collapse_to_document_representatives(ranked_hits)
+    selected_hits = _select_diverse_hits(
+        representatives,
+        limit=limit,
+        prefer_document_diversity=True,
     )
-    return selected[:limit]
+    return sorted(
+        selected_hits,
+        key=lambda hit: (-next(entry.score for entry in representatives if entry.hit.chunk_id == hit.chunk_id), hit.chunk_index, hit.chunk_id),
+    )
+
+
+def _select_top_hits(
+    ranked_hits: list[_ScoredHit],
+    *,
+    limit: int,
+) -> list[FusedRetrievedChunk]:
+    """Select top hits with light novelty control."""
+
+    return _select_diverse_hits(
+        ranked_hits,
+        limit=limit,
+        prefer_document_diversity=False,
+    )
 
 
 def _collapse_to_document_representatives(
     ranked_hits: list[_ScoredHit],
 ) -> list[_ScoredHit]:
-    """Keep the single best summary seed per document before diversity selection."""
-
-    def representative_score(entry: _ScoredHit) -> float:
-        lead_bonus = (4.0 - min(entry.hit.chunk_index, 3)) * 2.0
-        overview_bonus = (
-            4.0
-            if any(
-                token in entry.hit.text.casefold()
-                for token in ("overview", "abstract", "summary", "title")
-            )
-            else 0.0
-        )
-        return entry.score + lead_bonus + overview_bonus
+    """Keep the strongest summary seed per document."""
 
     by_document: dict[object, _ScoredHit] = {}
     for entry in ranked_hits:
         current = by_document.get(entry.hit.document_id)
-        if current is None or representative_score(entry) > representative_score(current):
+        if current is None or entry.score > current.score:
             by_document[entry.hit.document_id] = entry
     return sorted(
         by_document.values(),
         key=lambda entry: (
-            -representative_score(entry),
+            -entry.score,
             entry.hit.chunk_index,
             entry.hit.chunk_id,
         ),
@@ -376,7 +372,7 @@ def _select_diverse_hits(
     limit: int,
     prefer_document_diversity: bool,
 ) -> list[FusedRetrievedChunk]:
-    """Greedily keep complementary evidence instead of flat top-k duplicates."""
+    """Greedily keep complementary evidence instead of flat near-duplicates."""
 
     if not ranked_hits:
         return []
@@ -392,7 +388,7 @@ def _select_diverse_hits(
         for index, candidate in enumerate(remaining):
             novelty = len(candidate.terms - covered_terms)
             document_bonus = (
-                3.0
+                2.5
                 if prefer_document_diversity and candidate.hit.document_id not in seen_documents
                 else 0.0
             )
@@ -402,9 +398,8 @@ def _select_diverse_hits(
                 and abs(chosen.hit.chunk_index - candidate.hit.chunk_index) <= 1
                 for chosen in selected
             ):
-                adjacency_penalty = 1.5 if prefer_document_diversity else 0.5
-
-            selection_value = candidate.score + novelty * 1.2 + document_bonus - adjacency_penalty
+                adjacency_penalty = 1.0 if prefer_document_diversity else 0.3
+            selection_value = candidate.score + novelty * 0.9 + document_bonus - adjacency_penalty
             if selection_value > best_value:
                 best_value = selection_value
                 best_index = index

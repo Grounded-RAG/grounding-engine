@@ -21,6 +21,16 @@ QueryKind = Literal[
     "open",
 ]
 
+AnswerMode = Literal[
+    "exact_lookup",
+    "event_lookup",
+    "list_or_recommendation",
+    "arithmetic_qa",
+    "summary",
+    "boolean_like",
+    "open",
+]
+
 _STOPWORDS = {
     "a", "about", "an", "and", "are", "at", "by", "can", "could", "do", "does",
     "for", "from", "had", "has", "have", "he", "hello", "help", "her", "hers",
@@ -303,6 +313,8 @@ def _terms_contain_token(terms: set[str], token: str) -> bool:
         return False
     if normalized_token in terms:
         return True
+    if len(normalized_token) <= 4:
+        return False
     return any(_fuzzy_token_match(candidate, normalized_token) for candidate in terms)
 
 
@@ -1136,6 +1148,118 @@ def is_exact_qa_mode(profile: QueryProfile) -> bool:
     return is_count_query(profile) or (
         is_field_extraction_query(profile) and not is_collection_query(profile)
     )
+
+
+def is_event_lookup_query(profile: QueryProfile) -> bool:
+    """Return whether the query asks for a dated event or incident."""
+
+    normalized = profile.normalized_text
+    return (
+        normalized.startswith("what happened")
+        or (
+            any(token in normalized for token in ("happened", "occurred", "incident"))
+            and bool(profile.context_terms)
+        )
+    )
+
+
+def is_recommendation_query(profile: QueryProfile) -> bool:
+    """Return whether the query asks for recommendations or proposed actions."""
+
+    normalized = profile.normalized_text
+    return any(
+        token in normalized
+        for token in (
+            "recommend",
+            "recommended",
+            "recommendation",
+            "recommendations",
+            "propose",
+            "proposed",
+            "proposal",
+        )
+    )
+
+
+def is_arithmetic_query(profile: QueryProfile) -> bool:
+    """Return whether the query asks for a numeric computation from evidence."""
+
+    normalized = profile.normalized_text
+    arithmetic_markers = (
+        "difference",
+        "minus",
+        "subtract",
+        "net",
+        "total",
+        "percentage",
+        "percent",
+        "saving",
+        "savings",
+        "saved",
+    )
+    if "total kilometer" in normalized or "total distance" in normalized:
+        return False
+    markers_present = any(marker in normalized for marker in arithmetic_markers)
+    finance_or_math_context = any(
+        token in normalized
+        for token in (
+            "cost",
+            "costs",
+            "expense",
+            "expenses",
+            "fuel",
+            "electricity",
+            "maintenance",
+            "installation",
+            "spend",
+            "spent",
+            "savings",
+            "saving",
+            "saved",
+            "percentage",
+            "percent",
+        )
+    )
+    return markers_present and finance_or_math_context
+
+
+def final_answer_mode(profile: QueryProfile) -> AnswerMode:
+    """Map a query profile to one production-oriented answer mode."""
+
+    if is_dataset_summary_query(profile):
+        return "summary"
+    if is_arithmetic_query(profile):
+        return "arithmetic_qa"
+    if is_event_lookup_query(profile):
+        return "event_lookup"
+    if is_recommendation_query(profile):
+        return "list_or_recommendation"
+    if (
+        (
+            " each " in f" {profile.normalized_text} "
+            and ("how many" in profile.normalized_text or " each use" in f" {profile.normalized_text} ")
+        )
+        or ("department" in profile.normalized_text and "how many" in profile.normalized_text)
+    ):
+        return "list_or_recommendation"
+    if is_exact_qa_mode(profile):
+        return "exact_lookup"
+    if (
+        is_collection_query(profile)
+        or is_recommendation_query(profile)
+        or (
+            " each " in f" {profile.normalized_text} "
+            and any(token in profile.normalized_text for token in ("how many", "which ", "what are"))
+        )
+    ):
+        return "list_or_recommendation"
+    if (
+        is_boolean_query(profile)
+        or is_comparison_query(profile)
+        or is_entity_context_query(profile)
+    ):
+        return "boolean_like"
+    return "open"
 
 
 def needs_multi_chunk_exact_support(profile: QueryProfile) -> bool:

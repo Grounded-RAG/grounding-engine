@@ -6,6 +6,7 @@ from app.core.query_analysis import (
     build_conversation_context,
     build_query_plan,
     build_query_profile,
+    final_answer_mode,
     is_action_query,
     is_collection_query,
     is_comparison_query,
@@ -90,6 +91,30 @@ def test_build_query_profile_detects_difference_question_as_comparison() -> None
     )
 
     assert profile.query_kind == "comparison"
+
+
+def test_final_answer_mode_routes_event_lookup_question() -> None:
+    """Dated incident questions should route to event lookup mode."""
+
+    profile = build_query_profile("What happened in April 2025?")
+
+    assert final_answer_mode(profile) == "event_lookup"
+
+
+def test_final_answer_mode_routes_recommendation_question() -> None:
+    """Recommendation questions should use list/recommendation mode even when lookup-like."""
+
+    profile = build_query_profile("What did the committee recommend in August 2025?")
+
+    assert final_answer_mode(profile) == "list_or_recommendation"
+
+
+def test_final_answer_mode_routes_net_savings_question_to_arithmetic() -> None:
+    """Savings questions that require computation should use arithmetic mode."""
+
+    profile = build_query_profile("What was the net savings after including installation costs?")
+
+    assert final_answer_mode(profile) == "arithmetic_qa"
 
 
 def test_build_query_profile_detects_when_start_end_query_as_date_lookup() -> None:
