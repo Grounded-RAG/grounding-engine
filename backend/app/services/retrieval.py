@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.reranker import resolve_retrieval_reranker
 from app.core.query_analysis import (
     QueryPlan,
     build_query_plan,
@@ -27,6 +28,7 @@ from app.core.query_analysis import (
 )
 from app.core.embeddings import EmbeddingError, embed_texts
 from app.models import DocumentChunkRecord
+from app.models import ExecutionTier
 from app.core.qdrant_client import VectorStoreError, search_dense_points
 from app.pipeline.contracts import FusedRetrievedChunk, RetrievedChunk
 
@@ -422,6 +424,55 @@ def _rerank_fused_hits_for_query(
     return reranked[:limit]
 
 
+async def _apply_enterprise_reranker(
+    fused_hits: list[FusedRetrievedChunk],
+    *,
+    execution_tier: ExecutionTier,
+    query_text: str,
+    limit: int,
+) -> list[FusedRetrievedChunk]:
+    """Apply the Enterprise reranker when the active tier requests it."""
+
+    if not fused_hits:
+        return []
+    if execution_tier is not ExecutionTier.ENTERPRISE:
+        return fused_hits[:limit]
+
+    settings = get_settings()
+    reranker = resolve_retrieval_reranker(
+        execution_tier=execution_tier,
+        settings=settings,
+    )
+    reranker_result = await reranker.rerank(
+        query_text=query_text,
+        hits=fused_hits[: settings.enterprise_reranker_candidate_limit],
+        limit=limit,
+    )
+
+    hit_by_chunk_id = {hit.chunk_id: hit for hit in fused_hits}
+    reranked_hits: list[FusedRetrievedChunk] = []
+    seen_chunk_ids: set[str] = set()
+
+    for reranked_hit in reranker_result.hits:
+        original_hit = hit_by_chunk_id.get(reranked_hit.chunk_id)
+        if original_hit is None or reranked_hit.chunk_id in seen_chunk_ids:
+            continue
+        reranked_hits.append(
+            replace(
+                original_hit,
+                fused_score=reranked_hit.score,
+            )
+        )
+        seen_chunk_ids.add(reranked_hit.chunk_id)
+
+    for hit in fused_hits:
+        if hit.chunk_id in seen_chunk_ids:
+            continue
+        reranked_hits.append(hit)
+
+    return reranked_hits[:limit]
+
+
 async def _fetch_supporting_context_hits(
     *,
     session: AsyncSession,
@@ -602,6 +653,7 @@ async def retrieve_hybrid_candidates(
     query_text: str,
     query_plan: QueryPlan | None = None,
     limit: int | None = None,
+    execution_tier: ExecutionTier = ExecutionTier.STANDARD,
 ) -> RetrievalBundle:
     """Run sparse and dense retrieval, then merge candidates with RRF."""
 
@@ -673,6 +725,12 @@ async def retrieve_hybrid_candidates(
     fused_hits = _rerank_fused_hits_for_query(
         fused_hits,
         query_plan=plan,
+        limit=max(final_limit, settings.enterprise_reranker_candidate_limit),
+    )
+    fused_hits = await _apply_enterprise_reranker(
+        fused_hits,
+        execution_tier=execution_tier,
+        query_text=plan.resolved_query_text,
         limit=final_limit,
     )
     return RetrievalBundle(

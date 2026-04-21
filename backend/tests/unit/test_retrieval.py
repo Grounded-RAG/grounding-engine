@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.query_analysis import QueryPlan, QueryProfile
+from app.models import ExecutionTier
 from app.pipeline.contracts import FusedRetrievedChunk, RetrievedChunk
 from app.services.retrieval import (
     dense_retrieve_chunks,
@@ -769,3 +770,154 @@ async def test_retrieve_hybrid_candidates_prefers_matching_section_metadata_for_
     )
 
     assert bundle.fused_hits[0].chunk_id == "chunk-skills"
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_skips_enterprise_reranker_for_standard_tier(monkeypatch) -> None:
+    """Standard retrieval should not invoke the Enterprise reranker abstraction."""
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-1",
+            tenant_id=uuid.uuid4(),
+            namespace_id=uuid.uuid4(),
+            document_id=uuid.uuid4(),
+            chunk_index=0,
+            text="alpha beta",
+            score=0.7,
+            rank=1,
+            source="sparse",
+        )
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-2",
+            tenant_id=uuid.uuid4(),
+            namespace_id=uuid.uuid4(),
+            document_id=uuid.uuid4(),
+            chunk_index=1,
+            text="beta gamma",
+            score=0.8,
+            rank=1,
+            source="dense",
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return dense_hits
+
+    class FailIfCalledReranker:
+        backend_name = "fail"
+
+        async def rerank(self, *, query_text, hits, limit):
+            del query_text, hits, limit
+            raise AssertionError("Standard retrieval should not invoke Enterprise reranking.")
+
+    monkeypatch.setattr("app.services.retrieval.sparse_retrieve_chunks", fake_sparse_retrieve_chunks)
+    monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
+    monkeypatch.setattr(
+        "app.services.retrieval.resolve_retrieval_reranker",
+        lambda **kwargs: FailIfCalledReranker(),
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=uuid.uuid4(),
+        namespace_id=uuid.uuid4(),
+        query_text="beta query",
+        execution_tier=ExecutionTier.STANDARD,
+        limit=4,
+    )
+
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-1", "chunk-2"]
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_uses_stub_reranker_for_enterprise(monkeypatch) -> None:
+    """Enterprise retrieval should be able to delegate final ordering to the reranker interface."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-1",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="first chunk",
+            score=0.7,
+            rank=1,
+            source="sparse",
+        )
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-2",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=1,
+            text="second chunk",
+            score=0.8,
+            rank=1,
+            source="dense",
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return dense_hits
+
+    class ReverseStubReranker:
+        backend_name = "stub"
+
+        async def rerank(self, *, query_text, hits, limit):
+            del query_text, limit
+            return SimpleNamespace(
+                backend_name="stub",
+                applied=True,
+                hits=[
+                    SimpleNamespace(chunk_id=hit.chunk_id, score=1.0 - index, rank=index + 1)
+                    for index, hit in enumerate(reversed(hits))
+                ],
+            )
+
+    monkeypatch.setattr("app.services.retrieval.sparse_retrieve_chunks", fake_sparse_retrieve_chunks)
+    monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
+    monkeypatch.setattr(
+        "app.services.retrieval.resolve_retrieval_reranker",
+        lambda **kwargs: ReverseStubReranker(),
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.get_settings",
+        lambda: SimpleNamespace(
+            retrieval_candidate_limit=8,
+            retrieval_overfetch_factor=4,
+            rrf_smoothing_constant=60,
+            evidence_package_limit=3,
+            enterprise_reranker_candidate_limit=8,
+        ),
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="beta query",
+        execution_tier=ExecutionTier.ENTERPRISE,
+        limit=2,
+    )
+
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-2", "chunk-1"]

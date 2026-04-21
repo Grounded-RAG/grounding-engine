@@ -499,6 +499,7 @@ async def execute_standard_query(
             namespace_id=query_request.namespace_id,
             query_text=query_request.query,
             query_plan=query_plan,
+            execution_tier=routing_decision.effective_tier,
         )
     except RetrievalError as exc:
         raise QueryServiceError(

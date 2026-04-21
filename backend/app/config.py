@@ -16,6 +16,7 @@ AppEnv = Literal["development", "test", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 GeneratorBackend = Literal["local_grounded_v1", "gemini_v1", "openai_compatible_v1"]
 EmbeddingBackend = Literal["local_hash_v1", "gemini_v1", "openai_compatible_v1"]
+RerankerBackend = Literal["disabled", "stub"]
 
 
 class Settings(BaseSettings):
@@ -67,6 +68,9 @@ class Settings(BaseSettings):
     evidence_package_limit: int = 3
     enterprise_enabled: bool = False
     enterprise_trace_metadata_enabled: bool = True
+    enterprise_reranker_enabled: bool = False
+    enterprise_reranker_backend: RerankerBackend = "disabled"
+    enterprise_reranker_candidate_limit: int = 24
     api_key_salt: str = "replace-in-local-env"
     s3_endpoint_url: AnyHttpUrl = "http://localhost:9000"
     s3_bucket: str = "grounded-documents"
@@ -208,6 +212,7 @@ class Settings(BaseSettings):
         "rrf_smoothing_constant",
         "evidence_package_limit",
         "provider_max_retries",
+        "enterprise_reranker_candidate_limit",
     )
     @classmethod
     def validate_positive_retrieval_settings(cls, value: int, info: ValidationInfo) -> int:
