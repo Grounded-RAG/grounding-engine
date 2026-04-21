@@ -16,7 +16,7 @@ AppEnv = Literal["development", "test", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 GeneratorBackend = Literal["local_grounded_v1", "gemini_v1", "openai_compatible_v1"]
 EmbeddingBackend = Literal["local_hash_v1", "gemini_v1", "openai_compatible_v1"]
-RerankerBackend = Literal["disabled", "stub"]
+RerankerBackend = Literal["disabled", "stub", "gemini_v1"]
 
 
 class Settings(BaseSettings):

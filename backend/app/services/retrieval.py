@@ -11,7 +11,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.reranker import resolve_retrieval_reranker
+from app.core.reranker import RerankerError, resolve_retrieval_reranker
+from app.core.telemetry import get_logger
 from app.core.query_analysis import (
     QueryPlan,
     build_query_plan,
@@ -35,6 +36,9 @@ from app.pipeline.contracts import FusedRetrievedChunk, RetrievedChunk
 
 class RetrievalError(RuntimeError):
     """Raised when a retrieval path cannot complete safely."""
+
+
+logger = get_logger("app.retrieval")
 
 
 @dataclass(frozen=True)
@@ -443,10 +447,30 @@ async def _apply_enterprise_reranker(
         execution_tier=execution_tier,
         settings=settings,
     )
-    reranker_result = await reranker.rerank(
-        query_text=query_text,
-        hits=fused_hits[: settings.enterprise_reranker_candidate_limit],
-        limit=limit,
+    try:
+        reranker_result = await reranker.rerank(
+            query_text=query_text,
+            hits=fused_hits[: settings.enterprise_reranker_candidate_limit],
+            limit=limit,
+        )
+    except RerankerError as exc:
+        logger.warning(
+            "enterprise_reranker_failed",
+            error=str(exc),
+        )
+        return fused_hits[:limit]
+
+    logger.info(
+        "enterprise_reranker_applied",
+        backend=reranker_result.backend_name,
+        applied=reranker_result.applied,
+        top_hits=[
+            {
+                "chunk_id": hit.chunk_id,
+                "score": round(hit.score, 4),
+            }
+            for hit in reranker_result.hits[:3]
+        ],
     )
 
     hit_by_chunk_id = {hit.chunk_id: hit for hit in fused_hits}

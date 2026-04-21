@@ -921,3 +921,84 @@ async def test_retrieve_hybrid_candidates_uses_stub_reranker_for_enterprise(monk
     )
 
     assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-2", "chunk-1"]
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_falls_back_when_enterprise_reranker_errors(monkeypatch) -> None:
+    """Enterprise retrieval should stay usable when the reranker backend fails."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-1",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="first chunk",
+            score=0.7,
+            rank=1,
+            source="sparse",
+        )
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-2",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=1,
+            text="second chunk",
+            score=0.8,
+            rank=1,
+            source="dense",
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return dense_hits
+
+    class FailingReranker:
+        backend_name = "gemini_v1"
+
+        async def rerank(self, *, query_text, hits, limit):
+            del query_text, hits, limit
+            from app.core.reranker import RerankerError
+
+            raise RerankerError("reranker unavailable")
+
+    monkeypatch.setattr("app.services.retrieval.sparse_retrieve_chunks", fake_sparse_retrieve_chunks)
+    monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
+    monkeypatch.setattr(
+        "app.services.retrieval.resolve_retrieval_reranker",
+        lambda **kwargs: FailingReranker(),
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.get_settings",
+        lambda: SimpleNamespace(
+            retrieval_candidate_limit=8,
+            retrieval_overfetch_factor=4,
+            rrf_smoothing_constant=60,
+            evidence_package_limit=3,
+            enterprise_reranker_candidate_limit=8,
+        ),
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="beta query",
+        execution_tier=ExecutionTier.ENTERPRISE,
+        limit=2,
+    )
+
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-1", "chunk-2"]
