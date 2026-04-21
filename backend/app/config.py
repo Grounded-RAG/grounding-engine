@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     retrieval_overfetch_factor: int = 4
     rrf_smoothing_constant: int = 60
     evidence_package_limit: int = 3
-    enterprise_enabled: bool = False
+    enterprise_enabled: bool = True
     enterprise_trace_metadata_enabled: bool = True
     enterprise_auto_routing_enabled: bool = True
     enterprise_reranker_enabled: bool = False

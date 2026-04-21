@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.api.deps import TenantContext
+from app.config import get_settings
 from app.models.enums import ExecutionTier, SubscriptionPlan, UserFacingMode
 from app.schemas.capabilities import (
     CapabilitiesResponse,
@@ -46,10 +47,17 @@ _MODE_BACKING_TIERS: dict[UserFacingMode, ExecutionTier | None] = {
     UserFacingMode.VERIFIED: ExecutionTier.CRITICAL,
 }
 
-_IMPLEMENTED_MODES: set[UserFacingMode] = {
+_BASE_IMPLEMENTED_MODES: set[UserFacingMode] = {
     UserFacingMode.AUTO,
     UserFacingMode.INSTANT,
 }
+
+_ORDERED_MODES: tuple[UserFacingMode, ...] = (
+    UserFacingMode.AUTO,
+    UserFacingMode.INSTANT,
+    UserFacingMode.THINKING,
+    UserFacingMode.VERIFIED,
+)
 
 _TIER_RANK: dict[ExecutionTier, int] = {
     ExecutionTier.STANDARD: 1,
@@ -130,7 +138,10 @@ _PRODUCT_FEATURES: tuple[tuple[str, bool, str, str | None], ...] = (
 def get_current_supported_modes() -> set[UserFacingMode]:
     """Return the currently implemented product-facing modes."""
 
-    return set(_IMPLEMENTED_MODES)
+    supported_modes = set(_BASE_IMPLEMENTED_MODES)
+    if get_settings().enterprise_enabled:
+        supported_modes.add(UserFacingMode.THINKING)
+    return supported_modes
 
 
 def _supports_tier(
@@ -164,7 +175,7 @@ def _build_mode_capability(
     ):
         enabled = False
         availability_reason = "tier_restricted"
-    elif mode not in _IMPLEMENTED_MODES:
+    elif mode not in get_current_supported_modes():
         enabled = False
         availability_reason = "coming_soon"
     else:
@@ -201,13 +212,6 @@ def build_capabilities_response(
 ) -> CapabilitiesResponse:
     """Return the current product and mode availability for one tenant."""
 
-    ordered_modes = [
-        UserFacingMode.AUTO,
-        UserFacingMode.INSTANT,
-        UserFacingMode.THINKING,
-        UserFacingMode.VERIFIED,
-    ]
-
     return CapabilitiesResponse(
         subscription_plan=tenant_context.subscription_plan,
         max_execution_tier=tenant_context.max_execution_tier,
@@ -215,7 +219,7 @@ def build_capabilities_response(
         manual_mode_override_allowed=True,
         modes=[
             _build_mode_capability(mode=mode, tenant_context=tenant_context)
-            for mode in ordered_modes
+            for mode in _ORDERED_MODES
         ],
         features=_build_feature_capabilities(),
     )

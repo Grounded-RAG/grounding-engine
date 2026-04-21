@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -9,11 +9,30 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { createAgent, listAgents, listDatasets } from "@/lib/api";
+import { createAgent, getCapabilities, listAgents, listDatasets } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatDateTime } from "@/lib/format";
 import { workspacePath } from "@/lib/routes";
-import type { UserFacingMode } from "@/lib/types";
+import type { ModeCapabilityResponse, UserFacingMode } from "@/lib/types";
+
+const FALLBACK_MODE_OPTIONS: ModeCapabilityResponse[] = [
+  {
+    mode: "auto",
+    label: "Auto",
+    enabled: true,
+    backing_tier: null,
+    description: "Recommended mode that follows the current Standard path.",
+    availability_reason: null,
+  },
+  {
+    mode: "instant",
+    label: "Instant",
+    enabled: true,
+    backing_tier: "standard",
+    description: "Fast grounded answers for everyday document questions.",
+    availability_reason: null,
+  },
+];
 
 export default function AgentsPage() {
   const { apiKey, workspaceId, workspaceSlug } = useAuth();
@@ -40,6 +59,34 @@ export default function AgentsPage() {
     enabled: Boolean(apiKey && workspaceId),
   });
 
+  const capabilitiesQuery = useQuery({
+    queryKey: ["capabilities"],
+    queryFn: () => getCapabilities(apiKey!),
+    enabled: Boolean(apiKey),
+  });
+
+  const createModeOptions = useMemo(
+    () =>
+      (capabilitiesQuery.data?.modes ?? FALLBACK_MODE_OPTIONS).filter(
+        (mode) => mode.mode !== "verified",
+      ),
+    [capabilitiesQuery.data?.modes],
+  );
+
+  const enabledCreateModes = useMemo(
+    () => createModeOptions.filter((mode) => mode.enabled).map((mode) => mode.mode),
+    [createModeOptions],
+  );
+
+  useEffect(() => {
+    if (
+      enabledCreateModes.length > 0 &&
+      !enabledCreateModes.includes(form.defaultMode)
+    ) {
+      setForm((current) => ({ ...current, defaultMode: enabledCreateModes[0] }));
+    }
+  }, [enabledCreateModes, form.defaultMode]);
+
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!apiKey || !workspaceId) {
@@ -52,7 +99,7 @@ export default function AgentsPage() {
         description: form.description.trim() || undefined,
         system_instructions: form.systemInstructions.trim() || undefined,
         default_mode: form.defaultMode,
-        allowed_modes: ["auto", "instant"],
+        allowed_modes: enabledCreateModes,
       });
     },
     onSuccess: (agent) => {
@@ -141,21 +188,20 @@ export default function AgentsPage() {
             <div>
               <Label htmlFor="agent-mode">Default mode</Label>
               <div className="flex items-center gap-2 mt-1.5">
-                {(["auto", "instant"] as UserFacingMode[]).map((mode) => (
+                {createModeOptions.map((mode) => (
                   <Button
-                    key={mode}
+                    key={mode.mode}
                     type="button"
-                    variant={form.defaultMode === mode ? "pill-accent" : "outline"}
+                    variant={form.defaultMode === mode.mode ? "pill-accent" : "outline"}
                     size="sm"
                     className="rounded-full"
-                    onClick={() => setForm((current) => ({ ...current, defaultMode: mode }))}
+                    onClick={() => mode.enabled && setForm((current) => ({ ...current, defaultMode: mode.mode }))}
+                    disabled={!mode.enabled}
+                    title={mode.description}
                   >
-                    {mode}
+                    {mode.label}
                   </Button>
                 ))}
-                <Badge variant="coming" className="text-[10px]">
-                  Thinking / Verified soon
-                </Badge>
               </div>
             </div>
           </div>

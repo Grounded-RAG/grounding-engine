@@ -41,8 +41,8 @@ def test_capabilities_endpoint_returns_mode_and_feature_availability() -> None:
     modes = {item["mode"]: item for item in payload["modes"]}
     assert modes["auto"]["enabled"] is True
     assert modes["instant"]["enabled"] is True
-    assert modes["thinking"]["enabled"] is False
-    assert modes["thinking"]["availability_reason"] == "coming_soon"
+    assert modes["thinking"]["enabled"] is True
+    assert modes["thinking"]["availability_reason"] is None
     assert modes["verified"]["enabled"] is False
     assert modes["verified"]["availability_reason"] == "coming_soon"
 

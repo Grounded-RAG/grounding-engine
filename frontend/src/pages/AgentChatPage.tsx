@@ -23,6 +23,7 @@ import {
   attachDatasetToAgent,
   createAgentConversation,
   getAgent,
+  getCapabilities,
   getConversationMessages,
   getRun,
   listAgentConversations,
@@ -42,14 +43,43 @@ import {
 import type {
   AgentChatResponse,
   MessageResponse,
+  ModeCapabilityResponse,
   UserFacingMode,
 } from "@/lib/types";
 
-const MODE_OPTIONS: Array<{ label: string; value: UserFacingMode; available: boolean }> = [
-  { label: "Auto", value: "auto", available: true },
-  { label: "Instant", value: "instant", available: true },
-  { label: "Thinking", value: "thinking", available: false },
-  { label: "Verified", value: "verified", available: false },
+const FALLBACK_MODE_OPTIONS: ModeCapabilityResponse[] = [
+  {
+    mode: "auto",
+    label: "Auto",
+    enabled: true,
+    backing_tier: null,
+    description: "Recommended mode that follows the current Standard path.",
+    availability_reason: null,
+  },
+  {
+    mode: "instant",
+    label: "Instant",
+    enabled: true,
+    backing_tier: "standard",
+    description: "Fast grounded answers for everyday document questions.",
+    availability_reason: null,
+  },
+  {
+    mode: "thinking",
+    label: "Thinking",
+    enabled: false,
+    backing_tier: "enterprise",
+    description: "Deeper retrieval for harder questions.",
+    availability_reason: "coming_soon",
+  },
+  {
+    mode: "verified",
+    label: "Verified",
+    enabled: false,
+    backing_tier: "critical",
+    description: "Highest-assurance path for sensitive work.",
+    availability_reason: "coming_soon",
+  },
 ];
 
 const GENERATING_COPY = [
@@ -249,6 +279,12 @@ export default function AgentChatPage() {
     enabled: Boolean(apiKey && workspaceId),
   });
 
+  const capabilitiesQuery = useQuery({
+    queryKey: ["capabilities"],
+    queryFn: () => getCapabilities(apiKey!),
+    enabled: Boolean(apiKey),
+  });
+
   const conversationsQuery = useQuery({
     queryKey: ["agent", id, "conversations"],
     queryFn: () => listAgentConversations(apiKey!, id!),
@@ -300,6 +336,31 @@ export default function AgentChatPage() {
       setSelectedMode(agentQuery.data.default_mode);
     }
   }, [agentQuery.data?.default_mode]);
+
+  const modeOptions = useMemo(() => {
+    const capabilityModes = capabilitiesQuery.data?.modes ?? FALLBACK_MODE_OPTIONS;
+    return capabilityModes.filter((mode) => mode.mode !== "verified");
+  }, [agentQuery.data?.allowed_modes, capabilitiesQuery.data?.modes]);
+
+  useEffect(() => {
+    if (modeOptions.length === 0) {
+      return;
+    }
+
+    const selectedOption = modeOptions.find((mode) => mode.mode === selectedMode);
+    if (selectedOption?.enabled) {
+      return;
+    }
+
+    const fallbackMode =
+      modeOptions.find((mode) => mode.enabled && mode.mode === agentQuery.data?.default_mode) ??
+      modeOptions.find((mode) => mode.enabled) ??
+      modeOptions[0];
+
+    if (fallbackMode) {
+      setSelectedMode(fallbackMode.mode);
+    }
+  }, [agentQuery.data?.default_mode, modeOptions, selectedMode]);
 
   useEffect(() => {
     if (attachedDatasets.length === 0) {
@@ -972,24 +1033,37 @@ export default function AgentChatPage() {
               </div>
 
               <div className="flex flex-wrap items-center justify-end gap-2">
-                {MODE_OPTIONS.map((mode) => (
-                  <button
-                    key={mode.value}
-                    type="button"
-                    onClick={() => mode.available && setSelectedMode(mode.value)}
-                    disabled={!mode.available || hasActiveRun}
-                    className={`rounded-full px-4 py-2 text-xs font-medium transition-all ${
-                      selectedMode === mode.value
-                        ? "bg-accent text-accent-foreground"
-                        : mode.available
-                          ? "border border-border bg-background text-foreground hover:bg-secondary"
-                          : "border border-border bg-background text-muted-foreground/40 cursor-not-allowed"
-                    } ${hasActiveRun && mode.available ? "opacity-60" : ""}`}
-                  >
-                    {mode.label}
-                    {!mode.available ? <span className="ml-1 text-[9px]">soon</span> : null}
-                  </button>
-                ))}
+                {modeOptions.map((mode) => {
+                  const allowedModes = new Set(agentQuery.data?.allowed_modes ?? []);
+                  const agentAllowsMode =
+                    allowedModes.size === 0 || allowedModes.has(mode.mode);
+                  const modeIsSelectable = mode.enabled && agentAllowsMode;
+                  const disabledReason = !mode.enabled
+                    ? mode.description
+                    : agentAllowsMode
+                      ? undefined
+                      : "Enable this mode for the agent before using it in chat.";
+
+                  return (
+                    <button
+                      key={mode.mode}
+                      type="button"
+                      onClick={() => modeIsSelectable && setSelectedMode(mode.mode)}
+                      disabled={!modeIsSelectable || hasActiveRun}
+                      title={disabledReason}
+                      className={`rounded-full px-4 py-2 text-xs font-medium transition-all ${
+                        selectedMode === mode.mode
+                          ? "bg-accent text-accent-foreground"
+                          : modeIsSelectable
+                            ? "border border-border bg-background text-foreground hover:bg-secondary"
+                            : "border border-border bg-background text-muted-foreground/40 cursor-not-allowed"
+                      } ${hasActiveRun && modeIsSelectable ? "opacity-60" : ""}`}
+                    >
+                      {mode.label}
+                      {!mode.enabled ? <span className="ml-1 text-[9px]">soon</span> : null}
+                    </button>
+                  );
+                })}
                 <Button
                   variant="pill-accent"
                   size="icon"

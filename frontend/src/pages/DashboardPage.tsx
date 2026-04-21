@@ -16,6 +16,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  getCapabilities,
   getDashboardRecentJobs,
   getDashboardRecentRuns,
   getDashboardSummary,
@@ -26,6 +27,42 @@ import { useAuth } from "@/lib/auth";
 import { formatDateTime, formatRelativeOrDate, sentenceCase } from "@/lib/format";
 import { workspacePath } from "@/lib/routes";
 import { confidenceBadgeVariant, confidenceLabelText } from "@/lib/trust";
+import type { ModeCapabilityResponse } from "@/lib/types";
+
+const FALLBACK_MODE_OPTIONS: ModeCapabilityResponse[] = [
+  {
+    mode: "auto",
+    label: "Auto",
+    enabled: true,
+    backing_tier: null,
+    description: "Recommended mode that follows the current Standard path.",
+    availability_reason: null,
+  },
+  {
+    mode: "instant",
+    label: "Instant",
+    enabled: true,
+    backing_tier: "standard",
+    description: "Fast grounded answers for everyday document questions.",
+    availability_reason: null,
+  },
+  {
+    mode: "thinking",
+    label: "Thinking",
+    enabled: false,
+    backing_tier: "enterprise",
+    description: "Deeper retrieval for harder questions.",
+    availability_reason: "coming_soon",
+  },
+  {
+    mode: "verified",
+    label: "Verified",
+    enabled: false,
+    backing_tier: "critical",
+    description: "Highest-assurance path for sensitive work.",
+    availability_reason: "coming_soon",
+  },
+];
 
 function WelcomeHero({
   workspaceName,
@@ -75,13 +112,10 @@ function WelcomeHero({
   );
 }
 
-function ModeStatusCard() {
-  const modes = [
-    { name: "Auto", desc: "System selects the best available path.", live: true },
-    { name: "Instant", desc: "Fast grounded answers for daily work.", live: true },
-    { name: "Thinking", desc: "Deeper retrieval for harder questions.", live: false },
-    { name: "Verified", desc: "Highest assurance for sensitive work.", live: false },
-  ];
+function ModeStatusCard({ modes }: { modes: ModeCapabilityResponse[] }) {
+  const liveTier = modes.some((mode) => mode.mode === "thinking" && mode.enabled)
+    ? "Enterprise"
+    : "Standard";
 
   return (
     <div className="rounded-2xl border bg-card p-6">
@@ -91,15 +125,15 @@ function ModeStatusCard() {
       <div className="space-y-3">
         <div className="rounded-xl border bg-secondary/30 px-3 py-2">
           <div className="text-xs text-muted-foreground">Live tier</div>
-          <div className="text-sm font-medium text-foreground">Standard</div>
+          <div className="text-sm font-medium text-foreground">{liveTier}</div>
         </div>
         {modes.map((mode) => (
-          <div key={mode.name} className="flex items-center justify-between gap-3">
+          <div key={mode.mode} className="flex items-center justify-between gap-3">
             <div>
-              <span className="text-sm font-medium text-foreground">{mode.name}</span>
-              <p className="text-xs text-muted-foreground">{mode.desc}</p>
+              <span className="text-sm font-medium text-foreground">{mode.label}</span>
+              <p className="text-xs text-muted-foreground">{mode.description}</p>
             </div>
-            {mode.live ? (
+            {mode.enabled ? (
               <Badge variant="success" className="text-[10px]">
                 <CheckCircle2 className="h-2.5 w-2.5 mr-0.5" /> Live
               </Badge>
@@ -202,6 +236,12 @@ export default function DashboardPage() {
     enabled: Boolean(apiKey && workspaceId),
   });
 
+  const capabilitiesQuery = useQuery({
+    queryKey: ["capabilities"],
+    queryFn: () => getCapabilities(apiKey!),
+    enabled: Boolean(apiKey),
+  });
+
   if (!workspaceId) {
     return (
       <div className="max-w-3xl">
@@ -242,6 +282,7 @@ export default function DashboardPage() {
   const datasets = datasetsQuery.data ?? [];
   const recentRuns = recentRunsQuery.data ?? [];
   const recentJobs = recentJobsQuery.data ?? [];
+  const modeCapabilities = capabilitiesQuery.data?.modes ?? FALLBACK_MODE_OPTIONS;
 
   return (
     <div className="max-w-6xl">
@@ -301,7 +342,7 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
-        <ModeStatusCard />
+        <ModeStatusCard modes={modeCapabilities} />
       </div>
 
       <div className="grid md:grid-cols-2 gap-6 mb-8">

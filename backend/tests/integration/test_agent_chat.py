@@ -554,11 +554,11 @@ def test_agent_chat_accepts_explicit_dataset_for_multi_dataset_agent(
     assert response.json()["mode"] == "instant"
 
 
-def test_agent_chat_rejects_coming_soon_modes_with_clear_message(
+def test_agent_chat_rejects_thinking_when_agent_disallows_it(
     agent_chat_client: TestClient,
     seeded_agent_chat_data: SeededAgentChatData,
 ) -> None:
-    """Thinking and Verified should fail clearly until later phases exist."""
+    """Thinking should still respect each agent's allowlist."""
 
     response = agent_chat_client.post(
         f"/v1/agents/{seeded_agent_chat_data.single_dataset_agent_id}/chat",
@@ -570,7 +570,29 @@ def test_agent_chat_rejects_coming_soon_modes_with_clear_message(
         },
     )
 
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "Chat mode must be one of the agent's allowed modes."
+    }
+
+
+def test_agent_chat_rejects_verified_mode_with_clear_message(
+    agent_chat_client: TestClient,
+    seeded_agent_chat_data: SeededAgentChatData,
+) -> None:
+    """Verified should still fail clearly until the critical path is live."""
+
+    response = agent_chat_client.post(
+        f"/v1/agents/{seeded_agent_chat_data.single_dataset_agent_id}/chat",
+        headers={"X-API-Key": seeded_agent_chat_data.raw_api_key},
+        json={
+            "conversation_id": str(seeded_agent_chat_data.single_conversation_id),
+            "message": "Use the highest-assurance mode for this question.",
+            "mode": "verified",
+        },
+    )
+
     assert response.status_code == 422
     assert response.json() == {
-        "detail": "Chat mode 'thinking' is not available yet."
+        "detail": "Chat mode 'verified' is not available yet."
     }
