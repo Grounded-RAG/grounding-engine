@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import or_, select, text
@@ -28,8 +29,7 @@ from app.core.query_analysis import (
     tokenize_meaningful_terms,
 )
 from app.core.embeddings import EmbeddingError, embed_texts
-from app.models import DocumentChunkRecord
-from app.models import ExecutionTier
+from app.models import Document, DocumentChunkRecord, ExecutionTier, FreshnessProfile
 from app.core.qdrant_client import VectorStoreError, search_dense_points
 from app.pipeline.contracts import FusedRetrievedChunk, RetrievedChunk
 
@@ -160,6 +160,148 @@ def _coerce_uuid(value: UUID | str) -> UUID:
     """Coerce UUID-like payload values into UUID instances."""
 
     return value if isinstance(value, UUID) else UUID(str(value))
+
+
+def _query_prefers_freshness(query_plan: QueryPlan) -> bool:
+    """Return whether the query explicitly asks for newer or current evidence."""
+
+    freshness_terms = {
+        "current",
+        "latest",
+        "new",
+        "newer",
+        "recent",
+        "update",
+        "updated",
+        "version",
+    }
+    profile = query_plan.profile
+    if set(profile.terms) & freshness_terms:
+        return True
+    if set(profile.attribute_terms) & freshness_terms:
+        return True
+    if set(profile.context_terms) & freshness_terms:
+        return True
+    return False
+
+
+def _freshness_boost_weight(freshness_profile: FreshnessProfile) -> float:
+    """Return one small score weight for the namespace freshness profile."""
+
+    if freshness_profile is FreshnessProfile.AGGRESSIVE:
+        return 0.7
+    if freshness_profile is FreshnessProfile.BALANCED:
+        return 0.4
+    return 0.15
+
+
+async def _fetch_document_freshness_metadata(
+    *,
+    session: AsyncSession,
+    tenant_id: UUID,
+    namespace_id: UUID,
+    document_ids: set[UUID],
+) -> dict[UUID, datetime]:
+    """Load effective freshness timestamps for the candidate documents."""
+
+    if not document_ids:
+        return {}
+
+    statement = select(
+        Document.doc_id,
+        Document.published_at,
+        Document.created_at,
+    ).where(
+        Document.tenant_id == tenant_id,
+        Document.namespace_id == namespace_id,
+        Document.doc_id.in_(sorted(document_ids, key=str)),
+    )
+
+    try:
+        result = await session.execute(statement)
+    except SQLAlchemyError as exc:
+        raise RetrievalError("Freshness metadata lookup failed.") from exc
+
+    rows = result.all() if hasattr(result, "all") else list(result)
+    metadata: dict[UUID, datetime] = {}
+    for row in rows:
+        if isinstance(row, dict):
+            document_id = _coerce_uuid(row["doc_id"])
+            published_at = row.get("published_at")
+            created_at = row.get("created_at")
+        else:
+            document_id = _coerce_uuid(getattr(row, "doc_id"))
+            published_at = getattr(row, "published_at", None)
+            created_at = getattr(row, "created_at", None)
+        effective_timestamp = published_at or created_at
+        if isinstance(effective_timestamp, datetime):
+            metadata[document_id] = effective_timestamp
+    return metadata
+
+
+async def _apply_enterprise_freshness_scoring(
+    fused_hits: list[FusedRetrievedChunk],
+    *,
+    session: AsyncSession,
+    tenant_id: UUID,
+    namespace_id: UUID,
+    query_plan: QueryPlan,
+    execution_tier: ExecutionTier,
+    freshness_profile: FreshnessProfile,
+) -> list[FusedRetrievedChunk]:
+    """Prefer newer evidence when the Enterprise query explicitly needs freshness."""
+
+    settings = get_settings()
+    if (
+        execution_tier is not ExecutionTier.ENTERPRISE
+        or not getattr(settings, "enterprise_temporal_scoring_enabled", True)
+        or not fused_hits
+        or not _query_prefers_freshness(query_plan)
+    ):
+        return fused_hits
+
+    freshness_by_document = await _fetch_document_freshness_metadata(
+        session=session,
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        document_ids={hit.document_id for hit in fused_hits},
+    )
+    if len(freshness_by_document) < 2:
+        return fused_hits
+
+    timestamps = [value.timestamp() for value in freshness_by_document.values()]
+    oldest_timestamp = min(timestamps)
+    newest_timestamp = max(timestamps)
+    if newest_timestamp <= oldest_timestamp:
+        return fused_hits
+
+    boost_weight = _freshness_boost_weight(freshness_profile)
+    rescored_hits: list[FusedRetrievedChunk] = []
+    for hit in fused_hits:
+        freshness_timestamp = freshness_by_document.get(hit.document_id)
+        if freshness_timestamp is None:
+            rescored_hits.append(hit)
+            continue
+        freshness_ratio = (
+            (freshness_timestamp.timestamp() - oldest_timestamp)
+            / (newest_timestamp - oldest_timestamp)
+        )
+        rescored_hits.append(
+            replace(
+                hit,
+                fused_score=hit.fused_score + freshness_ratio * boost_weight,
+            )
+        )
+
+    logger.info(
+        "enterprise_freshness_scoring_applied",
+        freshness_profile=freshness_profile.value,
+        boosted_documents=len(freshness_by_document),
+    )
+    return sorted(
+        rescored_hits,
+        key=lambda hit: (-hit.fused_score, hit.chunk_index, hit.chunk_id),
+    )
 
 
 async def sparse_retrieve_chunks(
@@ -678,6 +820,7 @@ async def retrieve_hybrid_candidates(
     query_plan: QueryPlan | None = None,
     limit: int | None = None,
     execution_tier: ExecutionTier = ExecutionTier.STANDARD,
+    freshness_profile: FreshnessProfile = FreshnessProfile.BALANCED,
 ) -> RetrievalBundle:
     """Run sparse and dense retrieval, then merge candidates with RRF."""
 
@@ -750,6 +893,15 @@ async def retrieve_hybrid_candidates(
         fused_hits,
         query_plan=plan,
         limit=max(final_limit, settings.enterprise_reranker_candidate_limit),
+    )
+    fused_hits = await _apply_enterprise_freshness_scoring(
+        fused_hits,
+        session=session,
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_plan=plan,
+        execution_tier=execution_tier,
+        freshness_profile=freshness_profile,
     )
     fused_hits = await _apply_enterprise_reranker(
         fused_hits,

@@ -139,3 +139,4 @@ def test_settings_default_enterprise_scaffolding_flags() -> None:
     assert settings.enterprise_auto_routing_enabled is True
     assert settings.enterprise_reranker_enabled is False
     assert settings.enterprise_reranker_backend == "disabled"
+    assert settings.enterprise_temporal_scoring_enabled is True

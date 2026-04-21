@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     enterprise_reranker_enabled: bool = False
     enterprise_reranker_backend: RerankerBackend = "disabled"
     enterprise_reranker_candidate_limit: int = 24
+    enterprise_temporal_scoring_enabled: bool = True
     api_key_salt: str = "replace-in-local-env"
     s3_endpoint_url: AnyHttpUrl = "http://localhost:9000"
     s3_bucket: str = "grounded-documents"

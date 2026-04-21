@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import uuid
 from types import SimpleNamespace
 
 import pytest
 
 from app.core.query_analysis import QueryPlan, QueryProfile
-from app.models import ExecutionTier
+from app.models import ExecutionTier, FreshnessProfile
 from app.pipeline.contracts import FusedRetrievedChunk, RetrievedChunk
 from app.services.retrieval import (
     dense_retrieve_chunks,
@@ -1002,3 +1003,238 @@ async def test_retrieve_hybrid_candidates_falls_back_when_enterprise_reranker_er
     )
 
     assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-1", "chunk-2"]
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_applies_enterprise_freshness_scoring(monkeypatch) -> None:
+    """Enterprise retrieval should prefer newer documents when the query explicitly asks for recency."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    old_document_id = uuid.uuid4()
+    new_document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="old-policy",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=old_document_id,
+            chunk_index=0,
+            text="Policy version 2023.09 remains available for reference.",
+            score=0.9,
+            rank=1,
+            source="sparse",
+        ),
+        RetrievedChunk(
+            chunk_id="new-policy",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=new_document_id,
+            chunk_index=0,
+            text="Policy version 2025.01 is the latest published update.",
+            score=0.7,
+            rank=2,
+            source="sparse",
+        ),
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="old-policy",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=old_document_id,
+            chunk_index=0,
+            text="Policy version 2023.09 remains available for reference.",
+            score=0.88,
+            rank=1,
+            source="dense",
+        ),
+        RetrievedChunk(
+            chunk_id="new-policy",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=new_document_id,
+            chunk_index=0,
+            text="Policy version 2025.01 is the latest published update.",
+            score=0.6,
+            rank=2,
+            source="dense",
+        ),
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return dense_hits
+
+    async def fake_fetch_supporting_context_hits(**kwargs):
+        del kwargs
+        return []
+
+    async def fake_fetch_document_freshness_metadata(**kwargs):
+        del kwargs
+        return {
+            old_document_id: datetime(2023, 9, 1, tzinfo=UTC),
+            new_document_id: datetime(2025, 1, 10, tzinfo=UTC),
+        }
+
+    async def fake_apply_enterprise_reranker(hits, **kwargs):
+        del kwargs
+        return hits
+
+    monkeypatch.setattr("app.services.retrieval.sparse_retrieve_chunks", fake_sparse_retrieve_chunks)
+    monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
+    monkeypatch.setattr(
+        "app.services.retrieval._fetch_supporting_context_hits",
+        fake_fetch_supporting_context_hits,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval._fetch_document_freshness_metadata",
+        fake_fetch_document_freshness_metadata,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval._apply_enterprise_reranker",
+        fake_apply_enterprise_reranker,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.get_settings",
+        lambda: SimpleNamespace(
+            retrieval_candidate_limit=8,
+            retrieval_overfetch_factor=4,
+            rrf_smoothing_constant=60,
+            evidence_package_limit=3,
+            enterprise_reranker_candidate_limit=8,
+            enterprise_temporal_scoring_enabled=True,
+        ),
+    )
+
+    plan = QueryPlan(
+        raw_query_text="What is the latest policy version?",
+        resolved_query_text="What is the latest policy version?",
+        profile=QueryProfile(
+            raw_text="What is the latest policy version?",
+            normalized_text="what is the latest policy version",
+            terms=frozenset({"latest", "policy", "version"}),
+            expanded_terms=frozenset({"latest", "policy", "version"}),
+            attribute_terms=frozenset({"policy version"}),
+            context_terms=frozenset(),
+            semantic_tags=frozenset({"date"}),
+            query_kind="lookup",
+            document_reference_rank=None,
+        ),
+        retrieval_query_text="what is the latest policy version",
+        retrieval_queries=("what is the latest policy version",),
+        explanation="kind=lookup",
+        used_conversation_context=False,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What is the latest policy version?",
+        query_plan=plan,
+        execution_tier=ExecutionTier.ENTERPRISE,
+        freshness_profile=FreshnessProfile.AGGRESSIVE,
+        limit=2,
+    )
+
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["new-policy", "old-policy"]
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_keeps_standard_order_without_freshness_scoring(monkeypatch) -> None:
+    """Standard retrieval should ignore freshness boosts even for recency-sensitive wording."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="older-result",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="Current release notes mention the older policy.",
+            score=0.9,
+            rank=1,
+            source="sparse",
+        ),
+        RetrievedChunk(
+            chunk_id="newer-result",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=uuid.uuid4(),
+            chunk_index=0,
+            text="Current release notes mention the new policy.",
+            score=0.7,
+            rank=2,
+            source="sparse",
+        ),
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return []
+
+    async def fake_fetch_supporting_context_hits(**kwargs):
+        del kwargs
+        return []
+
+    async def fail_fetch_document_freshness_metadata(**kwargs):
+        del kwargs
+        raise AssertionError("Standard retrieval should not fetch freshness metadata.")
+
+    monkeypatch.setattr("app.services.retrieval.sparse_retrieve_chunks", fake_sparse_retrieve_chunks)
+    monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
+    monkeypatch.setattr(
+        "app.services.retrieval._fetch_supporting_context_hits",
+        fake_fetch_supporting_context_hits,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval._fetch_document_freshness_metadata",
+        fail_fetch_document_freshness_metadata,
+    )
+
+    plan = QueryPlan(
+        raw_query_text="What is the latest policy version?",
+        resolved_query_text="What is the latest policy version?",
+        profile=QueryProfile(
+            raw_text="What is the latest policy version?",
+            normalized_text="what is the latest policy version",
+            terms=frozenset({"latest", "policy", "version"}),
+            expanded_terms=frozenset({"latest", "policy", "version"}),
+            attribute_terms=frozenset({"policy version"}),
+            context_terms=frozenset(),
+            semantic_tags=frozenset({"date"}),
+            query_kind="lookup",
+            document_reference_rank=None,
+        ),
+        retrieval_query_text="what is the latest policy version",
+        retrieval_queries=("what is the latest policy version",),
+        explanation="kind=lookup",
+        used_conversation_context=False,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What is the latest policy version?",
+        query_plan=plan,
+        execution_tier=ExecutionTier.STANDARD,
+        freshness_profile=FreshnessProfile.AGGRESSIVE,
+        limit=2,
+    )
+
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["older-result", "newer-result"]

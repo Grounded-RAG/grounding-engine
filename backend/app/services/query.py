@@ -24,7 +24,7 @@ from app.core.query_analysis import (
     QueryPlan,
 )
 from app.core.telemetry import bind_execution_context
-from app.models import ExecutionTier, MessageRole, Namespace, QueryTrace, UserFacingMode
+from app.models import ExecutionTier, FreshnessProfile, MessageRole, Namespace, QueryTrace, UserFacingMode
 from app.schemas.query import GroundedAnswerResponse, QueryRequest
 from app.services.messages import MessageServiceError, list_conversation_messages
 from app.services.evidence import package_evidence
@@ -557,6 +557,11 @@ async def execute_standard_query(
             query_text=query_request.query,
             query_plan=query_plan,
             execution_tier=routing_decision.effective_tier,
+            freshness_profile=getattr(
+                namespace,
+                "freshness_profile",
+                FreshnessProfile.BALANCED,
+            ),
         )
     except RetrievalError as exc:
         raise QueryServiceError(
