@@ -127,3 +127,12 @@ def test_settings_reject_negative_provider_retry_backoff() -> None:
 
     with pytest.raises(ValidationError):
         Settings(provider_retry_backoff_ms=-1)
+
+
+def test_settings_default_enterprise_scaffolding_flags() -> None:
+    """Enterprise scaffolding flags should default to safe no-op values."""
+
+    settings = Settings()
+
+    assert settings.enterprise_enabled is False
+    assert settings.enterprise_trace_metadata_enabled is True

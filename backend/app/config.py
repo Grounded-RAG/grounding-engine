@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     retrieval_overfetch_factor: int = 4
     rrf_smoothing_constant: int = 60
     evidence_package_limit: int = 3
+    enterprise_enabled: bool = False
+    enterprise_trace_metadata_enabled: bool = True
     api_key_salt: str = "replace-in-local-env"
     s3_endpoint_url: AnyHttpUrl = "http://localhost:9000"
     s3_bucket: str = "grounded-documents"

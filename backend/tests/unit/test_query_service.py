@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 
@@ -134,6 +135,13 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
         fake_retrieve_hybrid_candidates,
     )
     monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: SimpleNamespace(
+            enterprise_enabled=False,
+            enterprise_trace_metadata_enabled=True,
+        ),
+    )
+    monkeypatch.setattr(
         "app.services.generation.resolve_generation_backend",
         lambda: GenerationBackend(
             provider_name="local_grounded_v1",
@@ -160,10 +168,14 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
     assert trace.agent_id is None
     assert trace.conversation_id is None
     assert trace.selected_mode is None
+    assert trace.router_recommendation is ExecutionTier.STANDARD
+    assert trace.effective_tier is ExecutionTier.STANDARD
+    assert trace.routing_reason == "standard_default"
     assert trace.generator_provider == "local-grounded-v1"
     assert trace.retrieved_chunk_ids == ["chunk-1"]
     assert trace.selected_evidence_ids == ["chunk-1"]
     assert trace.verifier_result["query_plan"]["query_kind"] == "open"
+    assert trace.verifier_result["execution_routing"]["request_source"] == "default"
 
 
 @pytest.mark.asyncio()
@@ -250,6 +262,13 @@ async def test_execute_standard_query_uses_raw_user_question_for_generation(monk
         fake_messages,
     )
     monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: SimpleNamespace(
+            enterprise_enabled=False,
+            enterprise_trace_metadata_enabled=True,
+        ),
+    )
+    monkeypatch.setattr(
         "app.services.query.retrieve_hybrid_candidates",
         fake_retrieve_hybrid_candidates,
     )
@@ -296,6 +315,13 @@ async def test_execute_standard_query_persists_agent_chat_context(monkeypatch) -
         "app.services.query.retrieve_hybrid_candidates",
         fake_retrieve_hybrid_candidates,
     )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: SimpleNamespace(
+            enterprise_enabled=False,
+            enterprise_trace_metadata_enabled=True,
+        ),
+    )
 
     await execute_standard_query(
         session=session,
@@ -334,6 +360,13 @@ async def test_execute_standard_query_degrades_when_no_evidence(monkeypatch) -> 
         "app.services.query.retrieve_hybrid_candidates",
         fake_retrieve_hybrid_candidates,
     )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: SimpleNamespace(
+            enterprise_enabled=False,
+            enterprise_trace_metadata_enabled=True,
+        ),
+    )
 
     result = await execute_standard_query(
         session=session,
@@ -369,6 +402,13 @@ async def test_execute_standard_query_requests_clarification_for_vague_query(mon
         "app.services.query.retrieve_hybrid_candidates",
         fail_retrieve_hybrid_candidates,
     )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: SimpleNamespace(
+            enterprise_enabled=False,
+            enterprise_trace_metadata_enabled=True,
+        ),
+    )
 
     result = await execute_standard_query(
         session=session,
@@ -402,6 +442,13 @@ async def test_execute_standard_query_requests_clarification_for_combined_greeti
     monkeypatch.setattr(
         "app.services.query.retrieve_hybrid_candidates",
         fail_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: SimpleNamespace(
+            enterprise_enabled=False,
+            enterprise_trace_metadata_enabled=True,
+        ),
     )
 
     result = await execute_standard_query(
@@ -437,6 +484,13 @@ async def test_execute_standard_query_requests_clarification_for_stretched_greet
         "app.services.query.retrieve_hybrid_candidates",
         fail_retrieve_hybrid_candidates,
     )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: SimpleNamespace(
+            enterprise_enabled=False,
+            enterprise_trace_metadata_enabled=True,
+        ),
+    )
 
     result = await execute_standard_query(
         session=session,
@@ -470,6 +524,13 @@ async def test_execute_standard_query_requests_clarification_for_how_are_u(monke
         "app.services.query.retrieve_hybrid_candidates",
         fail_retrieve_hybrid_candidates,
     )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: SimpleNamespace(
+            enterprise_enabled=False,
+            enterprise_trace_metadata_enabled=True,
+        ),
+    )
 
     result = await execute_standard_query(
         session=session,
@@ -494,7 +555,7 @@ async def test_execute_standard_query_rejects_higher_tier_namespace() -> None:
     )()
     session = FakeAsyncSession(namespace=namespace)
 
-    with pytest.raises(QueryServiceError, match="requires a higher execution tier"):
+    with pytest.raises(QueryServiceError, match="resolved query path"):
         await execute_standard_query(
             session=session,
             tenant_context=tenant_context,
@@ -538,6 +599,13 @@ async def test_execute_standard_query_uses_follow_up_context_for_second_document
     monkeypatch.setattr(
         "app.services.query.list_conversation_messages",
         fake_messages,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: SimpleNamespace(
+            enterprise_enabled=False,
+            enterprise_trace_metadata_enabled=True,
+        ),
     )
     monkeypatch.setattr(
         "app.services.query.retrieve_hybrid_candidates",
@@ -605,6 +673,13 @@ async def test_execute_standard_query_uses_multi_turn_conversation_context(monke
         fake_messages,
     )
     monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: SimpleNamespace(
+            enterprise_enabled=False,
+            enterprise_trace_metadata_enabled=True,
+        ),
+    )
+    monkeypatch.setattr(
         "app.services.query.retrieve_hybrid_candidates",
         fake_retrieve_hybrid_candidates,
     )
@@ -619,3 +694,51 @@ async def test_execute_standard_query_uses_multi_turn_conversation_context(monke
     assert captured_query_plan is not None
     assert captured_query_plan.used_conversation_context is True
     assert "icog labs" in captured_query_plan.resolved_query_text.casefold()
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_persists_enterprise_request_without_enabling_it(monkeypatch) -> None:
+    """Enterprise requests should be traceable even when the execution stays on Standard."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(
+        namespace_id=namespace_id,
+        query="What changed in the document?",
+        requested_tier=ExecutionTier.ENTERPRISE,
+    )
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        del kwargs
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: SimpleNamespace(
+            enterprise_enabled=False,
+            enterprise_trace_metadata_enabled=True,
+        ),
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+    )
+
+    trace = session.added[0]
+    assert trace.requested_tier is ExecutionTier.ENTERPRISE
+    assert trace.router_recommendation is ExecutionTier.ENTERPRISE
+    assert trace.effective_tier is ExecutionTier.STANDARD
+    assert trace.routing_reason == "enterprise_requested_fallback_standard"
+    assert trace.verifier_result["execution_routing"]["request_source"] == "query_request"
