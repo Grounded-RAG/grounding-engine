@@ -938,3 +938,85 @@ async def test_execute_standard_query_keeps_hard_query_on_standard_when_enterpri
     assert trace.effective_tier is ExecutionTier.STANDARD
     assert trace.routing_reason == "standard_default"
     assert routing["request_source"] == "default"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_uses_enterprise_for_thinking_mode(monkeypatch) -> None:
+    """Thinking mode should explicitly route through Enterprise when it is enabled."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="How does grounded work?")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        assert kwargs["execution_tier"] is ExecutionTier.ENTERPRISE
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True),
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.THINKING,
+    )
+
+    trace = session.added[0]
+    assert trace.requested_tier is ExecutionTier.ENTERPRISE
+    assert trace.effective_tier is ExecutionTier.ENTERPRISE
+    assert trace.routing_reason == "thinking_mode_enterprise"
+    assert trace.verifier_result["execution_routing"]["request_source"] == "selected_mode"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_falls_back_cleanly_for_thinking_mode_when_disabled(monkeypatch) -> None:
+    """Thinking mode should stay explainable when Enterprise is disabled."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="How does grounded work?")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        assert kwargs["execution_tier"] is ExecutionTier.STANDARD
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=False),
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.THINKING,
+    )
+
+    trace = session.added[0]
+    assert trace.requested_tier is ExecutionTier.ENTERPRISE
+    assert trace.effective_tier is ExecutionTier.STANDARD
+    assert trace.routing_reason == "thinking_mode_fallback_standard"
+    assert trace.verifier_result["execution_routing"]["request_source"] == "selected_mode"

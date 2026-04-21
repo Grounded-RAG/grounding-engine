@@ -242,14 +242,19 @@ def _resolve_execution_routing(
     if requested_tier is ExecutionTier.ENTERPRISE:
         if settings.enterprise_enabled:
             effective_tier = ExecutionTier.ENTERPRISE
-            routing_reason = (
-                "enterprise_auto_hard_query"
-                if request_source == "auto_router"
-                else "enterprise_requested_enabled"
-            )
+            if request_source == "auto_router":
+                routing_reason = "enterprise_auto_hard_query"
+            elif selected_mode is UserFacingMode.THINKING:
+                routing_reason = "thinking_mode_enterprise"
+            else:
+                routing_reason = "enterprise_requested_enabled"
         else:
             effective_tier = ExecutionTier.STANDARD
-            routing_reason = "enterprise_requested_fallback_standard"
+            routing_reason = (
+                "thinking_mode_fallback_standard"
+                if selected_mode is UserFacingMode.THINKING
+                else "enterprise_requested_fallback_standard"
+            )
     elif requested_tier is ExecutionTier.CRITICAL:
         effective_tier = ExecutionTier.STANDARD
         routing_reason = "critical_requested_fallback_standard"
