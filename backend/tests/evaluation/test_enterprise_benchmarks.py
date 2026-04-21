@@ -244,7 +244,11 @@ async def test_enterprise_benchmarks_show_recency_uplift(monkeypatch) -> None:
 
     async def fake_apply_enterprise_reranker(hits, **kwargs):
         del kwargs
-        return hits
+        return hits, {
+            "attempted": False,
+            "applied": False,
+            "backend": "disabled",
+        }
 
     monkeypatch.setattr("app.services.retrieval.sparse_retrieve_chunks", fake_sparse_retrieve_chunks)
     monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)

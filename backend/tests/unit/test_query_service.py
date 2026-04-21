@@ -111,7 +111,12 @@ def _query_plan(
     )
 
 
-def _retrieval_bundle(tenant_id: uuid.UUID, namespace_id: uuid.UUID) -> RetrievalBundle:
+def _retrieval_bundle(
+    tenant_id: uuid.UUID,
+    namespace_id: uuid.UUID,
+    *,
+    debug: dict[str, object] | None = None,
+) -> RetrievalBundle:
     document_id = uuid.uuid4()
     sparse_hit = RetrievedChunk(
         chunk_id="chunk-1",
@@ -149,6 +154,7 @@ def _retrieval_bundle(tenant_id: uuid.UUID, namespace_id: uuid.UUID) -> Retrieva
         sparse_hits=[sparse_hit],
         dense_hits=[dense_hit],
         fused_hits=[fused_hit],
+        debug=debug,
     )
 
 
@@ -771,7 +777,16 @@ async def test_execute_standard_query_auto_routes_hard_query_to_enterprise(monke
         assert kwargs["execution_tier"] is ExecutionTier.ENTERPRISE
         assert len(kwargs["query_plan"].retrieval_queries) > 3
         assert any("difference" in query.casefold() for query in kwargs["query_plan"].retrieval_queries)
-        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+        return _retrieval_bundle(
+            tenant_context.tenant_id,
+            namespace_id,
+            debug={
+                "execution_tier": "enterprise",
+                "reranker": {"attempted": True, "applied": False, "backend": "disabled"},
+                "freshness": {"applied": False, "reason": "not_requested"},
+                "top_fused_hits": [{"chunk_id": "chunk-1", "score": 0.95}],
+            },
+        )
 
     monkeypatch.setattr(
         "app.services.query.build_query_plan",
@@ -810,6 +825,8 @@ async def test_execute_standard_query_auto_routes_hard_query_to_enterprise(monke
     assert trace.routing_reason == "enterprise_auto_hard_query"
     assert routing["request_source"] == "auto_router"
     assert routing["route_triggers"] == ["comparison_query", "multi_attribute_query", "multi_intent_retrieval"]
+    assert trace.verifier_result["retrieval_debug"]["execution_tier"] == "enterprise"
+    assert trace.verifier_result["evidence_debug"]["selected_evidence_ids"] == ["chunk-1"]
 
 
 @pytest.mark.asyncio()

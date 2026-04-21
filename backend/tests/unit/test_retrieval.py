@@ -1084,7 +1084,11 @@ async def test_retrieve_hybrid_candidates_applies_enterprise_freshness_scoring(m
 
     async def fake_apply_enterprise_reranker(hits, **kwargs):
         del kwargs
-        return hits
+        return hits, {
+            "attempted": False,
+            "applied": False,
+            "backend": "disabled",
+        }
 
     monkeypatch.setattr("app.services.retrieval.sparse_retrieve_chunks", fake_sparse_retrieve_chunks)
     monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
@@ -1144,6 +1148,8 @@ async def test_retrieve_hybrid_candidates_applies_enterprise_freshness_scoring(m
     )
 
     assert [hit.chunk_id for hit in bundle.fused_hits] == ["new-policy", "old-policy"]
+    assert bundle.debug is not None
+    assert bundle.debug["freshness"]["applied"] is True
 
 
 @pytest.mark.asyncio()
@@ -1238,3 +1244,5 @@ async def test_retrieve_hybrid_candidates_keeps_standard_order_without_freshness
     )
 
     assert [hit.chunk_id for hit in bundle.fused_hits] == ["older-result", "newer-result"]
+    assert bundle.debug is not None
+    assert bundle.debug["freshness"]["applied"] is False

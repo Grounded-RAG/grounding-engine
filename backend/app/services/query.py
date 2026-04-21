@@ -101,6 +101,23 @@ def _degraded_reason_for_generation_exception(exc: Exception) -> tuple[str, str]
     )
 
 
+def _evidence_debug_summary(*, selected_evidence_ids: list[str], evidence_package) -> dict[str, object]:
+    """Build a compact evidence summary for persisted trace inspection."""
+
+    return {
+        "selected_evidence_ids": list(selected_evidence_ids),
+        "item_count": len(evidence_package.items),
+        "document_count": len({item.document_id for item in evidence_package.items}),
+        "section_slugs": sorted(
+            {
+                item.section_slug
+                for item in evidence_package.items
+                if item.section_slug
+            }
+        )[:5],
+    }
+
+
 def _supports_execution_tier(*, available_tier: ExecutionTier, required_tier: ExecutionTier) -> bool:
     """Return whether the resolved execution tier satisfies one namespace requirement."""
 
@@ -316,6 +333,7 @@ async def _persist_query_trace(
     total_latency_ms: int,
     generator_provider: str,
     query_plan: QueryPlan | None = None,
+    evidence_debug: dict[str, object] | None = None,
     routing_decision: ExecutionRoutingDecision | None = None,
     agent_id: uuid.UUID | None = None,
     conversation_id: uuid.UUID | None = None,
@@ -355,6 +373,8 @@ async def _persist_query_trace(
                 if settings.enterprise_trace_metadata_enabled
                 else None
             ),
+            "retrieval_debug": retrieval_bundle.debug if settings.enterprise_trace_metadata_enabled else None,
+            "evidence_debug": evidence_debug if settings.enterprise_trace_metadata_enabled else None,
         },
         final_answer_redacted=response.answer,
         citations=[citation.model_dump(mode="json") for citation in response.citations],
@@ -528,6 +548,7 @@ async def execute_standard_query(
             total_latency_ms=int((time.perf_counter() - started_at) * 1000),
             generator_provider="clarification-handler-v1",
             query_plan=None,
+            evidence_debug=None,
             routing_decision=routing_decision,
             agent_id=agent_id,
             conversation_id=conversation_id,
@@ -610,6 +631,10 @@ async def execute_standard_query(
         "evidence_packaging_ms": evidence_ms,
         "answering_ms": answering_ms,
     }
+    evidence_debug = _evidence_debug_summary(
+        selected_evidence_ids=evidence_package.selected_evidence_ids,
+        evidence_package=evidence_package,
+    )
 
     trace_started = time.perf_counter()
     trace = await _persist_query_trace(
@@ -622,6 +647,7 @@ async def execute_standard_query(
         total_latency_ms=int((time.perf_counter() - started_at) * 1000),
         generator_provider=generator_provider,
         query_plan=query_plan,
+        evidence_debug=evidence_debug,
         routing_decision=routing_decision,
         agent_id=agent_id,
         conversation_id=conversation_id,
