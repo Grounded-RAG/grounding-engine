@@ -49,10 +49,10 @@ const FALLBACK_MODE_OPTIONS: ModeCapabilityResponse[] = [
   {
     mode: "thinking",
     label: "Thinking",
-    enabled: false,
+    enabled: true,
     backing_tier: "enterprise",
     description: "Deeper retrieval for harder questions.",
-    availability_reason: "coming_soon",
+    availability_reason: null,
   },
   {
     mode: "verified",

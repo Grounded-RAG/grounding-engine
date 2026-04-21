@@ -32,6 +32,14 @@ const FALLBACK_MODE_OPTIONS: ModeCapabilityResponse[] = [
     description: "Fast grounded answers for everyday document questions.",
     availability_reason: null,
   },
+  {
+    mode: "thinking",
+    label: "Thinking",
+    enabled: true,
+    backing_tier: "enterprise",
+    description: "Deeper retrieval for harder questions.",
+    availability_reason: null,
+  },
 ];
 
 export default function AgentsPage() {

@@ -343,7 +343,7 @@ function ProblemSection() {
               {[
                 "Tiered execution for different query complexity",
                 "Standard tier for fast, everyday questions",
-                ["Enterprise tier for deeper retrieval", true],
+                "Enterprise tier for deeper retrieval",
                 ["Critical tier for highest-assurance work", true],
                 "Automatic mode selection for optimal results",
               ].map((t, i) => {
@@ -387,9 +387,9 @@ function ModesSection() {
     },
     {
       name: "Thinking",
-      tag: "Coming soon",
+      tag: "Live",
       desc: "Deeper reasoning and retrieval for ambiguity-heavy questions. Multiple retrieval passes and stronger evidence selection.",
-      live: false,
+      live: true,
       icon: Brain,
     },
     {
@@ -451,9 +451,9 @@ function TiersSection() {
     },
     {
       name: "Enterprise",
-      status: "Coming soon",
+      status: "Live",
       desc: "Deeper retrieval, better ranking, smarter evidence selection. Designed for harder, more ambiguous questions. Powers Thinking mode.",
-      live: false,
+      live: true,
     },
     {
       name: "Critical",
