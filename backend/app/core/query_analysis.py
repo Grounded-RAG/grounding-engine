@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any, Literal
 
+from app.models import ExecutionTier
 
 QueryKind = Literal[
     "summary",
@@ -1011,6 +1012,138 @@ def build_query_plan(
         explanation=explain_query_plan(plan),
         used_conversation_context=plan.used_conversation_context,
     )
+
+
+def refine_query_plan_for_execution_tier(
+    plan: QueryPlan,
+    *,
+    execution_tier: ExecutionTier,
+) -> QueryPlan:
+    """Apply deeper Enterprise-only planning without changing the Standard baseline."""
+
+    if execution_tier is not ExecutionTier.ENTERPRISE:
+        return plan
+
+    retrieval_queries = _build_enterprise_retrieval_query_variants(plan)
+    if retrieval_queries == plan.retrieval_queries:
+        return plan
+
+    refined_plan = QueryPlan(
+        raw_query_text=plan.raw_query_text,
+        resolved_query_text=plan.resolved_query_text,
+        profile=plan.profile,
+        retrieval_query_text=retrieval_queries[0] if retrieval_queries else plan.retrieval_query_text,
+        retrieval_queries=retrieval_queries,
+        explanation="",
+        used_conversation_context=plan.used_conversation_context,
+    )
+    return QueryPlan(
+        raw_query_text=refined_plan.raw_query_text,
+        resolved_query_text=refined_plan.resolved_query_text,
+        profile=refined_plan.profile,
+        retrieval_query_text=refined_plan.retrieval_query_text,
+        retrieval_queries=refined_plan.retrieval_queries,
+        explanation=_enterprise_query_plan_explanation(
+            original_plan=plan,
+            refined_plan=refined_plan,
+        ),
+        used_conversation_context=refined_plan.used_conversation_context,
+    )
+
+
+def _build_enterprise_retrieval_query_variants(plan: QueryPlan) -> tuple[str, ...]:
+    """Expand only hard-query retrieval intents for Enterprise mode."""
+
+    profile = plan.profile
+    variants = list(plan.retrieval_queries)
+    core_terms = sorted(profile.terms)
+    context_terms = sorted(profile.context_terms)
+    attribute_terms = sorted(profile.attribute_terms)
+
+    if is_comparison_query(profile):
+        for attribute in attribute_terms[:2]:
+            variants.append(
+                " ".join([*context_terms[:2], attribute, "compare", "difference"]).strip()
+            )
+        if context_terms or attribute_terms:
+            variants.append(
+                " ".join(
+                    [
+                        *context_terms[:3],
+                        *(attribute_terms[:2] or core_terms[:2]),
+                        "versus",
+                    ]
+                ).strip()
+            )
+
+    if is_action_query(profile):
+        action_focus = attribute_terms[:2] or ["responsibilities"]
+        variants.append(
+            " ".join(
+                [
+                    *context_terms[:3],
+                    *action_focus,
+                    "responsibilities",
+                    "contributions",
+                    "deliverables",
+                ]
+            ).strip()
+        )
+
+    if is_entity_context_query(profile):
+        variants.append(
+            " ".join([*context_terms[:3], *core_terms[:3], "mention", "evidence"]).strip()
+        )
+
+    if profile.document_reference_rank is not None:
+        document_reference = _document_reference_phrase(profile.document_reference_rank)
+        if document_reference is not None:
+            variants.append(
+                " ".join(
+                    [
+                        document_reference,
+                        *attribute_terms[:2],
+                        *context_terms[:2],
+                        "summary",
+                    ]
+                ).strip()
+            )
+
+    if len(attribute_terms) >= 2 and profile.query_kind in {"lookup", "list", "comparison"}:
+        for attribute in attribute_terms[:2]:
+            variants.append(" ".join([attribute, *context_terms[:2], "details"]).strip())
+
+    if plan.used_conversation_context and (context_terms or core_terms):
+        variants.append(
+            " ".join(
+                [
+                    *(context_terms[:3] or core_terms[:3]),
+                    *(attribute_terms[:2] or core_terms[:2]),
+                    "follow up",
+                ]
+            ).strip()
+        )
+
+    return _dedupe_texts(variants)[:6]
+
+
+def _enterprise_query_plan_explanation(
+    *,
+    original_plan: QueryPlan,
+    refined_plan: QueryPlan,
+) -> str:
+    """Annotate the base explanation with Enterprise-only planning details."""
+
+    explanation_parts = [explain_query_plan(refined_plan)]
+    explanation_parts.append("enterprise_planning=true")
+    explanation_parts.append(
+        f"enterprise_retrieval_rewrites={len(refined_plan.retrieval_queries)}"
+    )
+    if len(refined_plan.retrieval_queries) > len(original_plan.retrieval_queries):
+        explanation_parts.append(
+            f"enterprise_added_rewrites={len(refined_plan.retrieval_queries) - len(original_plan.retrieval_queries)}"
+        )
+    return "; ".join(explanation_parts)
 
 
 def query_plan_metadata(plan: QueryPlan) -> dict[str, Any]:

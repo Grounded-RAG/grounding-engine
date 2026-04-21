@@ -19,6 +19,7 @@ from app.core.query_analysis import (
     ConversationContext,
     build_conversation_context,
     build_query_plan,
+    refine_query_plan_for_execution_tier,
     query_plan_metadata,
     QueryPlan,
 )
@@ -485,6 +486,10 @@ async def execute_standard_query(
             query_request=query_request,
             selected_mode=selected_mode,
             query_plan=query_plan,
+        )
+        query_plan = refine_query_plan_for_execution_tier(
+            query_plan,
+            execution_tier=routing_decision.effective_tier,
         )
 
     if not _supports_execution_tier(

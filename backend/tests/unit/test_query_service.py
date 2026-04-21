@@ -769,6 +769,8 @@ async def test_execute_standard_query_auto_routes_hard_query_to_enterprise(monke
 
     async def fake_retrieve_hybrid_candidates(**kwargs):
         assert kwargs["execution_tier"] is ExecutionTier.ENTERPRISE
+        assert len(kwargs["query_plan"].retrieval_queries) > 3
+        assert any("difference" in query.casefold() for query in kwargs["query_plan"].retrieval_queries)
         return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
 
     monkeypatch.setattr(
