@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+from app.models import ExecutionTier
 from app.pipeline.contracts import FusedRetrievedChunk, RetrievedChunk
 from app.services.evidence import package_evidence
 from app.services.retrieval import RetrievalBundle
@@ -518,3 +519,129 @@ def test_package_evidence_keeps_same_section_action_context() -> None:
     )
 
     assert package.selected_evidence_ids == ["exp-header", "exp-next"]
+
+
+def test_package_evidence_enterprise_keeps_contrasting_comparison_support() -> None:
+    """Enterprise packaging should keep a comparison anchor from the contrasting option."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    option_a_doc = uuid.uuid4()
+    option_b_doc = uuid.uuid4()
+    bundle = RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[
+            FusedRetrievedChunk(
+                chunk_id="option-a-cost",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=option_a_doc,
+                chunk_index=0,
+                text="Option A deployment cost is $400 per month with 99.9% uptime.",
+                fused_score=0.96,
+                sources=("dense", "sparse"),
+                section_title="Deployment Option A",
+                section_slug="deployment-option-a",
+                chunk_role="section_body",
+            ),
+            FusedRetrievedChunk(
+                chunk_id="option-a-details",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=option_a_doc,
+                chunk_index=1,
+                text="Option A needs two engineers for weekend support coverage.",
+                fused_score=0.88,
+                sources=("dense",),
+                section_title="Deployment Option A",
+                section_slug="deployment-option-a",
+                chunk_role="section_list",
+                is_list_block=True,
+            ),
+            FusedRetrievedChunk(
+                chunk_id="option-b-cost",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=option_b_doc,
+                chunk_index=0,
+                text="Option B deployment cost is $520 per month and needs one engineer.",
+                fused_score=0.91,
+                sources=("sparse",),
+                section_title="Deployment Option B",
+                section_slug="deployment-option-b",
+                chunk_role="section_body",
+            ),
+        ],
+    )
+
+    package = package_evidence(
+        bundle,
+        query_text="Compare option A and option B deployment costs and staffing.",
+        limit=2,
+        execution_tier=ExecutionTier.ENTERPRISE,
+    )
+
+    assert package.selected_evidence_ids == ["option-a-cost", "option-b-cost", "option-a-details"]
+
+
+def test_package_evidence_enterprise_keeps_three_exact_support_chunks_for_multi_part_lookup() -> None:
+    """Enterprise exact packaging may keep three answer-bearing chunks for one multi-part lookup."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    bundle = RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[
+            FusedRetrievedChunk(
+                chunk_id="pilot-start",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=0,
+                text="Pilot Overview\nThe pilot started in March 2025.",
+                fused_score=0.95,
+                sources=("dense", "sparse"),
+                section_title="Pilot Overview",
+                section_slug="pilot-overview",
+                chunk_role="section_body",
+            ),
+            FusedRetrievedChunk(
+                chunk_id="charger-installation",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=1,
+                text="Charging Infrastructure\nThe charging stations were installed in April 2025.",
+                fused_score=0.92,
+                sources=("dense",),
+                section_title="Charging Infrastructure",
+                section_slug="charging-infrastructure",
+                chunk_role="section_body",
+            ),
+            FusedRetrievedChunk(
+                chunk_id="pilot-end",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                document_id=document_id,
+                chunk_index=2,
+                text="Pilot Overview\nThe pilot ended in July 2025 after the final review.",
+                fused_score=0.89,
+                sources=("sparse",),
+                section_title="Pilot Overview",
+                section_slug="pilot-overview",
+                chunk_role="section_body",
+            ),
+        ],
+    )
+
+    package = package_evidence(
+        bundle,
+        query_text="When did the pilot start, when were the charging stations installed, and when did the pilot end?",
+        limit=1,
+        execution_tier=ExecutionTier.ENTERPRISE,
+    )
+
+    assert package.selected_evidence_ids == ["pilot-start", "charger-installation", "pilot-end"]

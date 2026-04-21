@@ -564,6 +564,7 @@ async def execute_standard_query(
     evidence_package = package_evidence(
         retrieval_bundle,
         query_text=query_plan.resolved_query_text,
+        execution_tier=routing_decision.effective_tier,
     )
     evidence_ms = int((time.perf_counter() - evidence_started) * 1000)
 

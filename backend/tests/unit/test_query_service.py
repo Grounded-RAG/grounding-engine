@@ -248,10 +248,11 @@ async def test_execute_standard_query_uses_raw_user_question_for_generation(monk
     async def fake_retrieve_hybrid_candidates(**kwargs):
         return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
 
-    def fake_package_evidence(retrieval_bundle, *, query_text=None, limit=None):
+    def fake_package_evidence(retrieval_bundle, *, query_text=None, limit=None, execution_tier=None):
         del retrieval_bundle, limit
         assert query_text is not None
         assert "language" in query_text.casefold()
+        assert execution_tier is ExecutionTier.STANDARD
         return EvidencePackage(
             retrieved_chunk_ids=["chunk-1"],
             selected_evidence_ids=["chunk-1"],
