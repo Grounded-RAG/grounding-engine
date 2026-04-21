@@ -1124,7 +1124,48 @@ def _build_enterprise_retrieval_query_variants(plan: QueryPlan) -> tuple[str, ..
             ).strip()
         )
 
+    variants.extend(_build_enterprise_decomposition_queries(plan))
     return _dedupe_texts(variants)[:6]
+
+
+def _build_enterprise_decomposition_queries(plan: QueryPlan) -> tuple[str, ...]:
+    """Break a few compound Enterprise queries into bounded retrieval intents."""
+
+    profile = plan.profile
+    context_terms = sorted(profile.context_terms)
+    attribute_terms = sorted(profile.attribute_terms)
+    decomposition_queries: list[str] = []
+
+    if (
+        profile.query_kind == "lookup"
+        and _terms_contain_token(profile.terms, "start")
+        and _terms_contain_token(profile.terms, "end")
+    ):
+        decomposition_queries.append(
+            " ".join([*context_terms[:2], "start", "date"]).strip()
+        )
+        decomposition_queries.append(
+            " ".join([*context_terms[:2], "end", "date"]).strip()
+        )
+
+    if len(attribute_terms) >= 2 and profile.query_kind in {"lookup", "list", "open"}:
+        for attribute in attribute_terms[:3]:
+            decomposition_queries.append(
+                " ".join([attribute, *context_terms[:2]]).strip()
+            )
+
+    if (
+        profile.query_kind == "action"
+        and (" and " in profile.normalized_text or "," in profile.raw_text)
+    ):
+        decomposition_queries.append(
+            " ".join([*context_terms[:3], "responsibilities"]).strip()
+        )
+        decomposition_queries.append(
+            " ".join([*context_terms[:3], "tasks"]).strip()
+        )
+
+    return _dedupe_texts(query for query in decomposition_queries if query)
 
 
 def _enterprise_query_plan_explanation(

@@ -209,6 +209,35 @@ def test_refine_query_plan_for_enterprise_adds_follow_up_focus_variant() -> None
     assert any("follow up" in query.casefold() for query in refined.retrieval_queries)
 
 
+def test_refine_query_plan_for_enterprise_decomposes_start_end_lookup() -> None:
+    """Enterprise planning should decompose start/end lookups into bounded date intents."""
+
+    plan = build_query_plan("When did the pilot start and end?")
+
+    refined = refine_query_plan_for_execution_tier(
+        plan,
+        execution_tier=ExecutionTier.ENTERPRISE,
+    )
+
+    assert any("start date" in query.casefold() for query in refined.retrieval_queries)
+    assert any("end date" in query.casefold() for query in refined.retrieval_queries)
+
+
+def test_refine_query_plan_for_enterprise_decomposes_multi_attribute_lookup() -> None:
+    """Enterprise planning should split multi-attribute lookups into tighter attribute queries."""
+
+    plan = build_query_plan("What are the methods, the tools?")
+
+    refined = refine_query_plan_for_execution_tier(
+        plan,
+        execution_tier=ExecutionTier.ENTERPRISE,
+    )
+
+    assert len(refined.retrieval_queries) > len(plan.retrieval_queries)
+    assert any("method" in query.casefold() for query in refined.retrieval_queries)
+    assert any("tool" in query.casefold() for query in refined.retrieval_queries)
+
+
 def test_build_query_plan_uses_previous_user_query_for_underspecified_follow_up() -> None:
     """Very underspecified follow-ups may safely borrow context from the prior user turn."""
 
