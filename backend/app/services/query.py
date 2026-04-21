@@ -162,10 +162,37 @@ def _requested_tier_from_mode(selected_mode: UserFacingMode | None) -> Execution
     return None
 
 
+def _enterprise_route_reasons(query_plan: QueryPlan) -> tuple[str, ...]:
+    """Return explainable triggers for minimal hard-query Enterprise routing."""
+
+    profile = query_plan.profile
+    reasons: list[str] = []
+
+    if profile.query_kind == "comparison":
+        reasons.append("comparison_query")
+    if profile.query_kind == "action":
+        reasons.append("action_query")
+    if len(profile.attribute_terms) > 1 and profile.query_kind in {"comparison", "list", "lookup"}:
+        reasons.append("multi_attribute_query")
+    if profile.document_reference_rank is not None:
+        reasons.append("document_reference_query")
+    if query_plan.used_conversation_context and profile.query_kind in {"comparison", "entity", "open", "summary"}:
+        reasons.append("follow_up_context_query")
+    if len(query_plan.retrieval_queries) >= 3 and profile.query_kind in {"comparison", "action", "entity"}:
+        reasons.append("multi_intent_retrieval")
+
+    deduped_reasons: list[str] = []
+    for reason in reasons:
+        if reason not in deduped_reasons:
+            deduped_reasons.append(reason)
+    return tuple(deduped_reasons)
+
+
 def _resolve_execution_routing(
     *,
     query_request: QueryRequest,
     selected_mode: UserFacingMode | None,
+    query_plan: QueryPlan | None = None,
 ) -> ExecutionRoutingDecision:
     """Resolve which execution tier is being requested and which is currently active."""
 
@@ -178,16 +205,30 @@ def _resolve_execution_routing(
     elif requested_from_mode is not None:
         requested_tier = requested_from_mode
         request_source = "selected_mode"
+    elif (
+        query_plan is not None
+        and selected_mode in {None, UserFacingMode.AUTO}
+        and settings.enterprise_enabled
+        and settings.enterprise_auto_routing_enabled
+        and _enterprise_route_reasons(query_plan)
+    ):
+        requested_tier = ExecutionTier.ENTERPRISE
+        request_source = "auto_router"
     else:
         requested_tier = ExecutionTier.STANDARD
         request_source = "default"
 
+    route_triggers = _enterprise_route_reasons(query_plan) if query_plan is not None else ()
     router_recommendation = requested_tier
 
     if requested_tier is ExecutionTier.ENTERPRISE:
         if settings.enterprise_enabled:
             effective_tier = ExecutionTier.ENTERPRISE
-            routing_reason = "enterprise_requested_enabled"
+            routing_reason = (
+                "enterprise_auto_hard_query"
+                if request_source == "auto_router"
+                else "enterprise_requested_enabled"
+            )
         else:
             effective_tier = ExecutionTier.STANDARD
             routing_reason = "enterprise_requested_fallback_standard"
@@ -204,6 +245,7 @@ def _resolve_execution_routing(
         effective_tier=effective_tier,
         routing_reason=routing_reason,
         request_source=request_source,
+        route_triggers=route_triggers,
     )
 
 
@@ -224,6 +266,7 @@ class ExecutionRoutingDecision:
     effective_tier: ExecutionTier
     routing_reason: str
     request_source: str
+    route_triggers: tuple[str, ...] = ()
 
     def trace_metadata(self, *, enterprise_enabled: bool) -> dict[str, object]:
         """Return compact routing metadata for persisted traces and debugging."""
@@ -234,6 +277,7 @@ class ExecutionRoutingDecision:
             "effective_tier": self.effective_tier.value,
             "routing_reason": self.routing_reason,
             "request_source": self.request_source,
+            "route_triggers": list(self.route_triggers),
             "enterprise_enabled": enterprise_enabled,
         }
 
@@ -414,23 +458,35 @@ async def execute_standard_query(
 ) -> QueryExecutionResult:
     """Run the Standard query path and persist a trace for the result."""
 
-    routing_decision = _resolve_execution_routing(
-        query_request=query_request,
-        selected_mode=selected_mode,
-    )
-    bind_execution_context(
-        requested_tier=routing_decision.requested_tier.value,
-        router_recommendation=routing_decision.router_recommendation.value,
-        effective_tier=routing_decision.effective_tier.value,
-        routing_reason=routing_decision.routing_reason,
-        selected_mode=selected_mode.value if selected_mode is not None else None,
-    )
-
     namespace = await _get_namespace_for_tenant(
         session=session,
         tenant_id=tenant_context.tenant_id,
         namespace_id=query_request.namespace_id,
     )
+    started_at = time.perf_counter()
+    query_plan: QueryPlan | None = None
+
+    if _is_smalltalk_query(query_request.query):
+        routing_decision = _resolve_execution_routing(
+            query_request=query_request,
+            selected_mode=selected_mode,
+        )
+    else:
+        query_plan = build_query_plan(
+            query_request.query,
+            conversation_context=await _resolve_conversation_context(
+                session=session,
+                tenant_id=tenant_context.tenant_id,
+                conversation_id=conversation_id,
+                current_query=query_request.query,
+            ),
+        )
+        routing_decision = _resolve_execution_routing(
+            query_request=query_request,
+            selected_mode=selected_mode,
+            query_plan=query_plan,
+        )
+
     if not _supports_execution_tier(
         available_tier=routing_decision.effective_tier,
         required_tier=namespace.min_execution_tier,
@@ -440,9 +496,15 @@ async def execute_standard_query(
             status_code=status.HTTP_409_CONFLICT,
         )
 
-    started_at = time.perf_counter()
+    bind_execution_context(
+        requested_tier=routing_decision.requested_tier.value,
+        router_recommendation=routing_decision.router_recommendation.value,
+        effective_tier=routing_decision.effective_tier.value,
+        routing_reason=routing_decision.routing_reason,
+        selected_mode=selected_mode.value if selected_mode is not None else None,
+    )
 
-    if _is_smalltalk_query(query_request.query):
+    if query_plan is None:
         retrieval_bundle = RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
         response = _smalltalk_response()
         stage_latencies_ms = {
@@ -480,16 +542,6 @@ async def execute_standard_query(
             response=response,
             trace_id=trace.trace_id,
         )
-
-    query_plan = build_query_plan(
-        query_request.query,
-        conversation_context=await _resolve_conversation_context(
-            session=session,
-            tenant_id=tenant_context.tenant_id,
-            conversation_id=conversation_id,
-            current_query=query_request.query,
-        ),
-    )
 
     retrieval_started = time.perf_counter()
     try:

@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     evidence_package_limit: int = 3
     enterprise_enabled: bool = False
     enterprise_trace_metadata_enabled: bool = True
+    enterprise_auto_routing_enabled: bool = True
     enterprise_reranker_enabled: bool = False
     enterprise_reranker_backend: RerankerBackend = "disabled"
     enterprise_reranker_candidate_limit: int = 24

@@ -136,5 +136,6 @@ def test_settings_default_enterprise_scaffolding_flags() -> None:
 
     assert settings.enterprise_enabled is False
     assert settings.enterprise_trace_metadata_enabled is True
+    assert settings.enterprise_auto_routing_enabled is True
     assert settings.enterprise_reranker_enabled is False
     assert settings.enterprise_reranker_backend == "disabled"
