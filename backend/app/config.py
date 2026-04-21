@@ -69,8 +69,8 @@ class Settings(BaseSettings):
     enterprise_enabled: bool = True
     enterprise_trace_metadata_enabled: bool = True
     enterprise_auto_routing_enabled: bool = True
-    enterprise_reranker_enabled: bool = False
-    enterprise_reranker_backend: RerankerBackend = "disabled"
+    enterprise_reranker_enabled: bool = True
+    enterprise_reranker_backend: RerankerBackend = "gemini_v1"
     enterprise_reranker_candidate_limit: int = 24
     enterprise_temporal_scoring_enabled: bool = True
     api_key_salt: str = "replace-in-local-env"
@@ -329,6 +329,16 @@ class Settings(BaseSettings):
                 warnings.append(
                     message + "dense retrieval will fail until provider embeddings are configured."
                 )
+        if (
+            self.enterprise_enabled
+            and self.enterprise_reranker_enabled
+            and self.enterprise_reranker_backend == "gemini_v1"
+            and not self.gemini_api_key
+        ):
+            warnings.append(
+                "Enterprise reranking is enabled with the Gemini backend, but GEMINI_API_KEY is missing; "
+                "Enterprise retrieval will stay enabled and fall back to fused retrieval ordering."
+            )
         if self.chunking_strategy == "deterministic_token_window_v1":
             warnings.append(
                 "CHUNKING_STRATEGY is using the deterministic token-window baseline. "

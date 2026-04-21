@@ -75,6 +75,28 @@ def test_resolve_retrieval_reranker_returns_gemini_backend_when_configured() -> 
     assert isinstance(reranker, GeminiEnterpriseReranker)
 
 
+def test_resolve_retrieval_reranker_defaults_to_gemini_when_available() -> None:
+    """The default Enterprise rollout should use Gemini reranking when credentials exist."""
+
+    reranker = resolve_retrieval_reranker(
+        execution_tier=ExecutionTier.ENTERPRISE,
+        settings=Settings(gemini_api_key="test-key"),
+    )
+
+    assert isinstance(reranker, GeminiEnterpriseReranker)
+
+
+def test_resolve_retrieval_reranker_disables_cleanly_when_default_gemini_key_missing() -> None:
+    """The default Enterprise rollout should degrade safely without Gemini credentials."""
+
+    reranker = resolve_retrieval_reranker(
+        execution_tier=ExecutionTier.ENTERPRISE,
+        settings=Settings(gemini_api_key=None),
+    )
+
+    assert isinstance(reranker, DisabledReranker)
+
+
 @pytest.mark.asyncio()
 async def test_disabled_reranker_is_pass_through() -> None:
     """Disabled reranking should preserve order and original fused scores."""
