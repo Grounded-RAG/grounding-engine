@@ -1,0 +1,30 @@
+[
+  {
+    "id": "contradiction_001",
+    "suite": "contradiction",
+    "query": "Is contractor access allowed after termination?",
+    "query_type": "contradiction",
+    "difficulty": "hard",
+    "expected_answer": "The documents conflict: one says contractor access is disabled immediately, while another says it remains active for 24 hours.",
+    "ground_truth_chunk_ids": ["access_policy_current", "access_runbook_legacy"],
+    "ground_truth_statements": [
+      "Current policy disables contractor access immediately after termination",
+      "Legacy runbook says contractor access remains active for 24 hours",
+      "The answer should disclose the conflict"
+    ],
+    "expected_behavior": "surface_conflict",
+    "domain": "security",
+    "candidate_chunks": [
+      {
+        "chunk_id": "access_policy_current",
+        "text": "Current access policy: Contractor access must be disabled immediately after termination notice is received.",
+        "document_date": "2026-02-20"
+      },
+      {
+        "chunk_id": "access_runbook_legacy",
+        "text": "Legacy access runbook: Contractor accounts remain active for up to 24 hours after termination to complete handoff tasks.",
+        "document_date": "2024-11-01"
+      }
+    ]
+  }
+]
