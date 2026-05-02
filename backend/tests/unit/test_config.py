@@ -83,3 +83,47 @@ def test_settings_reject_non_positive_retrieval_settings() -> None:
 
     with pytest.raises(ValidationError):
         Settings(rrf_smoothing_constant=0)
+
+
+def test_settings_reject_evidence_package_limit_above_retrieval_pool() -> None:
+    """Evidence packaging should not exceed the retrieved candidate pool."""
+
+    with pytest.raises(ValidationError):
+        Settings(retrieval_candidate_limit=2, evidence_package_limit=3)
+
+
+def test_settings_emit_startup_warnings_for_fallback_prone_standard_config() -> None:
+    """Startup warnings should explain when Standard will silently fall back."""
+
+    settings = Settings(
+        generator_backend="gemini_v1",
+        embedding_backend="gemini_v1",
+        chunking_strategy="deterministic_token_window_v1",
+        gemini_api_key=None,
+    )
+
+    warnings = settings.startup_warnings()
+
+    assert any("GEMINI_API_KEY" in warning for warning in warnings)
+    assert any("CHUNKING_STRATEGY" in warning for warning in warnings)
+
+
+def test_settings_warn_when_embedding_provider_is_strict_without_api_key() -> None:
+    """Embedding warnings should explain strict provider failure when fallback is disabled."""
+
+    settings = Settings(
+        embedding_backend="gemini_v1",
+        gemini_api_key=None,
+        embedding_provider_fallback_enabled=False,
+    )
+
+    warnings = settings.startup_warnings()
+
+    assert any("dense retrieval will fail" in warning for warning in warnings)
+
+
+def test_settings_reject_negative_provider_retry_backoff() -> None:
+    """Provider retry backoff should stay non-negative."""
+
+    with pytest.raises(ValidationError):
+        Settings(provider_retry_backoff_ms=-1)

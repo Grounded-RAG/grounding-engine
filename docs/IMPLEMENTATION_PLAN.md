@@ -284,6 +284,104 @@ Why it belongs here:
 
 - these are highest-latency, highest-complexity assurance features
 
+Detailed Phase 3 delivery plan:
+
+- `docs/PHASE_3_CRITICAL_PLAN.md`
+
+### Phase 4 - Adaptive Grounding and Source-Aware Intelligence
+
+**Goal:** expand Grounded beyond strict dataset-only answering without
+weakening the trust contract.
+
+Included capabilities:
+
+- grounding policy model:
+  - Strict
+  - Balanced
+  - Live
+- pluggable LLM-backed generation layer
+- source-aware routing
+- explicit model-knowledge augmentation with disclosure
+- live or external augmentation with disclosure
+- source-aware answer composition
+- richer source-disclosure and run metadata
+
+Explicitly excluded:
+
+- hidden source mixing
+- vague continuous grounding controls as the main UX model
+- unrestricted creative mode inside the same trust contract as grounded work
+- bypassing dataset policy or plan entitlement limits
+
+Exit criteria:
+
+- grounding policy is explicit and enforceable
+- generator backends are pluggable
+- mixed-source answers are clearly disclosed
+- grounded and ungrounded sections remain distinguishable
+- ambiguity handling improves without weakening trust
+
+Evaluation criteria:
+
+- groundedness
+- hallucination rate
+- ambiguity-resolution quality
+- disclosure accuracy
+- answer completeness
+- latency and cost impact
+
+Why it belongs here:
+
+- this is where Grounded becomes a source-aware reasoning system rather than
+  only a dataset-first RAG platform
+
+Detailed Phase 4 delivery plan:
+
+- `docs/PHASE_4_ADAPTIVE_GROUNDING_PLAN.md`
+
+### Phase 5 - Platform Maturity
+
+**Goal:** make Grounded enterprise-operable at scale across governance,
+connectors, operations, and deployment.
+
+Included capabilities:
+
+- connectors and sync
+- governance and identity controls
+- usage, quota, and billing visibility
+- operations and observability tooling
+- deployment and security maturity
+- evaluation and continuous-improvement operations
+
+Explicitly excluded:
+
+- redefining the core tier model
+- weakening trust and disclosure rules
+
+Exit criteria:
+
+- enterprise governance is in place
+- connectors and sync are inspectable and reliable
+- usage and billing visibility are trustworthy
+- operators can run the platform cleanly
+
+Evaluation criteria:
+
+- connector reliability
+- access-control coverage
+- metering correctness
+- operational incident visibility
+- deployment smoke coverage
+
+Why it belongs here:
+
+- after the intelligence stack is mature, the platform still needs to become
+  operationally complete
+
+Detailed Phase 5 delivery plan:
+
+- `docs/PHASE_5_PLATFORM_MATURITY_PLAN.md`
+
 ## 3. Capability Placement Summary
 
 | Capability | Phase |
@@ -302,6 +400,10 @@ Why it belongs here:
 | Grounded generation | Phase 1 |
 | Verification loop | Phase 3 |
 | FreshPrompt strategy | Phase 3 |
+| Grounding policy model | Phase 4 |
+| Source-aware routing | Phase 4 |
+| Pluggable LLM-backed generation | Phase 4 |
+| Mixed-source disclosure | Phase 4 |
 | Structured citation schema | Phase 1 |
 | Degraded response and abstention | Phase 1 |
 | Trace, audit, and evaluation | Phase 0 and Phase 1 |
@@ -318,6 +420,8 @@ Why it belongs here:
 | User-facing mode selector | Phase 1.5 |
 | Enterprise retrieval upgrades | Phase 2 |
 | Critical verification and corrective behaviors | Phase 3 |
+| Adaptive grounding policies | Phase 4 |
+| Connectors, governance, and platform operations | Phase 5 |
 
 ## 5. What We Build First
 
@@ -342,6 +446,8 @@ Now that Standard is stable:
 11. add Enterprise planner, temporal scoring, reranking, and semantic chunking evaluation
 12. activate `thinking` through the Enterprise path only after evaluation wins
 13. add Critical verification, corrective retrieval, and internal model retrieval
+14. add adaptive grounding policies, source-aware generation, and explicit mixed-source disclosure
+15. add connectors, governance, metering, and platform operations maturity
 
 ## 6. Phase 0 Alignment Fixes
 

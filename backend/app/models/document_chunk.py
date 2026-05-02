@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Computed,
     DateTime,
@@ -57,6 +58,7 @@ class DocumentChunkRecord(Base):
         Index("ix_document_chunks_tenant_id", "tenant_id"),
         Index("ix_document_chunks_namespace_id", "namespace_id"),
         Index("ix_document_chunks_doc_id", "doc_id"),
+        Index("ix_document_chunks_section_slug", "section_slug"),
         Index(
             "ix_document_chunks_search_vector",
             "search_vector",
@@ -79,6 +81,19 @@ class DocumentChunkRecord(Base):
     doc_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
+    section_title: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    section_slug: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    chunk_role: Mapped[str] = mapped_column(String(32), nullable=False, default="body")
+    starts_with_heading: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+    is_list_block: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
     search_vector: Mapped[str] = mapped_column(
         TSVECTOR,
         Computed("to_tsvector('english'::regconfig, chunk_text)", persisted=True),

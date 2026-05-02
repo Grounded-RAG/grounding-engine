@@ -28,9 +28,15 @@ class RunResponse(BaseModel):
     answer: str = Field(min_length=1)
     citations: list[CitationResponse]
     confidence_score: float = Field(ge=0.0, le=1.0)
+    confidence_label: Literal["low", "medium", "high"]
+    support_summary: Literal["grounded", "partial", "insufficient"]
     verification_status: Literal["passed", "degraded"]
     degraded_reasons: list[str]
     generator_provider: str = Field(min_length=1)
+    provider_backend: str = Field(min_length=1)
+    provider_model: str | None = None
+    provider_fallback_used: bool = False
+    provider_fallback_from: str | None = None
     retrieved_chunk_ids: list[str]
     selected_evidence_ids: list[str]
     total_latency_ms: int = Field(ge=0)

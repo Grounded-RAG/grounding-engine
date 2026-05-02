@@ -13,7 +13,7 @@ from app.services.response_shaping import (
 )
 
 
-def answer_from_evidence(
+async def answer_from_evidence(
     *,
     query_text: str,
     evidence_package: EvidencePackage,
@@ -27,7 +27,7 @@ def answer_from_evidence(
         )
 
     try:
-        draft = generate_answer_from_evidence(
+        draft = await generate_answer_from_evidence(
             query_text=query_text,
             evidence_package=evidence_package,
         )

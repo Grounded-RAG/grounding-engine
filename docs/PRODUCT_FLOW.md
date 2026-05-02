@@ -104,6 +104,7 @@ Owns:
 - attached datasets
 - default mode
 - allowed modes
+- grounding policy
 - optional tags and use case metadata
 
 ### Conversation
@@ -132,6 +133,8 @@ Owns:
 - citations
 - confidence
 - degraded reasons
+- source types used
+- grounding policy used
 - trace id
 - timing and usage metadata
 
@@ -178,6 +181,14 @@ These are product UX labels shown in the chat or agent UI.
 
 These are backend runtime tiers.
 
+### Grounding policies
+
+- `Strict`
+- `Balanced`
+- `Live`
+
+These are source-usage policies, not billing plans and not execution tiers.
+
 ### Recommended mapping
 
 | User-facing mode | Typical internal tier | Purpose |
@@ -199,6 +210,14 @@ Users should think in terms of:
 - assurance
 
 not in terms of backend routing vocabulary.
+
+### Grounding policy meaning
+
+| Grounding policy | Purpose |
+|---|---|
+| Strict | Use only dataset evidence |
+| Balanced | Use dataset evidence first, then model knowledge with disclosure |
+| Live | Use dataset evidence first, then policy-controlled live or external context with disclosure |
 
 ---
 
@@ -347,6 +366,7 @@ At query time the system should consider:
 
 - dataset minimum tier
 - agent default mode
+- agent grounding policy
 - user-selected mode
 - router recommendation
 - plan entitlement
@@ -400,18 +420,14 @@ The backend today already maps to parts of it:
 | Product object | Current backend object |
 |---|---|
 | Organization | Tenant |
-| Dataset | Namespace |
+| Workspace | Workspace |
+| Dataset | Dataset API backed by Namespace |
+| Agent | Agent |
+| Conversation | Conversation |
+| Message | Message |
 | Uploaded file | Document |
 | Ingestion progress | IngestionJob |
-| Query run / audit | QueryTrace |
-
-What does **not** exist yet as a first-class backend object:
-
-- Workspace
-- Agent
-- Conversation
-- Message
-- Run as a separate product object
+| Query run / audit | Run API backed by QueryTrace |
 
 The current backend already supports the core Standard flow:
 
@@ -421,9 +437,20 @@ The current backend already supports the core Standard flow:
 - cite
 - trace
 
-That makes it a strong foundation for the fuller product shell.
+It also supports the first product-shell backend:
 
-The concrete backend-first build order for that product shell is documented in:
+- workspaces
+- datasets
+- agents
+- conversations
+- messages
+- runs
+- dashboard
+- API keys
+
+That makes it a strong foundation for the fuller frontend and later-tier work.
+
+The concrete backend-first delivery plan for that product shell is documented in:
 
 - `docs/PHASE_1_5_BACKEND_PLAN.md`
 
@@ -471,3 +498,4 @@ Grounded's own system design.
 8. Make every important run inspectable.
 9. Favor strong defaults over too many controls.
 10. Grow product surface without weakening the Standard baseline.
+11. Keep source policy explicit whenever the system goes beyond dataset evidence.

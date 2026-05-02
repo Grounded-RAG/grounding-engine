@@ -103,6 +103,23 @@ Critical includes everything in Enterprise, plus:
 - strongest degraded behavior
 - async path for long-running high-assurance queries
 
+## What Comes After Critical
+
+After the core tier model is complete, Grounded continues in two broader
+platform phases:
+
+- **Phase 4 - Adaptive Grounding**
+  - adds grounding policies such as `Strict`, `Balanced`, and `Live`
+  - adds pluggable LLM-backed generation
+  - adds source-aware routing and explicit disclosure when the system uses more
+    than dataset evidence
+- **Phase 5 - Platform Maturity**
+  - adds connectors, governance, metering, observability, and deployment
+    maturity
+- **Phase 6 - Optimization**
+  - tunes quality, confidence calibration, latency, cost, regression safety,
+    and trust polish
+
 ## Why Grounded Is Stronger Than Basic RAG
 
 Basic RAG is often just:
@@ -122,10 +139,18 @@ precision and higher-assurance verification on top of that baseline.
 
 - `docs/PRODUCT_FLOW.md`: product objects, user journey, agents, chats, and user-facing modes
 - `docs/SOLUTION_ARCHITECTURE.md`: canonical product and capability model
+- `docs/NEXT_PHASES_ROADMAP.md`: the clearest roadmap handoff for Enterprise, Critical, later platform phases, and optimization
+- `docs/Advisor_notes.md`: cleaned advisor expectations for evaluation, benchmarking, demo scope, and final report requirements
 - `docs/SYSTEM_DESIGN.md`: product model, runtime flow, routing, and tier activation
 - `docs/IMPLEMENTATION_PLAN.md`: delivery phases from foundation to Critical tier
 - `docs/PHASE_1_5_BACKEND_PLAN.md`: concrete backend-first plan for workspaces, datasets, agents, chats, runs, and capabilities
+- `docs/PHASE_2_ENTERPRISE_PLAN.md`: detailed definition of the Enterprise tier and `Thinking`
+- `docs/PHASE_3_CRITICAL_PLAN.md`: detailed definition of the Critical tier and `Verified`
+- `docs/PHASE_4_ADAPTIVE_GROUNDING_PLAN.md`: detailed plan for source-aware grounding policies and LLM-backed generation
+- `docs/PHASE_5_PLATFORM_MATURITY_PLAN.md`: detailed plan for connectors, governance, and platform operations
+- `docs/PHASE_6_OPTIMIZATION_PLAN.md`: detailed plan for final hardening, tuning, calibration, and regression safety
 - `docs/STANDARD_TIER_PHASE1.md`: detailed description of the implemented Standard tier and Phase 1 flow
+- `docs/STANDARD_TIER_CURRENT_STATE.md`: current Standard implementation handoff
 - `docs/ENGINEERING_GUARDRAILS.md`: rules that keep implementation aligned with the architecture
 - `docs/BRIEF.md`: overview of the solution and roadmap
 - `docs/proposal.md`: project proposal

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -13,8 +14,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext
 from app.core.llm_client import GroundedGenerationError
-from app.models import ExecutionTier, Namespace, QueryTrace, UserFacingMode
+from app.core.query_analysis import (
+    ConversationContext,
+    build_conversation_context,
+    build_query_plan,
+    query_plan_metadata,
+    QueryPlan,
+)
+from app.models import ExecutionTier, MessageRole, Namespace, QueryTrace, UserFacingMode
 from app.schemas.query import GroundedAnswerResponse, QueryRequest
+from app.services.messages import MessageServiceError, list_conversation_messages
 from app.services.evidence import package_evidence
 from app.services.generation import generate_answer_from_evidence
 from app.services.response_shaping import (
@@ -32,6 +41,101 @@ class QueryServiceError(RuntimeError):
         super().__init__(detail)
         self.detail = detail
         self.status_code = status_code
+
+
+_SMALLTALK_QUERIES = {
+    "hi",
+    "hello",
+    "hey",
+    "hiya",
+    "yo",
+    "good day",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "how are you",
+    "how are u",
+    "how r u",
+    "how are you doing",
+    "can you help me",
+    "help me",
+    "who are you",
+    "what can you do",
+    "nice to meet you",
+    "ok",
+    "okay",
+    "thanks",
+    "thank you",
+    "thank you so much",
+}
+
+_GREETING_PREFIXES = ("hi", "hello", "hey", "hiya", "yo")
+
+
+def _degraded_reason_for_generation_exception(exc: Exception) -> tuple[str, str]:
+    """Map generator/shaping failures to clearer Standard degraded outcomes."""
+
+    message = str(exc).lower()
+    if "meaningful query terms" in message:
+        return (
+            "QUERY_REQUIRES_CLARIFICATION",
+            "Please ask a more specific grounded question so I can search the attached evidence.",
+        )
+    if "query-aligned support" in message:
+        return (
+            "INSUFFICIENT_QUERY_ALIGNMENT",
+            "I found related material, but not enough evidence that directly answers this question.",
+        )
+    return (
+        "INSUFFICIENT_SUPPORT",
+        "I found some related material, but not enough grounded evidence to answer confidently.",
+    )
+
+
+def _is_smalltalk_query(query_text: str) -> bool:
+    """Detect greetings and conversational filler that should clarify scope."""
+
+    normalized = re.sub(r"[^a-z0-9\s]+", " ", query_text.strip().casefold())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return False
+    if re.fullmatch(r"(?:h+i+|h+e+y+|hello+|hiya+|yo+)", normalized):
+        return True
+    if normalized in _SMALLTALK_QUERIES:
+        return True
+
+    for prefix in _GREETING_PREFIXES:
+        if normalized.startswith(f"{prefix} "):
+            remainder = normalized[len(prefix) :].strip()
+            if (
+                remainder in _SMALLTALK_QUERIES
+                or remainder in {"there", "there there"}
+                or remainder.startswith("how are you")
+                or remainder.startswith("can you help me")
+                or remainder.startswith("help me")
+                or remainder.startswith("what can you do")
+                or remainder.startswith("who are you")
+                or remainder.startswith("nice to meet you")
+            ):
+                return True
+
+    tokens = normalized.split()
+    return len(tokens) <= 4 and all(
+        token in {"hi", "hello", "hey", "hiya", "yo", "thanks", "thank", "okay", "ok"}
+        for token in tokens
+    )
+
+
+def _smalltalk_response() -> GroundedAnswerResponse:
+    """Return a friendly scoped reply for greetings and conversational filler."""
+
+    return shape_degraded_response(
+        reason="QUERY_REQUIRES_CLARIFICATION",
+        answer_text=(
+            "Hi. I am ready to help with the attached dataset. "
+            "Ask me a question about the uploaded documents and I will answer with citations when grounded evidence is available."
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -74,6 +178,7 @@ async def _persist_query_trace(
     stage_latencies_ms: dict[str, int],
     total_latency_ms: int,
     generator_provider: str,
+    query_plan: QueryPlan | None = None,
     agent_id: uuid.UUID | None = None,
     conversation_id: uuid.UUID | None = None,
     selected_mode: UserFacingMode | None = None,
@@ -95,7 +200,10 @@ async def _persist_query_trace(
         retrieved_chunk_ids=[hit.chunk_id for hit in retrieval_bundle.fused_hits],
         selected_evidence_ids=[citation.chunk_id for citation in response.citations],
         generator_provider=generator_provider,
-        verifier_result={"status": response.verification_status},
+        verifier_result={
+            "status": response.verification_status,
+            "query_plan": query_plan_metadata(query_plan) if query_plan is not None else None,
+        },
         final_answer_redacted=response.answer,
         citations=[citation.model_dump(mode="json") for citation in response.citations],
         overall_confidence=response.confidence_score,
@@ -120,6 +228,51 @@ async def _persist_query_trace(
 
     await session.refresh(trace)
     return trace
+
+
+async def _resolve_conversation_context(
+    *,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    conversation_id: uuid.UUID | None,
+    current_query: str,
+) -> ConversationContext | None:
+    """Return a lightweight rolling conversation context for follow-up expansion."""
+
+    if conversation_id is None:
+        return None
+    try:
+        messages = await list_conversation_messages(
+            session=session,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+        )
+    except MessageServiceError:
+        return None
+
+    history = list(messages)
+    if (
+        history
+        and history[-1].role is MessageRole.USER
+        and history[-1].content.strip() == current_query.strip()
+    ):
+        history = history[:-1]
+    if not history:
+        return None
+    recent_user_queries = [
+        message.content
+        for message in history
+        if message.role is MessageRole.USER
+    ][-4:]
+    recent_assistant_messages = [
+        message.content
+        for message in history
+        if message.role is MessageRole.ASSISTANT
+    ][-2:]
+    return build_conversation_context(
+        recent_user_queries=recent_user_queries,
+        recent_assistant_messages=recent_assistant_messages,
+    )
 
 
 async def _update_query_trace_timings(
@@ -167,6 +320,54 @@ async def execute_standard_query(
 
     started_at = time.perf_counter()
 
+    if _is_smalltalk_query(query_request.query):
+        retrieval_bundle = RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
+        response = _smalltalk_response()
+        stage_latencies_ms = {
+            "retrieval_ms": 0,
+            "evidence_packaging_ms": 0,
+            "answering_ms": 0,
+        }
+        trace_started = time.perf_counter()
+        trace = await _persist_query_trace(
+            session=session,
+            tenant_context=tenant_context,
+            query_request=query_request,
+            response=response,
+            retrieval_bundle=retrieval_bundle,
+            stage_latencies_ms=stage_latencies_ms,
+            total_latency_ms=int((time.perf_counter() - started_at) * 1000),
+            generator_provider="clarification-handler-v1",
+            query_plan=None,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            selected_mode=selected_mode,
+        )
+        trace_ms = int((time.perf_counter() - trace_started) * 1000)
+        await _update_query_trace_timings(
+            session=session,
+            trace=trace,
+            stage_latencies_ms={
+                **stage_latencies_ms,
+                "trace_persistence_ms": trace_ms,
+            },
+            total_latency_ms=int((time.perf_counter() - started_at) * 1000),
+        )
+        return QueryExecutionResult(
+            response=response,
+            trace_id=trace.trace_id,
+        )
+
+    query_plan = build_query_plan(
+        query_request.query,
+        conversation_context=await _resolve_conversation_context(
+            session=session,
+            tenant_id=tenant_context.tenant_id,
+            conversation_id=conversation_id,
+            current_query=query_request.query,
+        ),
+    )
+
     retrieval_started = time.perf_counter()
     try:
         retrieval_bundle = await retrieve_hybrid_candidates(
@@ -174,6 +375,7 @@ async def execute_standard_query(
             tenant_id=tenant_context.tenant_id,
             namespace_id=query_request.namespace_id,
             query_text=query_request.query,
+            query_plan=query_plan,
         )
     except RetrievalError as exc:
         raise QueryServiceError(
@@ -183,7 +385,10 @@ async def execute_standard_query(
     retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
 
     evidence_started = time.perf_counter()
-    evidence_package = package_evidence(retrieval_bundle)
+    evidence_package = package_evidence(
+        retrieval_bundle,
+        query_text=query_plan.resolved_query_text,
+    )
     evidence_ms = int((time.perf_counter() - evidence_started) * 1000)
 
     answering_started = time.perf_counter()
@@ -195,7 +400,7 @@ async def execute_standard_query(
         generator_provider = "degraded-handler-v1"
     else:
         try:
-            draft = generate_answer_from_evidence(
+            draft = await generate_answer_from_evidence(
                 query_text=query_request.query,
                 evidence_package=evidence_package,
             )
@@ -204,13 +409,11 @@ async def execute_standard_query(
                 evidence_package=evidence_package,
             )
             generator_provider = draft.generator_provider
-        except (GroundedGenerationError, ResponseShapingError):
+        except (GroundedGenerationError, ResponseShapingError) as exc:
+            degraded_reason, answer_text = _degraded_reason_for_generation_exception(exc)
             response = shape_degraded_response(
-                reason="INSUFFICIENT_SUPPORT",
-                answer_text=(
-                    "I found some related material, but not enough grounded evidence "
-                    "to answer confidently."
-                ),
+                reason=degraded_reason,
+                answer_text=answer_text,
             )
             generator_provider = "degraded-handler-v1"
     answering_ms = int((time.perf_counter() - answering_started) * 1000)
@@ -231,6 +434,7 @@ async def execute_standard_query(
         stage_latencies_ms=stage_latencies_ms,
         total_latency_ms=int((time.perf_counter() - started_at) * 1000),
         generator_provider=generator_provider,
+        query_plan=query_plan,
         agent_id=agent_id,
         conversation_id=conversation_id,
         selected_mode=selected_mode,

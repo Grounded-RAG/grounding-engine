@@ -10,7 +10,11 @@ from qdrant_client.http import models as qdrant_models
 
 from app.config import get_settings
 from app.core.embeddings import DenseEmbedding, EmbeddingError, embed_texts
-from app.core.qdrant_client import VectorStoreError, upsert_dense_points
+from app.core.qdrant_client import (
+    VectorStoreError,
+    delete_dense_points_for_document,
+    upsert_dense_points,
+)
 from app.core.storage import StorageError, download_bytes
 from app.pipeline.contracts import ChunkManifest
 from app.services.chunking import derive_chunk_manifest_key
@@ -53,6 +57,11 @@ def _build_dense_point(
             "chunk_id": chunk.chunk_id,
             "chunk_index": chunk.chunk_index,
             "text": chunk.text,
+            "section_title": chunk.section_title,
+            "section_slug": chunk.section_slug,
+            "chunk_role": chunk.chunk_role,
+            "starts_with_heading": chunk.starts_with_heading,
+            "is_list_block": chunk.is_list_block,
             "mime_type": context.mime_type,
             "title": context.title,
             "token_count": chunk.token_count,
@@ -63,6 +72,33 @@ def _build_dense_point(
             "chunking_strategy": manifest.chunking_strategy,
         },
     )
+
+
+def _embedding_text_for_chunk(
+    *,
+    context: IngestionJobContext,
+    manifest: ChunkManifest,
+    chunk_index: int,
+) -> str:
+    """Build a retrieval-oriented embedding input with light structural context."""
+
+    chunk = manifest.chunks[chunk_index]
+    prefix_lines: list[str] = []
+    normalized_chunk_text = chunk.text.casefold()
+
+    if context.title and context.title.casefold() not in normalized_chunk_text:
+        prefix_lines.append(f"Document title: {context.title}")
+    if chunk.section_title and chunk.section_title.casefold() not in normalized_chunk_text:
+        prefix_lines.append(f"Section: {chunk.section_title}")
+    if chunk.chunk_role != "body":
+        prefix_lines.append(f"Chunk role: {chunk.chunk_role.replace('_', ' ')}")
+    if chunk.is_list_block:
+        prefix_lines.append("Structure: list")
+    elif chunk.starts_with_heading:
+        prefix_lines.append("Structure: headed section")
+
+    prefix_lines.append(chunk.text)
+    return "\n".join(prefix_lines)
 
 
 async def dense_index_document(
@@ -95,7 +131,17 @@ async def dense_index_document(
         )
 
     try:
-        embeddings = await embed_texts([chunk.text for chunk in manifest.chunks])
+        embeddings = await embed_texts(
+            [
+                _embedding_text_for_chunk(
+                    context=context,
+                    manifest=manifest,
+                    chunk_index=chunk_index,
+                )
+                for chunk_index, _ in enumerate(manifest.chunks)
+            ],
+            purpose="document",
+        )
     except EmbeddingError as exc:
         raise IngestionProcessorError(
             "DENSE_EMBEDDING_FAILED",
@@ -114,6 +160,10 @@ async def dense_index_document(
     ]
 
     try:
+        delete_dense_points_for_document(
+            tenant_id=context.tenant_id,
+            document_id=context.document_id,
+        )
         points_indexed = upsert_dense_points(
             points=points,
             vector_size=vector_dimensions,

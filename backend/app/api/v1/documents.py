@@ -20,11 +20,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import TenantContext, get_tenant_context
 from app.config import get_settings
 from app.core.database import get_db_session
-from app.schemas.documents import DocumentUploadResponse, IngestionJobStatusResponse
+from app.schemas.documents import (
+    DocumentReindexResponse,
+    DocumentUploadResponse,
+    IngestionJobStatusResponse,
+)
 from app.services.documents import (
     DocumentServiceError,
     create_document_upload,
     get_ingestion_job_for_tenant,
+    reindex_document_for_tenant,
 )
 from app.workers import run_standard_ingestion_pipeline_background
 
@@ -111,4 +116,40 @@ async def get_ingestion_job_status(
         started_at=ingestion_job.started_at,
         completed_at=ingestion_job.completed_at,
         created_at=ingestion_job.created_at,
+    )
+
+
+@router.post(
+    "/documents/{document_id}/reindex",
+    response_model=DocumentReindexResponse,
+)
+async def reindex_document_route(
+    background_tasks: BackgroundTasks,
+    document_id: UUID,
+    tenant_context: TenantContext = Depends(get_tenant_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> DocumentReindexResponse:
+    """Queue one existing document for a fresh Standard ingestion run."""
+
+    try:
+        result = await reindex_document_for_tenant(
+            session=session,
+            tenant_context=tenant_context,
+            document_id=document_id,
+        )
+    except DocumentServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    if get_settings().ingestion_autorun_enabled and result.should_schedule_ingestion:
+        background_tasks.add_task(
+            run_standard_ingestion_pipeline_background,
+            result.ingestion_job.job_id,
+        )
+
+    return DocumentReindexResponse(
+        document_id=result.document.doc_id,
+        namespace_id=result.document.namespace_id,
+        job_id=result.ingestion_job.job_id,
+        document_status=result.document.status,
+        job_status=result.ingestion_job.status,
     )

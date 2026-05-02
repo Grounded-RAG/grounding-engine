@@ -375,8 +375,15 @@ def test_agent_chat_persists_messages_and_returns_run_headers(
                     }
                 ],
                 confidence_score=0.91,
+                confidence_label="high",
+                support_summary="grounded",
                 verification_status="passed",
                 degraded_reasons=[],
+                generator_provider="local-grounded-v1",
+                provider_backend="local_grounded_v1",
+                provider_model=None,
+                provider_fallback_used=False,
+                provider_fallback_from=None,
             ),
             trace_id=run_id,
         )
@@ -403,6 +410,9 @@ def test_agent_chat_persists_messages_and_returns_run_headers(
     assert payload["dataset_id"] == str(seeded_agent_chat_data.dataset_id)
     assert payload["mode"] == "auto"
     assert payload["verification_status"] == "passed"
+    assert payload["confidence_label"] == "high"
+    assert payload["support_summary"] == "grounded"
+    assert payload["provider_backend"] == "local_grounded_v1"
 
     with psycopg.connect(_sync_database_url()) as connection:
         with connection.cursor() as cursor:
@@ -511,8 +521,15 @@ def test_agent_chat_accepts_explicit_dataset_for_multi_dataset_agent(
                 answer="Research dataset answer. [E001]",
                 citations=[],
                 confidence_score=0.5,
+                confidence_label="medium",
+                support_summary="partial",
                 verification_status="degraded",
                 degraded_reasons=["INSUFFICIENT_SUPPORT"],
+                generator_provider="local-grounded-v1",
+                provider_backend="local_grounded_v1",
+                provider_model=None,
+                provider_fallback_used=False,
+                provider_fallback_from=None,
             ),
             trace_id=uuid.uuid4(),
         )

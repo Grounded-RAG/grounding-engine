@@ -1,0 +1,464 @@
+[
+  {
+    "name": "name_question_returns_profile_header",
+    "query": "What is the name of the resume owner?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Samrawit Gebremaryam Bahta",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-profile",
+        "text": "Samrawit Gebremaryam Bahta\nsamrawitgebremaryam121@gmail.com\n+251-989-985-456",
+        "score": 0.84
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-experience",
+        "text": "Professional experience: AI Engineer at iCog Labs working on grounded retrieval systems.",
+        "score": 0.91
+      }
+    ]
+  },
+  {
+    "name": "skills_question_prefers_skills_section",
+    "query": "What are her technical skills?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "PyTorch",
+      "[E002]"
+    ],
+    "expected_citation_ids": ["E002"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-awards",
+        "text": "Enhanced skills in advanced ICT and Artificial intelligence through targeted courses and workshops.",
+        "score": 0.9
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-skills",
+        "text": "TECHNICAL SKILLS\nAI & Machine Learning: PyTorch, Scikit-learn, Hugging Face, RAG.",
+        "score": 0.82
+      }
+    ]
+  },
+  {
+    "name": "education_question_returns_grounded_answer",
+    "query": "What is her education status?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "BSc in Software Engineering",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-education",
+        "text": "Education: BSc in Software Engineering at Addis Ababa Science and Technology University.",
+        "score": 0.92
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-awards",
+        "text": "Awarded for a Huawei Seeds for the Future project in China.",
+        "score": 0.75
+      }
+    ]
+  },
+  {
+    "name": "greeting_does_not_reuse_resume_content",
+    "query": "hi",
+    "expected_type": "generation_error",
+    "expected_error_contains": "meaningful query terms",
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-education",
+        "text": "Education: BSc in Software Engineering at Addis Ababa Science and Technology University.",
+        "score": 0.92
+      }
+    ]
+  },
+  {
+    "name": "award_question_ignores_irrelevant_education_chunk",
+    "query": "What awards are listed?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Huawei Seeds for the Future",
+      "[E002]"
+    ],
+    "expected_citation_ids": ["E002"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-education",
+        "text": "Education: BSc in Software Engineering at Addis Ababa Science and Technology University.",
+        "score": 0.88
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-awards",
+        "text": "Awards: Selected for Huawei Seeds for the Future and recognized on the Dean's List.",
+        "score": 0.91
+      }
+    ]
+  },
+  {
+    "name": "experience_question_prefers_experience_chunk",
+    "query": "What experience does she have at iCog Labs?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "AI Engineer",
+      "iCog Labs",
+      "[E002]"
+    ],
+    "expected_citation_ids": ["E002"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-projects",
+        "text": "Projects: Built a grounded RAG writing assistant and a travel planning assistant.",
+        "score": 0.78
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-experience",
+        "text": "Professional experience: AI Engineer at iCog Labs working on grounded retrieval, prompt pipelines, and adaptive agent behavior.",
+        "score": 0.94
+      }
+    ]
+  },
+  {
+    "name": "action_question_summarizes_responsibilities_in_context",
+    "query": "What did she do at iCog Labs?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "In icog labs",
+      "Architected and developed emotionally intelligent AI characters",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-experience",
+        "text": "PROFESSIONAL EXPERIENCE\nAI Engineer\niCog Labs\nArchitected and developed emotionally intelligent AI characters for the Hyperon Prototyping project.\nIntegrated SPMiner-inspired neural mining techniques with improved visualization modules.",
+        "score": 0.95
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-projects",
+        "text": "Projects: Built a grounded RAG writing assistant and a travel planning assistant.",
+        "score": 0.74
+      }
+    ]
+  },
+  {
+    "name": "comparison_question_answers_yes_no_with_context",
+    "query": "Is her experience only in iCog Labs?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Yes.",
+      "icog labs",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001", "E002"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-role-1",
+        "text": "AI Engineer\niCog Labs\nArchitected grounded retrieval systems.",
+        "score": 0.93
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-role-2",
+        "text": "Backend | AI Developer Intern\niCog Labs\nImplemented an Elasticsearch autocomplete system.",
+        "score": 0.91
+      }
+    ]
+  },
+  {
+    "name": "entity_context_question_answers_yes_for_matching_topic",
+    "query": "Did she work on pattern miner?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Yes.",
+      "neural mining techniques",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-experience",
+        "text": "Integrated SPMiner-inspired neural mining techniques with improved visualization modules.",
+        "score": 0.94
+      }
+    ]
+  },
+  {
+    "name": "certificate_question_prefers_certificates_section",
+    "query": "What certificates does she have?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "The listed certificates are",
+      "Deeplearning AI (Coursera)",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-certificates",
+        "text": "CERTIFICATES\nDeeplearning AI (Coursera)\nSupervised Machine Learning: Regression and Classification\nNeural Networks and Deep Learning",
+        "score": 0.91
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-awards",
+        "text": "Awards: Selected for Huawei Seeds for the Future and recognized on the Dean's List.",
+        "score": 0.82
+      }
+    ]
+  },
+  {
+    "name": "count_question_returns_grounded_numeric_answer",
+    "query": "How many projects does she have?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "The evidence shows 2 projects",
+      "Traveler's Pocket Pal",
+      "StyleCraft",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-projects",
+        "text": "PROJECTS\nThe Traveler's Pocket Pal - Travel Companion\nDeveloped an AI-powered travel assistant.\nStyleCraft - Personalized AI Writing Assistant\nBuilt a RAG-based writing system.",
+        "score": 0.93
+      }
+    ]
+  },
+  {
+    "name": "policy_requirements_question_returns_structured_list",
+    "query": "What are the retention requirements?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Employee records: retain for 7 years after account closure",
+      "Access logs: delete after 30 days unless a legal hold applies",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-policy",
+        "text": "RETENTION REQUIREMENTS\nEmployee records: retain for 7 years after account closure.\nAccess logs: delete after 30 days unless a legal hold applies.",
+        "score": 0.92
+      }
+    ]
+  },
+  {
+    "name": "biology_definition_question_returns_definition",
+    "query": "What does EGFR mean?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "EGFR is the epidermal growth factor receptor",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-biology",
+        "text": "EGFR is the epidermal growth factor receptor, a cell-surface receptor involved in signaling pathways.",
+        "score": 0.9
+      }
+    ]
+  },
+  {
+    "name": "manual_setup_question_returns_step_list",
+    "query": "What are the setup steps?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Connect the power cable",
+      "Install the desktop agent",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-manual",
+        "text": "SETUP STEPS\n1. Connect the power cable.\n2. Install the desktop agent.\n3. Sign in with your workspace account.",
+        "score": 0.91
+      }
+    ]
+  },
+  {
+    "name": "product_feature_question_returns_feature_list",
+    "query": "What features are included?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Real-time alerts",
+      "Audit logs",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-product",
+        "text": "FEATURES\nReal-time alerts\nRole-based access control\nAudit logs\nExportable reports",
+        "score": 0.9
+      }
+    ]
+  },
+  {
+    "name": "mixed_dataset_summary_mentions_multiple_documents",
+    "query": "What is the dataset about?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "customer support policy",
+      "api integration guide"
+    ],
+    "expected_citation_ids": ["E001", "E002"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-policy-summary",
+        "text": "CUSTOMER SUPPORT POLICY\nEscalation paths and response time targets.",
+        "score": 0.86
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-api-summary",
+        "text": "API INTEGRATION GUIDE\nAuthentication, rate limits, and webhook handling.",
+        "score": 0.84
+      }
+    ]
+  },
+  {
+    "name": "ocr_style_policy_list_question_still_returns_requirements",
+    "query": "What are the retention requirements?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Retain employee records for 7 years",
+      "Delete temporary access logs after 30 days",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-ocr-policy",
+        "text": "RETENTION REQUIREMENTS\n-\nRetain employee records for 7 years after account closure.\n-\nDelete temporary access logs after 30 days unless a legal hold applies.",
+        "score": 0.88
+      }
+    ]
+  },
+  {
+    "name": "table_like_manual_question_returns_structured_row_details",
+    "query": "What is the retention period for employee files?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "7 years",
+      "Employee File",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-table-manual",
+        "text": "RETENTION SCHEDULE\nRecord Type | Retention Period | Owner\nEmployee File | 7 years | HR\nAccess Logs | 30 days | Security",
+        "score": 0.9
+      }
+    ]
+  },
+  {
+    "name": "paper_summary_question_prefers_title_over_introduction_heading",
+    "query": "What is the dataset about?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "Explainable AI in Software Engineering",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-paper-summary",
+        "text": "Explainable AI in Software Engineering\nIntroduction\nThis paper examines how explainable AI methods help software teams debug, validate, and govern AI-enabled systems.",
+        "score": 0.9
+      }
+    ]
+  },
+  {
+    "name": "paper_challenges_question_extracts_prose_items_cleanly",
+    "query": "What are the challenges for xAI?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "false sense of trust",
+      "generative AI and large language models",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-paper-challenges",
+        "text": "One major challenge is that some explanations create a false sense of trust in incorrect outputs. Another emerging challenge concerns generative AI and large language models, where open-ended outputs are harder to explain safely. Finally, software teams must integrate explanations into documentation, monitoring, testing, and governance workflows.",
+        "score": 0.91
+      }
+    ]
+  },
+  {
+    "name": "paper_tools_question_extracts_relevant_tool_sentence",
+    "query": "What are the tools?",
+    "expected_type": "grounded",
+    "expected_answer_contains": [
+      "What-If Tool",
+      "visual analytics",
+      "[E001]"
+    ],
+    "expected_citation_ids": ["E001"],
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-paper-tools",
+        "text": "The What-If Tool demonstrates how visual analytics can support model debugging, feature sensitivity analysis, and fairness inspection with low coding overhead. Together with SHAP and LIME, it shows how XAI tooling is entering practical engineering workflows.",
+        "score": 0.9
+      }
+    ]
+  },
+  {
+    "name": "unrelated_query_without_alignment_fails_generation",
+    "query": "What is the weather today?",
+    "expected_type": "generation_error",
+    "expected_error_contains": "query-aligned support",
+    "evidence": [
+      {
+        "citation_id": "E001",
+        "chunk_id": "chunk-experience",
+        "text": "Professional experience: AI Engineer at iCog Labs working on grounded retrieval, prompt pipelines, and adaptive agent behavior.",
+        "score": 0.94
+      },
+      {
+        "citation_id": "E002",
+        "chunk_id": "chunk-education",
+        "text": "Education: BSc in Software Engineering at Addis Ababa Science and Technology University.",
+        "score": 0.88
+      }
+    ]
+  }
+]

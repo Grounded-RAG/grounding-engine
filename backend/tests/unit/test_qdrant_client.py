@@ -6,7 +6,10 @@ import uuid
 from types import SimpleNamespace
 
 from app.core.qdrant_client import (
+    delete_dense_points_for_document,
+    get_qdrant_client,
     ensure_qdrant_collection,
+    reset_qdrant_client,
     search_dense_points,
     upsert_dense_points,
 )
@@ -30,6 +33,9 @@ class FakeQdrantClient:
 
     def upsert(self, *, collection_name: str, points: list[object], wait: bool) -> None:
         self.upserts.append((collection_name, points, wait))
+
+    def delete(self, *, collection_name: str, points_selector: object, wait: bool) -> None:
+        self.deletes.append((collection_name, points_selector, wait))
 
     def query_points(
         self,
@@ -127,3 +133,58 @@ def test_search_dense_points_applies_tenant_namespace_filter(monkeypatch) -> Non
     assert must_conditions[0].match.value == str(tenant_id)
     assert must_conditions[1].key == "namespace_id"
     assert must_conditions[1].match.value == str(namespace_id)
+
+
+def test_delete_dense_points_for_document_applies_tenant_document_filter(monkeypatch) -> None:
+    """Dense deletion should scope cleanup to one tenant-scoped document."""
+
+    client = FakeQdrantClient()
+    client.exists = True
+    client.deletes = []
+    monkeypatch.setattr("app.core.qdrant_client.get_qdrant_client", lambda: client)
+
+    tenant_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    delete_dense_points_for_document(
+        tenant_id=tenant_id,
+        document_id=document_id,
+    )
+
+    assert len(client.deletes) == 1
+    collection_name, selector, wait = client.deletes[0]
+    assert collection_name == "grounded_chunks"
+    assert wait is True
+    must_conditions = selector.filter.must
+    assert len(must_conditions) == 2
+    assert must_conditions[0].key == "tenant_id"
+    assert must_conditions[0].match.value == str(tenant_id)
+    assert must_conditions[1].key == "document_id"
+    assert must_conditions[1].match.value == str(document_id)
+
+
+def test_get_qdrant_client_respects_compatibility_flag(monkeypatch) -> None:
+    """Qdrant client construction should use the configured compatibility policy."""
+
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, *, url: str, check_compatibility: bool) -> None:
+            captured["url"] = url
+            captured["check_compatibility"] = check_compatibility
+
+    monkeypatch.setenv("QDRANT_CHECK_COMPATIBILITY", "false")
+    monkeypatch.setattr("app.core.qdrant_client.QdrantClient", FakeClient)
+
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    reset_qdrant_client()
+    try:
+        client = get_qdrant_client()
+    finally:
+        reset_qdrant_client()
+        get_settings.cache_clear()
+
+    assert isinstance(client, FakeClient)
+    assert captured["url"] == "http://localhost:6333/"
+    assert captured["check_compatibility"] is False

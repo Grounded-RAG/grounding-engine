@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 from uuid import UUID
+
+
+ChunkingStrategy = Literal[
+    "deterministic_token_window_v1",
+    "structure_aware_v1",
+]
 
 
 @dataclass(frozen=True)
 class ChunkingConfig:
-    """Deterministic token-window chunking settings."""
+    """Chunking settings for ingestion manifests."""
 
     max_tokens: int
     overlap_tokens: int
+    strategy: ChunkingStrategy = "deterministic_token_window_v1"
 
 
 @dataclass(frozen=True)
@@ -25,8 +33,13 @@ class DocumentChunk:
     character_count: int
     start_token: int
     end_token: int
+    section_title: str | None = None
+    section_slug: str | None = None
+    chunk_role: str = "body"
+    starts_with_heading: bool = False
+    is_list_block: bool = False
 
-    def to_payload(self) -> dict[str, int | str]:
+    def to_payload(self) -> dict[str, int | str | bool | None]:
         """Return a JSON-serializable representation of the chunk."""
 
         return {
@@ -37,6 +50,11 @@ class DocumentChunk:
             "character_count": self.character_count,
             "start_token": self.start_token,
             "end_token": self.end_token,
+            "section_title": self.section_title,
+            "section_slug": self.section_slug,
+            "chunk_role": self.chunk_role,
+            "starts_with_heading": self.starts_with_heading,
+            "is_list_block": self.is_list_block,
         }
 
     @classmethod
@@ -51,6 +69,19 @@ class DocumentChunk:
             character_count=int(payload["character_count"]),
             start_token=int(payload["start_token"]),
             end_token=int(payload["end_token"]),
+            section_title=(
+                str(payload["section_title"])
+                if payload.get("section_title") is not None
+                else None
+            ),
+            section_slug=(
+                str(payload["section_slug"])
+                if payload.get("section_slug") is not None
+                else None
+            ),
+            chunk_role=str(payload.get("chunk_role", "body")),
+            starts_with_heading=bool(payload.get("starts_with_heading", False)),
+            is_list_block=bool(payload.get("is_list_block", False)),
         )
 
 
@@ -106,6 +137,11 @@ class RetrievedChunk:
     score: float
     rank: int
     source: str
+    section_title: str | None = None
+    section_slug: str | None = None
+    chunk_role: str = "body"
+    starts_with_heading: bool = False
+    is_list_block: bool = False
 
 
 @dataclass(frozen=True)
@@ -120,6 +156,11 @@ class FusedRetrievedChunk:
     text: str
     fused_score: float
     sources: tuple[str, ...]
+    section_title: str | None = None
+    section_slug: str | None = None
+    chunk_role: str = "body"
+    starts_with_heading: bool = False
+    is_list_block: bool = False
 
 
 @dataclass(frozen=True)
@@ -135,6 +176,11 @@ class EvidenceItem:
     text: str
     score: float
     sources: tuple[str, ...]
+    section_title: str | None = None
+    section_slug: str | None = None
+    chunk_role: str = "body"
+    starts_with_heading: bool = False
+    is_list_block: bool = False
 
 
 @dataclass(frozen=True)
@@ -157,6 +203,14 @@ class EvidencePackage:
                         f"document_id={item.document_id}",
                         f"chunk_index={item.chunk_index}",
                         f"sources={','.join(item.sources)}",
+                        (
+                            f"section_title={item.section_title}"
+                            if item.section_title
+                            else "section_title="
+                        ),
+                        f"chunk_role={item.chunk_role}",
+                        f"starts_with_heading={str(item.starts_with_heading).lower()}",
+                        f"is_list_block={str(item.is_list_block).lower()}",
                         item.text,
                     ]
                 )
@@ -170,4 +224,7 @@ class GroundedAnswerDraft:
 
     answer_text: str
     cited_evidence_ids: list[str]
+    citation_snippets: dict[str, str]
     generator_provider: str
+    support_coverage: float = 0.0
+    source_diversity: int = 0

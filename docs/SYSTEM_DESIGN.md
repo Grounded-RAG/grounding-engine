@@ -70,6 +70,20 @@ should expose:
 These labels map to the internal execution tiers but are not the same thing as
 the tiers themselves.
 
+### `grounding_policy`
+
+Source-usage policy that controls whether the answer may use:
+
+- only dataset evidence
+- dataset evidence plus model knowledge
+- dataset evidence plus policy-controlled live context
+
+Recommended future policies:
+
+- `Strict`
+- `Balanced`
+- `Live`
+
 ### Important rule
 
 - data belongs to tenant + namespace
@@ -147,7 +161,7 @@ The product should be built around these top-level objects:
 - Organization: billing, members, API keys, policy
 - Workspace: project area inside the organization
 - Dataset: uploaded documents plus ingestion/retrieval policy
-- Agent: reusable assistant attached to one or more datasets
+- Agent: reusable assistant attached to one or more datasets and a grounding policy
 - Conversation: one chat thread inside an agent
 - Run: one execution record behind one answer
 
@@ -155,14 +169,19 @@ The product should be built around these top-level objects:
 
 Today the backend foundation maps to the future product shell like this:
 
-- `Tenant` -> future organization
-- `Namespace` -> future dataset
+- `Tenant` -> organization
+- `Workspace` -> workspace
+- `Namespace` -> dataset storage model
+- `Dataset` API -> product-facing dataset
+- `Agent` -> agent
+- `Conversation` -> conversation
+- `Message` -> message history
 - `Document` -> uploaded file
 - `IngestionJob` -> ingestion progress
-- `QueryTrace` -> run / audit record
+- `QueryTrace` + Run API -> run / audit record
 
-Workspaces, agents, conversations, and run objects as first-class product
-resources are the next layer to add.
+The backend therefore already includes the first product-shell layer and the
+next phases focus on deeper intelligence, assurance, and platform maturity.
 
 ---
 
@@ -197,6 +216,7 @@ understood as a grouped capability architecture.
 - Grounded generation
 - Verification loop
 - FreshPrompt strategy
+- Grounding policy and source-aware generation
 - Structured citation schema
 - Degraded response and abstention behavior
 
@@ -514,3 +534,4 @@ tier phases.
 8. Keep Standard strong, narrow, and dependable.
 9. Gate advanced behavior behind evaluation and policy.
 10. Make every important decision traceable.
+11. Keep source-policy decisions explicit and auditable.

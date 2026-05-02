@@ -205,10 +205,10 @@ execution, and some are system-wide guarantees.
 
 | Capability | Description | Default placement |
 |---|---|---|
-| Query planning and transformation | Rewrite, expansion, decomposition, early-exit logic, and execution plan generation | Enterprise and Critical |
+| Query planning and transformation | Rewrite, expansion, follow-up carryover, and execution-plan shaping | Lightweight in Standard, heavier in Enterprise and Critical |
 | Hybrid retrieval with RRF | Sparse + dense retrieval merged with Reciprocal Rank Fusion | Standard and above |
 | Temporal and freshness scoring | Prefer fresher evidence when the domain or namespace requires it | Enterprise and Critical |
-| Reranking | Improve top-k relevance after initial retrieval | Enterprise and Critical |
+| Reranking | Improve top-k relevance after initial retrieval | Lightweight heuristic reranking in Standard, model-based reranking in Enterprise and Critical |
 | Internal model retrieval | Long-context retrieval bypass for selected corpora | Critical only |
 | Corrective RAG | Retrieval quality gate and policy-controlled external fallback | Critical only |
 
@@ -230,18 +230,18 @@ execution, and some are system-wide guarantees.
 | Capability | Standard Tier | Enterprise Tier | Critical Tier |
 |---|---|---|---|
 | Metadata enrichment | Yes | Yes | Yes |
-| Deterministic chunking | Yes | Yes | Yes |
+| Deterministic / structure-aware chunking | Yes | Yes | Yes |
 | Semantic chunking | No default | Feature-flagged | Allowed |
 | Namespace isolation | Yes | Yes | Yes |
-| Query planning and transformation | No default | Yes for eligible queries | Yes |
+| Query planning and transformation | Lightweight | Heavier planner / decomposition | Yes |
 | Hybrid retrieval with RRF | Yes | Yes | Yes |
 | Temporal and freshness scoring | Minimal or none | Yes | Yes |
-| Reranking | No | Yes | Yes |
+| Reranking | Lightweight heuristic | Stronger / model-based | Strongest with verification |
 | Internal model retrieval | No | No default | Yes |
 | Corrective RAG | No | No | Yes |
 | Evidence packaging and citation mapping | Yes | Yes | Yes |
 | Grounded generation | Yes | Yes | Yes |
-| Verification loop | No | Lightweight only if later approved | Yes |
+| Verification loop | Light validation only | Lightweight only if later approved | Yes |
 | FreshPrompt strategy | No | No | Yes |
 | Structured citation schema | Yes | Yes | Yes |
 | Degraded response and abstention | Yes | Yes | Yes |
@@ -252,17 +252,22 @@ execution, and some are system-wide guarantees.
 **Standard Tier**
 
 - production-safe baseline RAG
+- structure-aware chunking and semi-structured document cleanup
 - hybrid retrieval
+- lightweight query planning and follow-up carryover
+- section-aware retrieval and evidence packaging
+- lightweight reranking
 - structured cited output
-- tracing and degraded behavior
+- provider-backed generation with safe local fallback
+- tracing, confidence shaping, and degraded behavior
 - optimized for speed and dependable grounding
 
 **Enterprise Tier**
 
 - Standard plus better retrieval precision
-- planner for eligible queries
+- heavier planner for eligible queries
 - temporal scoring
-- reranking
+- model-based reranking
 - stronger evidence selection
 
 **Critical Tier**
@@ -280,6 +285,8 @@ execution, and some are system-wide guarantees.
 | Basic/native RAG | Grounded Standard Tier |
 |---|---|
 | Usually vector-only retrieval | Sparse + dense hybrid retrieval |
+| Often raw query only | Lightweight query planning and retrieval rewrites |
+| Often flat top-k chunks | Reranked and packaged evidence |
 | Often little tenant isolation | Hard tenant and namespace isolation |
 | Often weak citation discipline | Strict citation schema and evidence packaging |
 | Often no honest degraded behavior | Explicit abstention and degraded responses |
@@ -368,11 +375,12 @@ User query
   -> authentication
   -> optional agent resolution
   -> namespace policy lookup
+  -> lightweight query plan
   -> router recommendation
   -> effective tier decision
   -> sparse retrieval + dense retrieval
   -> RRF fusion
-  -> optional reranking
+  -> optional / lightweight reranking
   -> optional temporal scoring
   -> evidence packaging
   -> grounded generation

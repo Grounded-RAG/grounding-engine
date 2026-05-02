@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.config import Settings, get_settings
@@ -21,6 +22,8 @@ async def lifespan(app: FastAPI):
         environment=app.state.settings.app_env,
         version=app.state.settings.app_version,
     )
+    for warning in app.state.settings.startup_warnings():
+        logger.warning("startup_warning", detail=warning)
     yield
     logger.info("application_shutdown")
 
@@ -35,6 +38,20 @@ def create_app() -> FastAPI:
         version=settings.app_version,
         lifespan=lifespan,
     )
+    allowed_origins = [
+        origin.strip()
+        for origin in settings.cors_allowed_origins.split(",")
+        if origin.strip()
+    ]
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Trace-Id", "X-Run-Id", "X-Request-Id"],
+        )
     app.middleware("http")(request_context_middleware)
     app.include_router(api_router)
 

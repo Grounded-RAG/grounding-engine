@@ -11,6 +11,7 @@ from app.api.deps import TenantContext
 from app.models import ExecutionTier, UserFacingMode
 from app.pipeline.contracts import EvidencePackage, FusedRetrievedChunk, RetrievedChunk
 from app.schemas.query import QueryRequest
+from app.services.generation import GenerationBackend
 from app.services.query import QueryServiceError, execute_standard_query
 from app.services.retrieval import RetrievalBundle
 
@@ -23,6 +24,12 @@ class FakeScalarResult:
 
     def scalar_one_or_none(self):
         return self.value
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return []
 
 
 class FakeAsyncSession:
@@ -126,6 +133,13 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
         "app.services.query.retrieve_hybrid_candidates",
         fake_retrieve_hybrid_candidates,
     )
+    monkeypatch.setattr(
+        "app.services.generation.resolve_generation_backend",
+        lambda: GenerationBackend(
+            provider_name="local_grounded_v1",
+            implementation="local",
+        ),
+    )
 
     result = await execute_standard_query(
         session=session,
@@ -134,6 +148,8 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
     )
 
     assert result.response.verification_status == "passed"
+    assert result.response.confidence_label == "high"
+    assert result.response.support_summary == "grounded"
     assert result.response.degraded_reasons == []
     assert session.committed is True
     assert len(session.added) == 1
@@ -147,6 +163,113 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
     assert trace.generator_provider == "local-grounded-v1"
     assert trace.retrieved_chunk_ids == ["chunk-1"]
     assert trace.selected_evidence_ids == ["chunk-1"]
+    assert trace.verifier_result["query_plan"]["query_kind"] == "open"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_uses_raw_user_question_for_generation(monkeypatch) -> None:
+    """Generation should answer the raw user question even when retrieval needed follow-up resolution."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="what about that")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    from app.models import MessageRole
+
+    message = type(
+        "MessageStub",
+        (),
+        {"role": MessageRole.USER, "content": "What are the supported programming languages?"},
+    )()
+
+    captured: dict[str, str] = {}
+
+    async def fake_messages(**kwargs):
+        del kwargs
+        return [message]
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    def fake_package_evidence(retrieval_bundle, *, query_text=None, limit=None):
+        del retrieval_bundle, limit
+        assert query_text is not None
+        assert "language" in query_text.casefold()
+        return EvidencePackage(
+            retrieved_chunk_ids=["chunk-1"],
+            selected_evidence_ids=["chunk-1"],
+            items=[
+                type(
+                    "EvidenceItemStub",
+                    (),
+                    {
+                        "citation_id": "E001",
+                        "chunk_id": "chunk-1",
+                        "tenant_id": tenant_context.tenant_id,
+                        "namespace_id": namespace_id,
+                        "document_id": uuid.uuid4(),
+                        "chunk_index": 0,
+                        "text": "Programming Languages: Python, Go, TypeScript",
+                        "score": 0.95,
+                        "sources": ("dense", "sparse"),
+                        "section_title": "TECHNICAL SKILLS",
+                        "section_slug": "technical-skills",
+                        "chunk_role": "section_header",
+                        "starts_with_heading": True,
+                        "is_list_block": True,
+                    },
+                )()
+            ],
+        )
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+        del evidence_package
+        captured["query_text"] = query_text
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": "The listed programming languages are Python, Go, and TypeScript [E001]",
+                "cited_evidence_ids": ["chunk-1"],
+                "citation_snippets": {"chunk-1": "Programming Languages: Python, Go, TypeScript"},
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 1.0,
+                "source_diversity": 2,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.query.list_conversation_messages",
+        fake_messages,
+    )
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.package_evidence",
+        fake_package_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        conversation_id=conversation_id,
+    )
+
+    assert captured["query_text"] == "what about that"
 
 
 @pytest.mark.asyncio()
@@ -221,6 +344,141 @@ async def test_execute_standard_query_degrades_when_no_evidence(monkeypatch) -> 
     assert result.response.verification_status == "degraded"
     assert result.response.degraded_reasons == ["NO_GROUNDED_EVIDENCE"]
     assert result.response.citations == []
+    assert result.response.support_summary == "insufficient"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_requests_clarification_for_vague_query(monkeypatch) -> None:
+    """Very vague chat prompts should degrade as clarification requests, not false answers."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="hi")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fail_retrieve_hybrid_candidates(**kwargs):
+        del kwargs
+        raise AssertionError("Small-talk clarification should bypass retrieval.")
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fail_retrieve_hybrid_candidates,
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+    )
+
+    assert result.response.verification_status == "degraded"
+    assert result.response.degraded_reasons == ["QUERY_REQUIRES_CLARIFICATION"]
+    assert "Ask me a question about the uploaded documents" in result.response.answer
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_requests_clarification_for_combined_greeting(monkeypatch) -> None:
+    """Combined greetings like 'hi how are you' should also bypass retrieval."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="hi how are you")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fail_retrieve_hybrid_candidates(**kwargs):
+        del kwargs
+        raise AssertionError("Combined greeting clarification should bypass retrieval.")
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fail_retrieve_hybrid_candidates,
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+    )
+
+    assert result.response.verification_status == "degraded"
+    assert result.response.degraded_reasons == ["QUERY_REQUIRES_CLARIFICATION"]
+    assert "attached dataset" in result.response.answer.lower()
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_requests_clarification_for_stretched_greeting(monkeypatch) -> None:
+    """Elongated greetings like 'heyyyyyyyyy' should also bypass retrieval."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="heyyyyyyyyy")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fail_retrieve_hybrid_candidates(**kwargs):
+        del kwargs
+        raise AssertionError("Stretched greeting clarification should bypass retrieval.")
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fail_retrieve_hybrid_candidates,
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+    )
+
+    assert result.response.verification_status == "degraded"
+    assert result.response.degraded_reasons == ["QUERY_REQUIRES_CLARIFICATION"]
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_requests_clarification_for_how_are_u(monkeypatch) -> None:
+    """Short chatty variants like 'how are u' should also bypass retrieval."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="how are u")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fail_retrieve_hybrid_candidates(**kwargs):
+        del kwargs
+        raise AssertionError("Small-talk clarification should bypass retrieval.")
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fail_retrieve_hybrid_candidates,
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+    )
+
+    assert result.response.verification_status == "degraded"
+    assert result.response.degraded_reasons == ["QUERY_REQUIRES_CLARIFICATION"]
 
 
 @pytest.mark.asyncio()
@@ -242,3 +500,122 @@ async def test_execute_standard_query_rejects_higher_tier_namespace() -> None:
             tenant_context=tenant_context,
             query_request=query_request,
         )
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_uses_follow_up_context_for_second_document(monkeypatch) -> None:
+    """Follow-up summary queries should preserve document-order references in the query plan."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    query_request = QueryRequest(
+        namespace_id=namespace_id,
+        query="what about the second document",
+    )
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    captured_query_plan = None
+
+    from app.models import MessageRole
+
+    message = type("MessageStub", (), {"role": MessageRole.USER, "content": "What is the dataset about?"})()
+
+    async def fake_messages(**kwargs):
+        del kwargs
+        return [message]
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        nonlocal captured_query_plan
+        captured_query_plan = kwargs["query_plan"]
+        return RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
+
+    monkeypatch.setattr(
+        "app.services.query.list_conversation_messages",
+        fake_messages,
+    )
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        conversation_id=conversation_id,
+    )
+
+    assert captured_query_plan is not None
+    assert captured_query_plan.profile.document_reference_rank == 2
+    assert captured_query_plan.profile.query_kind == "summary"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_uses_multi_turn_conversation_context(monkeypatch) -> None:
+    """Multi-turn chat history should inform reference-heavy follow-ups beyond one prior turn."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    query_request = QueryRequest(
+        namespace_id=namespace_id,
+        query="did it mention pattern miner there",
+    )
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    captured_query_plan = None
+
+    from app.models import MessageRole
+
+    messages = [
+        type("MessageStub", (), {"role": MessageRole.USER, "content": "What is her work experience?"})(),
+        type(
+            "MessageStub",
+            (),
+            {
+                "role": MessageRole.ASSISTANT,
+                "content": "She has experience as an AI Engineer at iCog Labs and as a Backend | AI Developer Intern at iCog Labs.",
+            },
+        )(),
+        type("MessageStub", (), {"role": MessageRole.USER, "content": "What did she do at iCog Labs?"})(),
+    ]
+
+    async def fake_messages(**kwargs):
+        del kwargs
+        return messages
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        nonlocal captured_query_plan
+        captured_query_plan = kwargs["query_plan"]
+        return RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
+
+    monkeypatch.setattr(
+        "app.services.query.list_conversation_messages",
+        fake_messages,
+    )
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        conversation_id=conversation_id,
+    )
+
+    assert captured_query_plan is not None
+    assert captured_query_plan.used_conversation_context is True
+    assert "icog labs" in captured_query_plan.resolved_query_text.casefold()

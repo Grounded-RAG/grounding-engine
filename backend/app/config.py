@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import AnyHttpUrl, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.pipeline.contracts import ChunkingStrategy
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -13,6 +14,8 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 AppEnv = Literal["development", "test", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+GeneratorBackend = Literal["local_grounded_v1", "gemini_v1", "openai_compatible_v1"]
+EmbeddingBackend = Literal["local_hash_v1", "gemini_v1", "openai_compatible_v1"]
 
 
 class Settings(BaseSettings):
@@ -23,18 +26,43 @@ class Settings(BaseSettings):
     app_env: AppEnv = "development"
     log_level: LogLevel = "INFO"
     api_base_url: AnyHttpUrl = "http://localhost:8000"
+    cors_allowed_origins: str = (
+        "http://localhost:8080,"
+        "http://127.0.0.1:8080,"
+        "http://localhost:5173,"
+        "http://127.0.0.1:5173,"
+        "http://localhost:3000,"
+        "http://127.0.0.1:3000"
+    )
     database_url: str = "postgresql+asyncpg://grounded:grounded@localhost:5433/grounded"
     alembic_database_url: str = (
         "postgresql+psycopg://grounded:grounded@localhost:5433/grounded"
     )
     document_upload_max_bytes: int = 25 * 1024 * 1024
     ingestion_autorun_enabled: bool = True
+    chunking_strategy: ChunkingStrategy = "deterministic_token_window_v1"
     chunk_max_tokens: int = 256
     chunk_overlap_tokens: int = 40
+    generator_backend: GeneratorBackend = "local_grounded_v1"
+    gemini_api_key: str | None = None
+    gemini_base_url: AnyHttpUrl = "https://generativelanguage.googleapis.com/v1beta"
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_embedding_model: str = "models/gemini-embedding-001"
+    openai_api_key: str | None = None
+    openai_base_url: AnyHttpUrl = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4.1-mini"
+    openai_timeout_seconds: int = 30
+    provider_max_retries: int = 2
+    provider_retry_backoff_ms: int = 250
     qdrant_url: AnyHttpUrl = "http://localhost:6333"
     qdrant_collection: str = "grounded_chunks"
+    qdrant_check_compatibility: bool = False
+    embedding_backend: EmbeddingBackend = "local_hash_v1"
+    embedding_provider_fallback_enabled: bool = False
     dense_embedding_dimensions: int = 128
+    openai_embedding_model: str = "text-embedding-3-small"
     retrieval_candidate_limit: int = 8
+    retrieval_overfetch_factor: int = 4
     rrf_smoothing_constant: int = 60
     evidence_package_limit: int = 3
     api_key_salt: str = "replace-in-local-env"
@@ -99,6 +127,36 @@ class Settings(BaseSettings):
             raise ValueError("CHUNK_MAX_TOKENS must be greater than zero.")
         return value
 
+    @field_validator("chunking_strategy")
+    @classmethod
+    def validate_chunking_strategy(cls, value: str) -> str:
+        """Ensure the configured chunking strategy is non-empty."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("CHUNKING_STRATEGY must not be empty.")
+        return normalized
+
+    @field_validator("generator_backend")
+    @classmethod
+    def validate_generator_backend(cls, value: str) -> str:
+        """Ensure the configured generation backend is non-empty."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("GENERATOR_BACKEND must not be empty.")
+        return normalized
+
+    @field_validator("gemini_api_key", "openai_api_key")
+    @classmethod
+    def normalize_optional_secret(cls, value: str | None) -> str | None:
+        """Normalize optional provider secrets."""
+
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
     @field_validator("chunk_overlap_tokens")
     @classmethod
     def validate_chunk_overlap_tokens(cls, value: int, info: ValidationInfo) -> int:
@@ -123,6 +181,16 @@ class Settings(BaseSettings):
             raise ValueError("QDRANT_COLLECTION must not be empty.")
         return normalized
 
+    @field_validator("embedding_backend")
+    @classmethod
+    def validate_embedding_backend(cls, value: str) -> str:
+        """Ensure the embedding backend name is non-empty."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("EMBEDDING_BACKEND must not be empty.")
+        return normalized
+
     @field_validator("dense_embedding_dimensions")
     @classmethod
     def validate_dense_embedding_dimensions(cls, value: int) -> int:
@@ -134,8 +202,10 @@ class Settings(BaseSettings):
 
     @field_validator(
         "retrieval_candidate_limit",
+        "retrieval_overfetch_factor",
         "rrf_smoothing_constant",
         "evidence_package_limit",
+        "provider_max_retries",
     )
     @classmethod
     def validate_positive_retrieval_settings(cls, value: int, info: ValidationInfo) -> int:
@@ -143,6 +213,27 @@ class Settings(BaseSettings):
 
         if value <= 0:
             raise ValueError(f"{info.field_name.upper()} must be greater than zero.")
+        return value
+
+    @field_validator("provider_retry_backoff_ms")
+    @classmethod
+    def validate_provider_retry_backoff_ms(cls, value: int) -> int:
+        """Ensure provider retry backoff stays non-negative."""
+
+        if value < 0:
+            raise ValueError("PROVIDER_RETRY_BACKOFF_MS must not be negative.")
+        return value
+
+    @field_validator("evidence_package_limit")
+    @classmethod
+    def validate_evidence_package_limit(cls, value: int, info: ValidationInfo) -> int:
+        """Keep packaged evidence at or below the retrieved candidate pool."""
+
+        candidate_limit = info.data.get("retrieval_candidate_limit")
+        if isinstance(candidate_limit, int) and value > candidate_limit:
+            raise ValueError(
+                "EVIDENCE_PACKAGE_LIMIT must not exceed RETRIEVAL_CANDIDATE_LIMIT."
+            )
         return value
 
     @field_validator("api_key_salt")
@@ -190,6 +281,51 @@ class Settings(BaseSettings):
                 "S3_SECURE must match the scheme used by S3_ENDPOINT_URL."
             )
         return value
+
+    def startup_warnings(self) -> list[str]:
+        """Return non-fatal startup warnings for fallback-prone Standard config."""
+
+        warnings: list[str] = []
+        if self.generator_backend == "gemini_v1" and not self.gemini_api_key:
+            warnings.append(
+                "GENERATOR_BACKEND=gemini_v1 is configured without GEMINI_API_KEY; "
+                "Standard generation will fall back to local grounded generation."
+            )
+        if self.embedding_backend == "gemini_v1" and not self.gemini_api_key:
+            message = (
+                "EMBEDDING_BACKEND=gemini_v1 is configured without GEMINI_API_KEY; "
+            )
+            if self.embedding_provider_fallback_enabled:
+                warnings.append(
+                    message + "dense retrieval will fall back to local hash embeddings."
+                )
+            else:
+                warnings.append(
+                    message + "dense retrieval will fail until Gemini embeddings are configured."
+                )
+        if self.generator_backend == "openai_compatible_v1" and not self.openai_api_key:
+            warnings.append(
+                "GENERATOR_BACKEND=openai_compatible_v1 is configured without OPENAI_API_KEY; "
+                "Standard generation will fall back to local grounded generation."
+            )
+        if self.embedding_backend == "openai_compatible_v1" and not self.openai_api_key:
+            message = (
+                "EMBEDDING_BACKEND=openai_compatible_v1 is configured without OPENAI_API_KEY; "
+            )
+            if self.embedding_provider_fallback_enabled:
+                warnings.append(
+                    message + "dense retrieval will fall back to local hash embeddings."
+                )
+            else:
+                warnings.append(
+                    message + "dense retrieval will fail until provider embeddings are configured."
+                )
+        if self.chunking_strategy == "deterministic_token_window_v1":
+            warnings.append(
+                "CHUNKING_STRATEGY is using the deterministic token-window baseline. "
+                "Consider structure_aware_v1 for stronger Standard retrieval quality."
+            )
+        return warnings
 
 
 @lru_cache

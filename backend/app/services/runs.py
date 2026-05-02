@@ -11,6 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import QueryTrace, UserFacingMode
 from app.schemas.query import CitationResponse
 from app.schemas.runs import RunResponse
+from app.services.trust import (
+    confidence_label_for_score,
+    provider_metadata,
+    support_summary_for_response,
+)
 
 
 class RunServiceError(RuntimeError):
@@ -42,6 +47,14 @@ def _selected_mode_for_trace(trace: QueryTrace) -> UserFacingMode | None:
 def _build_run_response(trace: QueryTrace) -> RunResponse:
     """Project one persisted query trace into the product-facing run contract."""
 
+    provider_info = provider_metadata(trace.generator_provider)
+    confidence_label = confidence_label_for_score(trace.overall_confidence)
+    support_summary = support_summary_for_response(
+        confidence_score=trace.overall_confidence,
+        degraded_reasons=list(trace.degraded_reasons),
+        citation_count=len(trace.citations),
+    )
+
     return RunResponse(
         run_id=trace.trace_id,
         dataset_id=trace.namespace_id,
@@ -58,9 +71,15 @@ def _build_run_response(trace: QueryTrace) -> RunResponse:
             for citation in trace.citations
         ],
         confidence_score=trace.overall_confidence,
+        confidence_label=confidence_label,
+        support_summary=support_summary,
         verification_status=_verification_status_for_trace(trace),
         degraded_reasons=list(trace.degraded_reasons),
         generator_provider=trace.generator_provider,
+        provider_backend=str(provider_info["provider_backend"]),
+        provider_model=provider_info["provider_model"],
+        provider_fallback_used=bool(provider_info["provider_fallback_used"]),
+        provider_fallback_from=provider_info["provider_fallback_from"],
         retrieved_chunk_ids=list(trace.retrieved_chunk_ids),
         selected_evidence_ids=list(trace.selected_evidence_ids),
         total_latency_ms=trace.total_latency_ms,

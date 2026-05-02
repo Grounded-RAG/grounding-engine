@@ -36,9 +36,17 @@ Use these files as the source of truth:
 
 - `docs/PRODUCT_FLOW.md`
 - `docs/SOLUTION_ARCHITECTURE.md`
+- `docs/STANDARD_TIER_CURRENT_STATE.md`
+- `docs/NEXT_PHASES_ROADMAP.md`
+- `docs/Advisor_notes.md`
 - `docs/SYSTEM_DESIGN.md`
 - `docs/IMPLEMENTATION_PLAN.md`
 - `docs/PHASE_1_5_BACKEND_PLAN.md`
+- `docs/PHASE_2_ENTERPRISE_PLAN.md`
+- `docs/PHASE_3_CRITICAL_PLAN.md`
+- `docs/PHASE_4_ADAPTIVE_GROUNDING_PLAN.md`
+- `docs/PHASE_5_PLATFORM_MATURITY_PLAN.md`
+- `docs/PHASE_6_OPTIMIZATION_PLAN.md`
 - `docs/ENGINEERING_GUARDRAILS.md`
 - `docs/BRIEF.md`
 
@@ -61,6 +69,9 @@ The architecture-alignment follow-ups are now complete:
 - Phase 1.5: product shell and workspace model
 - Phase 2: Enterprise tier
 - Phase 3: Critical tier
+- Phase 4: adaptive grounding and source-aware intelligence
+- Phase 5: platform maturity
+- Phase 6: optimization and hardening
 
 ## Backend Next Step
 
@@ -69,8 +80,10 @@ The next concrete backend phase is `Phase 2`.
 Current delivered state:
 
 1. Phase 1 Standard backend is complete
-2. Phase 1.5 product-shell backend is complete
-3. the frontend shell is now integrated against the current backend contracts
+2. the current Standard implementation handoff is documented in:
+   - `docs/STANDARD_TIER_CURRENT_STATE.md`
+3. Phase 1.5 product-shell backend is complete
+4. the frontend shell is now integrated against the current backend contracts
 
 Phase 2 build order:
 
@@ -84,8 +97,30 @@ Phase 2 build order:
 Detailed Phase 2 plan:
 
 - `docs/PHASE_2_ENTERPRISE_PLAN.md`
+- roadmap handoff across all later phases:
+  - `docs/NEXT_PHASES_ROADMAP.md`
+
+Longer-term roadmap after Phase 2:
+
+- Phase 3 Critical assurance:
+  - `docs/PHASE_3_CRITICAL_PLAN.md`
+- Phase 4 adaptive grounding and source-aware intelligence:
+  - `docs/PHASE_4_ADAPTIVE_GROUNDING_PLAN.md`
+- Phase 5 platform maturity:
+  - `docs/PHASE_5_PLATFORM_MATURITY_PLAN.md`
+- Phase 6 optimization and hardening:
+  - `docs/PHASE_6_OPTIMIZATION_PLAN.md`
+- advisor-facing requirement mapping across phases:
+  - `docs/Advisor_notes.md`
 
 ## Team Rule
 
 If any future change affects plans, tiers, namespace policy, or routing, update
 the canonical docs in the same batch as the code change.
+
+If a future change also affects evaluation expectations, demo scope, report
+claims, or advisor-facing deliverables, update:
+
+- `docs/Advisor_notes.md`
+
+in the same batch too.
