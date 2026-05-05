@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import TenantContext, get_tenant_context
 from app.main import create_app
+from app.services import capabilities as capabilities_module
 
 
 def test_capabilities_endpoint_returns_mode_and_feature_availability() -> None:
@@ -27,9 +28,18 @@ def test_capabilities_endpoint_returns_mode_and_feature_availability() -> None:
         return tenant_context
 
     app.dependency_overrides[get_tenant_context] = override_tenant_context
+    original_get_settings = capabilities_module.get_settings
+    capabilities_module.get_settings = lambda: type(
+        "SettingsStub",
+        (),
+        {"enterprise_enabled": True, "critical_enabled": True},
+    )()
 
-    with TestClient(app) as client:
-        response = client.get("/v1/capabilities")
+    try:
+        with TestClient(app) as client:
+            response = client.get("/v1/capabilities")
+    finally:
+        capabilities_module.get_settings = original_get_settings
 
     assert response.status_code == 200
     payload = response.json()
@@ -43,8 +53,8 @@ def test_capabilities_endpoint_returns_mode_and_feature_availability() -> None:
     assert modes["instant"]["enabled"] is True
     assert modes["thinking"]["enabled"] is True
     assert modes["thinking"]["availability_reason"] is None
-    assert modes["verified"]["enabled"] is False
-    assert modes["verified"]["availability_reason"] == "coming_soon"
+    assert modes["verified"]["enabled"] is True
+    assert modes["verified"]["availability_reason"] is None
 
     features = {item["key"]: item for item in payload["features"]}
     assert features["document_upload"]["enabled"] is True
