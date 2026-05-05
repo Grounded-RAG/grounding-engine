@@ -16,6 +16,7 @@ class RunResponse(BaseModel):
     """Product-facing run record backed by one persisted query trace."""
 
     run_id: UUID
+    status: Literal["queued", "running", "completed", "failed"] = "completed"
     dataset_id: UUID | None
     agent_id: UUID | None = None
     conversation_id: UUID | None = None
