@@ -32,6 +32,7 @@ from app.services.messages import MessageServiceError, list_conversation_message
 from app.services.evidence import package_evidence
 from app.services.external_fallback import resolve_external_fallback_policy
 from app.services.generation import generate_answer_from_evidence
+from app.services.internal_model_retrieval import resolve_internal_model_retrieval_policy
 from app.services.response_shaping import (
     ResponseShapingError,
     shape_degraded_response,
@@ -622,6 +623,7 @@ def _critical_policy_metadata(*, namespace: Namespace) -> dict[str, object]:
     """Build Critical policy metadata for external and internal recovery paths."""
 
     external_fallback = resolve_external_fallback_policy(namespace=namespace)
+    internal_model_retrieval = resolve_internal_model_retrieval_policy(namespace=namespace)
     return {
         "external_fallback": {
             "allowed": external_fallback.allowed,
@@ -630,13 +632,9 @@ def _critical_policy_metadata(*, namespace: Namespace) -> dict[str, object]:
             "sources_consulted": list(external_fallback.sources_consulted),
         },
         "internal_model_retrieval": {
-            "allowed": bool(getattr(namespace, "allow_internal_model_retrieval", False)),
-            "attempted": False,
-            "reason": (
-                "policy_enabled"
-                if getattr(namespace, "allow_internal_model_retrieval", False)
-                else "policy_disabled"
-            ),
+            "allowed": internal_model_retrieval.allowed,
+            "attempted": internal_model_retrieval.attempted,
+            "reason": internal_model_retrieval.reason,
         },
     }
 
