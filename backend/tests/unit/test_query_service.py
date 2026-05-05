@@ -1299,3 +1299,90 @@ async def test_execute_standard_query_degrades_critical_contradictions(monkeypat
     assert trace.verifier_result["verification_reason"] == "CONTRADICTORY_EVIDENCE"
     assert trace.verifier_result["critical_verifier"]["decision"] == "degrade"
     assert trace.verifier_result["critical_verifier"]["contradiction_detected"] is True
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_retries_critical_support_once(monkeypatch) -> None:
+    """Critical mode should run one bounded corrective retry when support is weak."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify offline exports")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+    retrieval_calls: list[tuple[str, ...]] = []
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        retrieval_calls.append(tuple(kwargs["query_plan"].retrieval_queries))
+        if len(retrieval_calls) == 1:
+            return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+        return RetrievalBundle(
+            sparse_hits=[],
+            dense_hits=[],
+            fused_hits=[
+                FusedRetrievedChunk(
+                    chunk_id="chunk-2",
+                    tenant_id=tenant_context.tenant_id,
+                    namespace_id=namespace_id,
+                    document_id=uuid.uuid4(),
+                    chunk_index=0,
+                    text="Grounded supports offline exports.",
+                    fused_score=0.97,
+                    sources=("dense",),
+                )
+            ],
+            debug=None,
+        )
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+        del query_text
+        text = evidence_package.items[0].text
+        if "offline exports" in text:
+            answer_text = "Grounded supports offline exports [E001]."
+            chunk_id = "chunk-2"
+        else:
+            answer_text = "Grounded supports offline exports [E001]."
+            chunk_id = "chunk-1"
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": answer_text,
+                "cited_evidence_ids": [chunk_id],
+                "citation_snippets": {chunk_id: text},
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 0.98,
+                "source_diversity": 1,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    assert len(retrieval_calls) == 2
+    assert retrieval_calls[1][0] == "offline exports"
+    assert result.response.verification_status == "passed"
+    assert trace.verifier_result["verification_outcome"] == "accepted"
+    assert trace.verifier_result["critical_verifier"]["bounded_correction_attempted"] is True

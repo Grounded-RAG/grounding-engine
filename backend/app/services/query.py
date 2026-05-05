@@ -6,6 +6,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
+from dataclasses import replace
 
 from fastapi import status
 from sqlalchemy import select
@@ -570,6 +571,7 @@ def _apply_critical_verification(
         "supported_claim_count": verifier_result.supported_claim_count,
         "partially_supported_claim_count": verifier_result.partially_supported_claim_count,
         "unsupported_claim_count": verifier_result.unsupported_claim_count,
+        "retry_query_text": verifier_result.retry_query_text,
         "claims": [
             {
                 "text": claim.text,
@@ -613,6 +615,66 @@ def _apply_critical_verification(
         }
     )
     return degraded_response, metadata
+
+
+async def _run_critical_corrective_retry(
+    *,
+    session: AsyncSession,
+    tenant_context: TenantContext,
+    namespace: Namespace,
+    query_request: QueryRequest,
+    query_plan: QueryPlan,
+    retry_query_text: str,
+) -> tuple[RetrievalBundle, object, GroundedAnswerResponse, str, dict[str, object]] | None:
+    """Run one bounded corrective retrieval attempt for Critical responses."""
+
+    retry_plan = replace(
+        query_plan,
+        resolved_query_text=f"{query_plan.resolved_query_text} {retry_query_text}".strip(),
+        retrieval_query_text=retry_query_text,
+        retrieval_queries=(retry_query_text, *query_plan.retrieval_queries),
+    )
+
+    retrieval_bundle = await retrieve_hybrid_candidates(
+        session=session,
+        tenant_id=tenant_context.tenant_id,
+        namespace_id=query_request.namespace_id,
+        query_text=query_request.query,
+        query_plan=retry_plan,
+        execution_tier=ExecutionTier.CRITICAL,
+        freshness_profile=getattr(namespace, "freshness_profile", FreshnessProfile.BALANCED),
+    )
+    evidence_package = package_evidence(
+        retrieval_bundle,
+        query_text=retry_plan.resolved_query_text,
+        execution_tier=ExecutionTier.CRITICAL,
+    )
+    if not evidence_package.items:
+        return None
+
+    draft = await generate_answer_from_evidence(
+        query_text=query_request.query,
+        evidence_package=evidence_package,
+    )
+    response = shape_grounded_response(
+        draft=draft,
+        evidence_package=evidence_package,
+    )
+    response, critical_verifier_metadata = _apply_critical_verification(
+        response=response,
+        evidence_package=evidence_package,
+    )
+    critical_verifier_metadata = {
+        **critical_verifier_metadata,
+        "bounded_correction_attempted": True,
+    }
+    return (
+        retrieval_bundle,
+        evidence_package,
+        response,
+        draft.generator_provider,
+        critical_verifier_metadata,
+    )
 
 
 async def _update_query_trace_timings(
@@ -796,6 +858,35 @@ async def execute_standard_query(
                     response=response,
                     evidence_package=evidence_package,
                 )
+                retry_query_text = critical_verifier_metadata.get("retry_query_text")
+                should_retry = (
+                    critical_verifier_metadata.get("decision") in {"refuse", "degrade"}
+                    and critical_verifier_metadata.get("reason") in {"UNSUPPORTED_CLAIMS", "PARTIAL_SUPPORT"}
+                    and isinstance(retry_query_text, str)
+                    and retry_query_text.strip()
+                )
+                if should_retry:
+                    corrective_result = await _run_critical_corrective_retry(
+                        session=session,
+                        tenant_context=tenant_context,
+                        namespace=namespace,
+                        query_request=query_request,
+                        query_plan=query_plan,
+                        retry_query_text=retry_query_text.strip(),
+                    )
+                    if corrective_result is not None:
+                        (
+                            retrieval_bundle,
+                            evidence_package,
+                            response,
+                            generator_provider,
+                            critical_verifier_metadata,
+                        ) = corrective_result
+                    else:
+                        critical_verifier_metadata = {
+                            **critical_verifier_metadata,
+                            "bounded_correction_attempted": True,
+                        }
             else:
                 critical_verifier_metadata = None
         except (GroundedGenerationError, ResponseShapingError) as exc:
