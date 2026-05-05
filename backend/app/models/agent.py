@@ -93,7 +93,7 @@ class Agent(Base):
         JSONB,
         nullable=False,
         default=_default_allowed_modes,
-        server_default=text("'[\"auto\", \"instant\", \"thinking\"]'::jsonb"),
+        server_default=text("'[\"auto\", \"instant\"]'::jsonb"),
     )
     status: Mapped[AgentStatus] = mapped_column(
         sqlalchemy_enum(AgentStatus, name="agent_status_enum"),

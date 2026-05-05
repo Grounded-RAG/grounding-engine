@@ -25,7 +25,7 @@ def upgrade() -> None:
         "agents",
         "allowed_modes",
         existing_type=postgresql.JSONB(astext_type=sa.Text()),
-        server_default=sa.text("'[\"auto\", \"instant\", \"thinking\"]'::jsonb"),
+        server_default=sa.text("'[\"auto\", \"instant\"]'::jsonb"),
         existing_nullable=False,
     )
 
