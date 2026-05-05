@@ -59,6 +59,7 @@ class VerifierResult:
     supported_claim_count: int = 0
     partially_supported_claim_count: int = 0
     unsupported_claim_count: int = 0
+    retry_query_text: str | None = None
     contradiction_detected: bool = False
     bounded_correction_attempted: bool = False
 
@@ -193,12 +194,22 @@ def verify_critical_response(
             )
         )
 
+    retry_query_text: str | None = None
+
     if contradiction_detected:
         decision = "degrade"
         reason = "CONTRADICTORY_EVIDENCE"
     elif unsupported_detected:
         decision = "refuse"
         reason = "UNSUPPORTED_CLAIMS"
+        retry_terms = [
+            term
+            for claim in verified_claims
+            if claim.status == "unsupported"
+            for term in claim.missing_terms
+        ]
+        if retry_terms:
+            retry_query_text = " ".join(dict.fromkeys(retry_terms))
     elif partial_detected or response.verification_status == "degraded":
         decision = "degrade"
         reason = (
@@ -206,6 +217,14 @@ def verify_critical_response(
             if response.degraded_reasons
             else "PARTIAL_SUPPORT"
         )
+        retry_terms = [
+            term
+            for claim in verified_claims
+            if claim.status == "partially_supported"
+            for term in claim.missing_terms
+        ]
+        if retry_terms:
+            retry_query_text = " ".join(dict.fromkeys(retry_terms))
     else:
         decision = "accept"
         reason = None
@@ -218,5 +237,6 @@ def verify_critical_response(
         supported_claim_count=supported_claim_count,
         partially_supported_claim_count=partially_supported_claim_count,
         unsupported_claim_count=unsupported_claim_count,
+        retry_query_text=retry_query_text,
         contradiction_detected=contradiction_detected,
     )

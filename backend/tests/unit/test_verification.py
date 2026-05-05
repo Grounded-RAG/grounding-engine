@@ -143,6 +143,7 @@ def test_verify_critical_response_refuses_unsupported_claims() -> None:
     assert result.claims[0].status == "unsupported"
     assert result.unsupported_claims_detected is True
     assert result.unsupported_claim_count == 1
+    assert result.retry_query_text == "offline exports"
 
 
 def test_verify_critical_response_degrades_partially_supported_claims() -> None:
@@ -156,6 +157,7 @@ def test_verify_critical_response_degrades_partially_supported_claims() -> None:
     assert result.claims[0].status == "partially_supported"
     assert result.partially_supported_claim_count == 1
     assert result.supported_claim_count == 0
+    assert result.retry_query_text == "exports"
 
 
 def test_verify_critical_response_degrades_contradictory_evidence() -> None:
