@@ -1137,4 +1137,67 @@ async def test_execute_standard_query_runs_critical_verifier_when_enabled(monkey
     assert trace.verifier_result["verification_outcome"] == "degraded"
     assert trace.verifier_result["verification_reason"] == "UNSUPPORTED_CLAIMS"
     assert trace.verifier_result["critical_verifier"]["decision"] == "refuse"
+    assert trace.verifier_result["critical_verifier"]["unsupported_claim_count"] == 1
     assert trace.verifier_result["critical_verifier"]["unsupported_claims_detected"] is True
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_degrades_partial_critical_claims(monkeypatch) -> None:
+    """Critical mode should degrade partially supported claims without fully accepting them."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify tenant-safe exports")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        assert kwargs["execution_tier"] is ExecutionTier.CRITICAL
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+        del query_text, evidence_package
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": "Grounded supports tenant-safe exports [E001].",
+                "cited_evidence_ids": ["chunk-1"],
+                "citation_snippets": {"chunk-1": "Grounded supports tenant-safe uploads."},
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 0.98,
+                "source_diversity": 1,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    assert result.response.verification_status == "degraded"
+    assert result.response.support_summary == "partial"
+    assert result.response.confidence_score < 0.5
+    assert trace.verifier_result["verification_reason"] == "PARTIAL_SUPPORT"
+    assert trace.verifier_result["critical_verifier"]["decision"] == "degrade"
+    assert trace.verifier_result["critical_verifier"]["partially_supported_claim_count"] == 1

@@ -514,6 +514,9 @@ def _apply_critical_verification(
     metadata = {
         "decision": verifier_result.decision,
         "reason": verifier_result.reason,
+        "supported_claim_count": verifier_result.supported_claim_count,
+        "partially_supported_claim_count": verifier_result.partially_supported_claim_count,
+        "unsupported_claim_count": verifier_result.unsupported_claim_count,
         "claims": [
             {
                 "text": claim.text,
@@ -541,7 +544,11 @@ def _apply_critical_verification(
             "degraded_reasons": degraded_reasons,
             "support_summary": "insufficient" if verifier_result.decision == "refuse" else "partial",
             "confidence_label": "low" if verifier_result.decision == "refuse" else response.confidence_label,
-            "confidence_score": 0.0 if verifier_result.decision == "refuse" else response.confidence_score,
+            "confidence_score": (
+                0.0
+                if verifier_result.decision == "refuse"
+                else min(response.confidence_score, 0.49)
+            ),
         }
     )
     return degraded_response, metadata
