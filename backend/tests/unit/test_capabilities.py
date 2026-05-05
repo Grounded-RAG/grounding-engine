@@ -7,6 +7,7 @@ import uuid
 from app.api.deps import TenantContext
 from app.models import ExecutionTier, SubscriptionPlan, UserFacingMode
 from app.services.capabilities import build_capabilities_response
+from app.services import capabilities as capabilities_module
 
 
 def _tenant_context(
@@ -106,3 +107,28 @@ def test_capabilities_include_current_and_future_product_shell_features() -> Non
     assert features["dashboard"].availability_reason is None
     assert features["api_key_management"].enabled is True
     assert features["api_key_management"].availability_reason is None
+
+
+def test_capabilities_enable_verified_when_critical_is_live(monkeypatch) -> None:
+    """Critical-capable tenants should receive Verified once Critical is enabled."""
+
+    monkeypatch.setattr(
+        capabilities_module,
+        "get_settings",
+        lambda: type(
+            "SettingsStub",
+            (),
+            {"enterprise_enabled": True, "critical_enabled": True},
+        )(),
+    )
+
+    response = build_capabilities_response(
+        tenant_context=_tenant_context(
+            subscription_plan=SubscriptionPlan.ENTERPRISE,
+            max_execution_tier=ExecutionTier.CRITICAL,
+        )
+    )
+
+    modes = {item.mode: item for item in response.modes}
+    assert modes[UserFacingMode.VERIFIED].enabled is True
+    assert modes[UserFacingMode.VERIFIED].availability_reason is None
