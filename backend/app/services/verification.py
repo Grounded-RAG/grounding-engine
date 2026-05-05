@@ -12,6 +12,7 @@ from app.schemas.query import GroundedAnswerResponse
 _SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+_NEGATION_TERMS = {"not", "no", "never", "without", "cannot", "cant", "doesnt", "isnt"}
 _STOPWORDS = {
     "a",
     "an",
@@ -95,6 +96,42 @@ def extract_claims(answer_text: str) -> tuple[str, ...]:
     return tuple(claims or [normalized])
 
 
+def _detect_contradiction(
+    *,
+    claims: tuple[str, ...],
+    evidence_text_by_chunk: dict[str, str],
+) -> bool:
+    """Detect simple support conflicts across evidence for the same claim terms."""
+
+    if len(evidence_text_by_chunk) < 2:
+        return False
+
+    claim_terms = {
+        term
+        for claim in claims
+        for term in _claim_terms(claim)
+    }
+    if not claim_terms:
+        return False
+
+    chunk_texts = list(evidence_text_by_chunk.values())
+    has_affirming = False
+    has_negating = False
+
+    for evidence_text in chunk_texts:
+        if not any(term in evidence_text for term in claim_terms):
+            continue
+        contains_negation = any(f" {term} " in f" {evidence_text} " for term in _NEGATION_TERMS)
+        if contains_negation:
+            has_negating = True
+        else:
+            has_affirming = True
+        if has_affirming and has_negating:
+            return True
+
+    return False
+
+
 def verify_critical_response(
     *,
     response: GroundedAnswerResponse,
@@ -107,6 +144,10 @@ def verify_critical_response(
         item.chunk_id: _normalize_text(item.text)
         for item in evidence_package.items
     }
+    contradiction_detected = _detect_contradiction(
+        claims=claims,
+        evidence_text_by_chunk=evidence_text_by_chunk,
+    )
 
     verified_claims: list[VerifiedClaim] = []
     unsupported_detected = False
@@ -152,7 +193,10 @@ def verify_critical_response(
             )
         )
 
-    if unsupported_detected:
+    if contradiction_detected:
+        decision = "degrade"
+        reason = "CONTRADICTORY_EVIDENCE"
+    elif unsupported_detected:
         decision = "refuse"
         reason = "UNSUPPORTED_CLAIMS"
     elif partial_detected or response.verification_status == "degraded":
@@ -174,4 +218,5 @@ def verify_critical_response(
         supported_claim_count=supported_claim_count,
         partially_supported_claim_count=partially_supported_claim_count,
         unsupported_claim_count=unsupported_claim_count,
+        contradiction_detected=contradiction_detected,
     )

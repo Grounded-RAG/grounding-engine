@@ -542,11 +542,19 @@ def _apply_critical_verification(
         update={
             "verification_status": "degraded",
             "degraded_reasons": degraded_reasons,
-            "support_summary": "insufficient" if verifier_result.decision == "refuse" else "partial",
-            "confidence_label": "low" if verifier_result.decision == "refuse" else response.confidence_label,
+            "support_summary": (
+                "insufficient"
+                if verifier_result.decision == "refuse" or verifier_result.contradiction_detected
+                else "partial"
+            ),
+            "confidence_label": (
+                "low"
+                if verifier_result.decision == "refuse" or verifier_result.contradiction_detected
+                else response.confidence_label
+            ),
             "confidence_score": (
                 0.0
-                if verifier_result.decision == "refuse"
+                if verifier_result.decision == "refuse" or verifier_result.contradiction_detected
                 else min(response.confidence_score, 0.49)
             ),
         }
