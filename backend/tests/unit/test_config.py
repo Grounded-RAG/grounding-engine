@@ -140,6 +140,7 @@ def test_settings_default_enterprise_scaffolding_flags() -> None:
     assert settings.enterprise_reranker_enabled is True
     assert settings.enterprise_reranker_backend == "gemini_v1"
     assert settings.enterprise_temporal_scoring_enabled is True
+    assert settings.critical_enabled is False
 
 
 def test_settings_warn_when_enterprise_reranker_cannot_reach_gemini() -> None:

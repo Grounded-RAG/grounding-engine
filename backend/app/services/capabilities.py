@@ -141,6 +141,8 @@ def get_current_supported_modes() -> set[UserFacingMode]:
     supported_modes = set(_BASE_IMPLEMENTED_MODES)
     if get_settings().enterprise_enabled:
         supported_modes.add(UserFacingMode.THINKING)
+    if get_settings().critical_enabled:
+        supported_modes.add(UserFacingMode.VERIFIED)
     return supported_modes
 
 

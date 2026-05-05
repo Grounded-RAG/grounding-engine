@@ -36,6 +36,7 @@ from app.services.response_shaping import (
     shape_grounded_response,
 )
 from app.services.retrieval import RetrievalBundle, RetrievalError, retrieve_hybrid_candidates
+from app.services.verification import verify_critical_response
 
 
 logger = get_logger("app.query")
@@ -199,6 +200,11 @@ def _build_verifier_trace_result(
         "bounded_correction_attempted": False,
         "contradiction_detected": False,
         "unsupported_claims_detected": bool(degraded_reasons),
+        "critical_verifier": (
+            evidence_debug.get("critical_verifier")
+            if isinstance(evidence_debug, dict)
+            else None
+        ),
         "query_plan": query_plan_metadata(query_plan) if query_plan is not None else None,
         "execution_routing": (
             routing_decision.trace_metadata(enterprise_enabled=enterprise_enabled)
@@ -348,8 +354,12 @@ def _resolve_execution_routing(
                 else "enterprise_requested_fallback_standard"
             )
     elif requested_tier is ExecutionTier.CRITICAL:
-        effective_tier = ExecutionTier.STANDARD
-        routing_reason = "critical_requested_fallback_standard"
+        if settings.critical_enabled:
+            effective_tier = ExecutionTier.CRITICAL
+            routing_reason = "critical_requested_enabled"
+        else:
+            effective_tier = ExecutionTier.STANDARD
+            routing_reason = "critical_requested_fallback_standard"
     else:
         effective_tier = ExecutionTier.STANDARD
         routing_reason = "standard_default"
@@ -542,6 +552,54 @@ async def _resolve_conversation_context(
     )
 
 
+def _apply_critical_verification(
+    *,
+    response: GroundedAnswerResponse,
+    evidence_package,
+) -> tuple[GroundedAnswerResponse, dict[str, object]]:
+    """Apply the first strict verification pass for Critical responses."""
+
+    verifier_result = verify_critical_response(
+        response=response,
+        evidence_package=evidence_package,
+    )
+
+    metadata = {
+        "decision": verifier_result.decision,
+        "reason": verifier_result.reason,
+        "claims": [
+            {
+                "text": claim.text,
+                "status": claim.status,
+                "matched_chunk_ids": list(claim.matched_chunk_ids),
+                "missing_terms": list(claim.missing_terms),
+            }
+            for claim in verifier_result.claims
+        ],
+        "unsupported_claims_detected": verifier_result.unsupported_claims_detected,
+        "contradiction_detected": verifier_result.contradiction_detected,
+        "bounded_correction_attempted": verifier_result.bounded_correction_attempted,
+    }
+
+    if verifier_result.decision == "accept":
+        return response, metadata
+
+    degraded_reasons = list(response.degraded_reasons)
+    if verifier_result.reason and verifier_result.reason not in degraded_reasons:
+        degraded_reasons.append(verifier_result.reason)
+
+    degraded_response = response.model_copy(
+        update={
+            "verification_status": "degraded",
+            "degraded_reasons": degraded_reasons,
+            "support_summary": "insufficient" if verifier_result.decision == "refuse" else "partial",
+            "confidence_label": "low" if verifier_result.decision == "refuse" else response.confidence_label,
+            "confidence_score": 0.0 if verifier_result.decision == "refuse" else response.confidence_score,
+        }
+    )
+    return degraded_response, metadata
+
+
 async def _update_query_trace_timings(
     *,
     session: AsyncSession,
@@ -706,6 +764,7 @@ async def execute_standard_query(
             answer_text="I could not find grounded evidence for this query.",
         )
         generator_provider = "degraded-handler-v1"
+        critical_verifier_metadata = None
     else:
         try:
             draft = await generate_answer_from_evidence(
@@ -717,6 +776,13 @@ async def execute_standard_query(
                 evidence_package=evidence_package,
             )
             generator_provider = draft.generator_provider
+            if routing_decision.effective_tier is ExecutionTier.CRITICAL:
+                response, critical_verifier_metadata = _apply_critical_verification(
+                    response=response,
+                    evidence_package=evidence_package,
+                )
+            else:
+                critical_verifier_metadata = None
         except (GroundedGenerationError, ResponseShapingError) as exc:
             degraded_reason, answer_text = _degraded_reason_for_generation_exception(exc)
             response = shape_degraded_response(
@@ -724,6 +790,7 @@ async def execute_standard_query(
                 answer_text=answer_text,
             )
             generator_provider = "degraded-handler-v1"
+            critical_verifier_metadata = None
     answering_ms = int((time.perf_counter() - answering_started) * 1000)
 
     stage_latencies_ms = {
@@ -735,6 +802,11 @@ async def execute_standard_query(
         selected_evidence_ids=evidence_package.selected_evidence_ids,
         evidence_package=evidence_package,
     )
+    if critical_verifier_metadata is not None:
+        evidence_debug = {
+            **evidence_debug,
+            "critical_verifier": critical_verifier_metadata,
+        }
 
     trace_started = time.perf_counter()
     trace = await _persist_query_trace(

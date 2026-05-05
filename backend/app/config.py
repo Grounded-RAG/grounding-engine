@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     enterprise_reranker_backend: RerankerBackend = "gemini_v1"
     enterprise_reranker_candidate_limit: int = 24
     enterprise_temporal_scoring_enabled: bool = True
+    critical_enabled: bool = False
     api_key_salt: str = "replace-in-local-env"
     s3_endpoint_url: AnyHttpUrl = "http://localhost:9000"
     s3_bucket: str = "grounded-documents"
