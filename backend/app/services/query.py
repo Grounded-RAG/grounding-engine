@@ -171,6 +171,45 @@ def _log_selected_evidence(*, query_text: str, evidence_package) -> None:
     )
 
 
+def _build_verifier_trace_result(
+    *,
+    response: GroundedAnswerResponse,
+    query_plan: QueryPlan | None,
+    routing_decision: ExecutionRoutingDecision,
+    retrieval_bundle: RetrievalBundle,
+    evidence_debug: dict[str, object] | None,
+    enterprise_trace_metadata_enabled: bool,
+    enterprise_enabled: bool,
+) -> dict[str, object]:
+    """Build persisted verification metadata for current and future Critical flows."""
+
+    degraded_reasons = list(response.degraded_reasons)
+    verification_outcome = "accepted" if response.verification_status == "passed" else "degraded"
+
+    return {
+        "status": response.verification_status,
+        "verification_applied": routing_decision.requested_tier is ExecutionTier.CRITICAL,
+        "verification_outcome": verification_outcome,
+        "verification_reason": degraded_reasons[0] if degraded_reasons else None,
+        "verification_mode": (
+            "critical_requested_fallback_standard"
+            if routing_decision.requested_tier is ExecutionTier.CRITICAL
+            else "standard_response_shaping"
+        ),
+        "bounded_correction_attempted": False,
+        "contradiction_detected": False,
+        "unsupported_claims_detected": bool(degraded_reasons),
+        "query_plan": query_plan_metadata(query_plan) if query_plan is not None else None,
+        "execution_routing": (
+            routing_decision.trace_metadata(enterprise_enabled=enterprise_enabled)
+            if enterprise_trace_metadata_enabled
+            else None
+        ),
+        "retrieval_debug": retrieval_bundle.debug if enterprise_trace_metadata_enabled else None,
+        "evidence_debug": evidence_debug if enterprise_trace_metadata_enabled else None,
+    }
+
+
 def _supports_execution_tier(*, available_tier: ExecutionTier, required_tier: ExecutionTier) -> bool:
     """Return whether the resolved execution tier satisfies one namespace requirement."""
 
@@ -423,17 +462,15 @@ async def _persist_query_trace(
         retrieved_chunk_ids=[hit.chunk_id for hit in retrieval_bundle.fused_hits],
         selected_evidence_ids=[citation.chunk_id for citation in response.citations],
         generator_provider=generator_provider,
-        verifier_result={
-            "status": response.verification_status,
-            "query_plan": query_plan_metadata(query_plan) if query_plan is not None else None,
-            "execution_routing": (
-                resolved_routing.trace_metadata(enterprise_enabled=settings.enterprise_enabled)
-                if settings.enterprise_trace_metadata_enabled
-                else None
-            ),
-            "retrieval_debug": retrieval_bundle.debug if settings.enterprise_trace_metadata_enabled else None,
-            "evidence_debug": evidence_debug if settings.enterprise_trace_metadata_enabled else None,
-        },
+        verifier_result=_build_verifier_trace_result(
+            response=response,
+            query_plan=query_plan,
+            routing_decision=resolved_routing,
+            retrieval_bundle=retrieval_bundle,
+            evidence_debug=evidence_debug,
+            enterprise_trace_metadata_enabled=settings.enterprise_trace_metadata_enabled,
+            enterprise_enabled=settings.enterprise_enabled,
+        ),
         final_answer_redacted=response.answer,
         citations=[citation.model_dump(mode="json") for citation in response.citations],
         overall_confidence=response.confidence_score,
