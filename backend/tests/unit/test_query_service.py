@@ -159,6 +159,39 @@ def _retrieval_bundle(
     )
 
 
+def _conflicting_retrieval_bundle(
+    tenant_id: uuid.UUID,
+    namespace_id: uuid.UUID,
+) -> RetrievalBundle:
+    document_id = uuid.uuid4()
+    chunk_one = FusedRetrievedChunk(
+        chunk_id="chunk-1",
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        document_id=document_id,
+        chunk_index=0,
+        text="Grounded supports tenant-safe uploads.",
+        fused_score=0.95,
+        sources=("dense",),
+    )
+    chunk_two = FusedRetrievedChunk(
+        chunk_id="chunk-2",
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        document_id=document_id,
+        chunk_index=1,
+        text="Grounded does not support tenant-safe uploads.",
+        fused_score=0.92,
+        sources=("sparse",),
+    )
+    return RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[chunk_one, chunk_two],
+        debug=None,
+    )
+
+
 @pytest.mark.asyncio()
 async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeypatch) -> None:
     """Standard query execution should persist a trace for grounded answers."""
@@ -1201,3 +1234,68 @@ async def test_execute_standard_query_degrades_partial_critical_claims(monkeypat
     assert trace.verifier_result["verification_reason"] == "PARTIAL_SUPPORT"
     assert trace.verifier_result["critical_verifier"]["decision"] == "degrade"
     assert trace.verifier_result["critical_verifier"]["partially_supported_claim_count"] == 1
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_degrades_critical_contradictions(monkeypatch) -> None:
+    """Critical mode should degrade when selected evidence conflicts materially."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify tenant-safe uploads")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        assert kwargs["execution_tier"] is ExecutionTier.CRITICAL
+        return _conflicting_retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+        del query_text, evidence_package
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": "Grounded supports tenant-safe uploads [E001].",
+                "cited_evidence_ids": ["chunk-1", "chunk-2"],
+                "citation_snippets": {
+                    "chunk-1": "Grounded supports tenant-safe uploads.",
+                    "chunk-2": "Grounded does not support tenant-safe uploads.",
+                },
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 0.98,
+                "source_diversity": 2,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    assert result.response.verification_status == "degraded"
+    assert result.response.support_summary == "insufficient"
+    assert result.response.confidence_score == 0.0
+    assert trace.verifier_result["verification_reason"] == "CONTRADICTORY_EVIDENCE"
+    assert trace.verifier_result["critical_verifier"]["decision"] == "degrade"
+    assert trace.verifier_result["critical_verifier"]["contradiction_detected"] is True
