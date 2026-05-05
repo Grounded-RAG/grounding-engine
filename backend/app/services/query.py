@@ -30,6 +30,7 @@ from app.models import ExecutionTier, FreshnessProfile, MessageRole, Namespace, 
 from app.schemas.query import GroundedAnswerResponse, QueryRequest
 from app.services.messages import MessageServiceError, list_conversation_messages
 from app.services.evidence import package_evidence
+from app.services.external_fallback import resolve_external_fallback_policy
 from app.services.generation import generate_answer_from_evidence
 from app.services.response_shaping import (
     ResponseShapingError,
@@ -617,6 +618,29 @@ def _apply_critical_verification(
     return degraded_response, metadata
 
 
+def _critical_policy_metadata(*, namespace: Namespace) -> dict[str, object]:
+    """Build Critical policy metadata for external and internal recovery paths."""
+
+    external_fallback = resolve_external_fallback_policy(namespace=namespace)
+    return {
+        "external_fallback": {
+            "allowed": external_fallback.allowed,
+            "reason": external_fallback.reason,
+            "attempted": external_fallback.attempted,
+            "sources_consulted": list(external_fallback.sources_consulted),
+        },
+        "internal_model_retrieval": {
+            "allowed": bool(getattr(namespace, "allow_internal_model_retrieval", False)),
+            "attempted": False,
+            "reason": (
+                "policy_enabled"
+                if getattr(namespace, "allow_internal_model_retrieval", False)
+                else "policy_disabled"
+            ),
+        },
+    }
+
+
 async def _run_critical_corrective_retry(
     *,
     session: AsyncSession,
@@ -912,6 +936,11 @@ async def execute_standard_query(
         evidence_debug = {
             **evidence_debug,
             "critical_verifier": critical_verifier_metadata,
+        }
+    if routing_decision.effective_tier is ExecutionTier.CRITICAL:
+        evidence_debug = {
+            **evidence_debug,
+            "critical_policy": _critical_policy_metadata(namespace=namespace),
         }
 
     trace_started = time.perf_counter()
