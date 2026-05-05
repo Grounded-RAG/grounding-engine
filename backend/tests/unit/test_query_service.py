@@ -1430,3 +1430,45 @@ async def test_execute_standard_query_persists_critical_policy_metadata(monkeypa
     assert trace.verifier_result["evidence_debug"]["critical_policy"]["external_fallback"]["allowed"] is True
     assert trace.verifier_result["evidence_debug"]["critical_policy"]["external_fallback"]["reason"] == "allowlisted_policy_enabled"
     assert trace.verifier_result["evidence_debug"]["critical_policy"]["internal_model_retrieval"]["allowed"] is False
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_persists_internal_model_retrieval_policy(monkeypatch) -> None:
+    """Critical traces should show when internal model retrieval is policy-enabled."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify tenant-safe uploads")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {
+            "min_execution_tier": ExecutionTier.STANDARD,
+            "allow_web_fallback": False,
+            "allow_internal_model_retrieval": True,
+        },
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    assert trace.verifier_result["evidence_debug"]["critical_policy"]["internal_model_retrieval"]["allowed"] is True
+    assert trace.verifier_result["evidence_debug"]["critical_policy"]["internal_model_retrieval"]["reason"] == "policy_enabled"
