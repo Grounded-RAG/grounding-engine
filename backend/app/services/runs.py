@@ -44,6 +44,15 @@ def _selected_mode_for_trace(trace: QueryTrace) -> UserFacingMode | None:
     return trace.selected_mode
 
 
+def _run_status_for_trace(trace: QueryTrace) -> str:
+    """Return a stable run status for current and future async Critical flows."""
+
+    status_value = trace.verifier_result.get("run_status")
+    if status_value in {"queued", "running", "completed", "failed"}:
+        return status_value
+    return "completed"
+
+
 def _build_run_response(trace: QueryTrace) -> RunResponse:
     """Project one persisted query trace into the product-facing run contract."""
 
@@ -57,6 +66,7 @@ def _build_run_response(trace: QueryTrace) -> RunResponse:
 
     return RunResponse(
         run_id=trace.trace_id,
+        status=_run_status_for_trace(trace),
         dataset_id=trace.namespace_id,
         agent_id=trace.agent_id,
         conversation_id=trace.conversation_id,

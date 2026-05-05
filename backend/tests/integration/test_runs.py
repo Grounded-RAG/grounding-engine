@@ -479,6 +479,7 @@ def test_run_list_returns_recent_runs_and_supports_dataset_filter(
     assert payload[0]["dataset_id"] == str(seeded_run_data.dataset_id)
     assert payload[0]["agent_id"] == str(seeded_run_data.agent_id)
     assert payload[0]["conversation_id"] == str(seeded_run_data.conversation_id)
+    assert payload[0]["status"] == "completed"
     assert payload[0]["selected_mode"] == "instant"
     assert payload[0]["verification_status"] == "passed"
     assert payload[0]["confidence_label"] == "high"
@@ -530,6 +531,7 @@ def test_run_get_returns_structured_run_details(
     assert response.status_code == 200
     payload = response.json()
     assert payload["run_id"] == str(seeded_run_data.newest_run_id)
+    assert payload["status"] == "completed"
     assert payload["dataset_id"] == str(seeded_run_data.dataset_id)
     assert payload["agent_id"] == str(seeded_run_data.agent_id)
     assert payload["conversation_id"] == str(seeded_run_data.conversation_id)
