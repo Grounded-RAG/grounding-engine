@@ -75,10 +75,10 @@ const FALLBACK_MODE_OPTIONS: ModeCapabilityResponse[] = [
   {
     mode: "verified",
     label: "Verified",
-    enabled: false,
+    enabled: true,
     backing_tier: "critical",
     description: "Highest-assurance path for sensitive work.",
-    availability_reason: "coming_soon",
+    availability_reason: null,
   },
 ];
 
@@ -339,7 +339,7 @@ export default function AgentChatPage() {
 
   const modeOptions = useMemo(() => {
     const capabilityModes = capabilitiesQuery.data?.modes ?? FALLBACK_MODE_OPTIONS;
-    return capabilityModes.filter((mode) => mode.mode !== "verified");
+    return capabilityModes;
   }, [agentQuery.data?.allowed_modes, capabilitiesQuery.data?.modes]);
 
   useEffect(() => {
