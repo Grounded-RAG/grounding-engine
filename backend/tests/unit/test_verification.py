@@ -92,3 +92,17 @@ def test_verify_critical_response_refuses_unsupported_claims() -> None:
     assert result.reason == "UNSUPPORTED_CLAIMS"
     assert result.claims[0].status == "unsupported"
     assert result.unsupported_claims_detected is True
+    assert result.unsupported_claim_count == 1
+
+
+def test_verify_critical_response_degrades_partially_supported_claims() -> None:
+    result = verify_critical_response(
+        response=_response("Grounded supports tenant-safe exports."),
+        evidence_package=_evidence_package("Grounded supports tenant-safe uploads."),
+    )
+
+    assert result.decision == "degrade"
+    assert result.reason == "PARTIAL_SUPPORT"
+    assert result.claims[0].status == "partially_supported"
+    assert result.partially_supported_claim_count == 1
+    assert result.supported_claim_count == 0

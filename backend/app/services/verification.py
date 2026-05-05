@@ -55,6 +55,9 @@ class VerifierResult:
     reason: str | None
     claims: tuple[VerifiedClaim, ...]
     unsupported_claims_detected: bool
+    supported_claim_count: int = 0
+    partially_supported_claim_count: int = 0
+    unsupported_claim_count: int = 0
     contradiction_detected: bool = False
     bounded_correction_attempted: bool = False
 
@@ -108,6 +111,9 @@ def verify_critical_response(
     verified_claims: list[VerifiedClaim] = []
     unsupported_detected = False
     partial_detected = False
+    supported_claim_count = 0
+    partially_supported_claim_count = 0
+    unsupported_claim_count = 0
 
     for claim in claims:
         terms = _claim_terms(claim)
@@ -124,14 +130,18 @@ def verify_critical_response(
 
         if not terms:
             status = "supported"
+            supported_claim_count += 1
         elif not matched_chunk_ids:
             status = "unsupported"
             unsupported_detected = True
+            unsupported_claim_count += 1
         elif missing_terms:
             status = "partially_supported"
             partial_detected = True
+            partially_supported_claim_count += 1
         else:
             status = "supported"
+            supported_claim_count += 1
 
         verified_claims.append(
             VerifiedClaim(
@@ -147,7 +157,11 @@ def verify_critical_response(
         reason = "UNSUPPORTED_CLAIMS"
     elif partial_detected or response.verification_status == "degraded":
         decision = "degrade"
-        reason = "PARTIAL_SUPPORT"
+        reason = (
+            response.degraded_reasons[0]
+            if response.degraded_reasons
+            else "PARTIAL_SUPPORT"
+        )
     else:
         decision = "accept"
         reason = None
@@ -157,4 +171,7 @@ def verify_critical_response(
         reason=reason,
         claims=tuple(verified_claims),
         unsupported_claims_detected=unsupported_detected,
+        supported_claim_count=supported_claim_count,
+        partially_supported_claim_count=partially_supported_claim_count,
+        unsupported_claim_count=unsupported_claim_count,
     )
