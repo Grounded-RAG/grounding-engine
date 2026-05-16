@@ -2,55 +2,66 @@
 
 ## 7.1 Conclusion of the Study
 
-This study set out to solve a practical problem that many organizations now face: they want to use AI over their own documents, but they do not want the complexity, fragility, and uncertainty that often comes with building RAG systems themselves.
+This study began from a clear research problem: basic Retrieval-Augmented Generation is useful, but it still has important weaknesses for real-world use. In particular, ordinary RAG often suffers from pipeline complexity, unreliable retrieval, and query ambiguity. These weaknesses can lead to weak evidence selection, hallucination risk, low user trust, and difficulty in deploying grounded AI as a practical organizational system.
 
-The study showed that the challenge is not only technical and not only product-related. It is both.
+The study responded to this problem by first asking how basic RAG could be improved so that it becomes more adaptive, more grounded, more reliable, and more practical. Based on that research understanding, the project designed an advanced adaptive grounding pipeline that strengthens the handling of query interpretation, evidence preparation, retrieval, ranking, answer shaping, and trust support.
 
-On the technical side, grounded document AI must handle retrieval quality, ambiguity, traceability, and answer trust.
+However, the contribution of the study did not stop at pipeline design. The project used the improved grounding approach as the intelligence core of a real software platform. This product contribution is equally important. Instead of expecting organizations to build and manage their own RAG systems, Grounded AI gives them a platform where they can upload documents, organize them into datasets, attach those datasets to agents, ask grounded questions through chat, inspect outputs, and manage access through the product environment.
 
-On the product side, organizations need a system they can actually use. They need to upload files, organize them into datasets, create agents, ask questions through chat, inspect prior runs, and manage access safely.
+Therefore, the final contribution of the study has two parts.
 
-Grounded AI was designed and implemented as a response to both needs. The final system is a usable product platform for organizational knowledge interaction. It includes:
+### 7.1.1 Research Contribution
 
-- workspace creation
-- dataset formation
-- document upload and ingestion tracking
-- reusable agents
-- dataset-attached chat workflows
-- run inspection
-- dashboard visibility
-- API key management
+The study contributes an approach for improving on basic RAG through a stronger adaptive pipeline that is more suitable for organizational use than a simple vector-retrieve-and-generate path.
 
-At the same time, it includes an internal grounding engine that transforms uploaded data into evidence-backed answers. This makes the platform more than a general assistant. It becomes a system for grounded use of organizational knowledge.
+### 7.1.2 Product Contribution
 
-The main contribution of the study is therefore the balance it achieves. It does not remain only at the level of RAG research, and it does not reduce the product to a thin interface over weak retrieval. Instead, it connects a grounded backend with a real user-facing product.
+The study contributes a grounded AI platform that makes the improved pipeline usable in practice through datasets, uploads, agents, chat, run inspection, dashboard workflows, and access control.
+
+### 7.1.3 Final Conclusion
+
+The project shows that a strong organizational document-intelligence system requires more than a language model and more than a few retrieved chunks. It requires careful design of retrieval quality, ambiguity handling, trust support, and user-facing workflows. Grounded AI demonstrates that these concerns can be brought together into one coherent final-year project that is both research-driven and product-oriented.
 
 ## 7.2 Recommendations of the Study
 
 ### 7.2.1 Recommendations for Practice
 
-The following recommendations arise from the completed work:
+Based on the findings of the study, the following recommendations are made.
 
-1. organizations should adopt dataset-based knowledge organization instead of querying large unstructured document pools directly
-2. grounded AI products should provide reusable agents rather than only a single generic assistant
-3. chat interfaces for document AI should be linked to citations and run traces
-4. AI products for organizations should reduce setup complexity through containerized infrastructure and API-driven access
-5. trust and visibility should be treated as core product features, not optional extras
+1. organizations should not rely on basic RAG alone when trust and reliability matter
+2. grounded AI systems should improve retrieval quality rather than depending on one simple retrieval mode
+3. ambiguous queries should be handled deliberately before retrieval rather than being passed through unchanged
+4. organizational document-intelligence systems should expose citations and traceability as first-class features
+5. RAG systems should be delivered as usable products with datasets, chat workflows, and visibility rather than only as technical pipelines
 
 ### 7.2.2 Recommendations for Further Development
 
-Several areas provide strong opportunities for future improvement.
+Although the delivered system is strong within its scope, several areas offer meaningful future development opportunities.
 
-1. add broader connectors beyond direct file upload
-2. strengthen evaluation with larger benchmarks and user studies
-3. deepen governance features such as role-based access control and broader enterprise policies
-4. improve retrieval calibration and evidence ranking further
-5. expand agent capabilities and workflow automation around organizational tasks
+#### Broader Data Connectors
+
+The platform can be extended beyond direct file upload to include deeper integrations with external repositories and enterprise systems.
+
+#### Stronger Verification
+
+Future work can expand verification logic, contradiction handling, and evidence-quality assessment.
+
+#### Richer Agent Workflows
+
+Agent behavior can be extended with more specialized grounded roles, team-level configurations, and collaborative workflows.
+
+#### Expanded Organizational Governance
+
+Future versions can include stronger enterprise access models, role-based control, and governance tooling.
+
+#### Larger-Scale Evaluation
+
+The project can be evaluated further through larger user studies, retrieval benchmarks, and longitudinal organizational testing.
 
 ### 7.2.3 Final Recommendation
 
-Grounded AI should be viewed as a strong foundation for continued development in grounded organizational AI. It demonstrates that companies and users can be given a practical product for uploading and using their own knowledge, while the complexity of grounded retrieval and answer construction is managed within the system rather than pushed onto the user.
+The study recommends Grounded AI as a strong foundation for future work in grounded organizational document intelligence. Its greatest strength is that it does not choose between research quality and product usability. Instead, it combines both into one system.
 
 ## 7.3 Chapter Summary
 
-This chapter concluded the study by showing that the project successfully combined research and implementation into one coherent result. Grounded AI emerged as a product-ready platform in which organizational users can upload knowledge, organize it through datasets, interact through agents and chat, and receive more grounded and inspectable answers than they would from a generic AI assistant.
+This chapter concluded the study by restating the central research and product outcomes of the project. The study began by identifying serious weaknesses in basic RAG, designed an improved adaptive approach to address those weaknesses, and then transformed that approach into a usable grounded AI platform for organizations and users. The result is a system that makes grounded document intelligence more practical, more trustworthy, and easier to use than basic RAG approaches alone.

@@ -1,192 +1,240 @@
 # Chapter Five: System Implementation
 
-## 5.1 Overview
+## 5.1 Reviewing the Design Solution
 
-This chapter explains how Grounded AI was implemented as a real product platform for organizational document intelligence. The implementation is not limited to a research pipeline. It includes the complete user-facing system through which users sign in, create workspaces, form datasets, upload documents, create agents, use chat, inspect runs, and manage API keys.
+The implementation stage began after the system design had clearly established the two main contributions of the project.
 
-At the same time, the implementation also includes the internal grounding logic that makes the product meaningful. That internal logic handles ingestion, retrieval, answer shaping, and trace persistence behind the product workflows.
+The first contribution is the research contribution: improving on basic RAG by addressing pipeline complexity, unreliable retrieval, and query ambiguity.
 
-## 5.2 Implementation Strategy
+The second contribution is the product contribution: building a real grounded AI platform for organizations and users so that they can use the improved pipeline without building RAG themselves.
 
-The implementation followed a product-first but grounding-aware strategy.
+Before implementation, the design was reviewed against the following questions:
 
-1. define the main product objects such as workspace, dataset, document, agent, conversation, and run
-2. implement the backend APIs and services around those objects
-3. implement ingestion so uploaded files become usable knowledge
-4. implement grounded retrieval and response flows
-5. implement frontend pages that expose the product clearly to users
-6. connect the product layer and grounding layer through traceable workflows
+1. does the system really improve on basic RAG rather than merely reproduce it?
+2. does the system turn the improved pipeline into a usable product?
+3. can organizations upload and organize their knowledge without managing the internal complexity themselves?
+4. can users interact through datasets, agents, and chat rather than only low-level technical endpoints?
+5. does the final implementation preserve groundedness, citations, trust signals, and traceability?
 
-This strategy helped ensure that the system was not only academically interesting but also usable by organizations.
+The answer to these questions guided the implementation strategy. As a result, development proceeded with two parallel implementation goals:
 
-## 5.3 Development Tools and Technologies
+1. implement the advanced grounding pipeline correctly
+2. implement the user-facing and organization-facing product workflows around it
 
-### 5.3.1 Programming Languages
+## 5.2 Deciding on the Development Tools
+
+The implementation required tools suited for both AI-oriented backend workflows and a practical product interface.
+
+### 5.2.1 Programming Languages
 
 The system uses:
 
-- Python for backend services and data-processing logic
-- TypeScript for frontend development
+- Python for backend services, ingestion, retrieval, and grounding logic
+- TypeScript for frontend development and typed client-side workflows
 
-### 5.3.2 Backend Technologies
+Python was selected for its strong ecosystem in API development, document processing, and AI integration. TypeScript was selected to improve maintainability and correctness in frontend product development.
 
-The backend was implemented with:
+### 5.2.2 Backend Framework and Tools
+
+The backend uses:
 
 - FastAPI
-- SQLAlchemy
+- SQLAlchemy Async ORM
 - Alembic
-- Pydantic schemas
+- provider adapters and retrieval-related services
 
-These tools were selected because they support API-first development, schema validation, modular service organization, and clean data modeling.
+FastAPI was chosen because it supports modern asynchronous API development, structured schemas, and service-oriented design.
 
-### 5.3.3 Frontend Technologies
+### 5.2.3 Frontend Framework and Tools
 
-The frontend was implemented with:
+The frontend uses:
 
 - React
 - TypeScript
 - React Router
 - TanStack Query
 - Tailwind CSS
+- Framer Motion
 
-These tools were selected to support a responsive product interface with page-based workflows and API-driven state updates.
+These tools support the development of a complete product experience including datasets, agents, chat, dashboard, and settings workflows.
 
-### 5.3.4 Infrastructure Technologies
+### 5.2.4 Storage and Retrieval Tools
 
-The infrastructure stack includes:
+The system uses:
 
-- PostgreSQL
-- Qdrant
-- MinIO
-- Redis
-- Docker Compose
+- PostgreSQL for operational persistence and sparse retrieval support
+- Qdrant for dense vector retrieval
+- MinIO for document and artifact storage
+- Redis as a support component
 
-This stack allows the system to manage structured data, vector search, file storage, support services, and reproducible local deployment.
+This infrastructure was selected because it separates product state, file storage, and vector retrieval concerns in a practical way.
 
-## 5.4 Backend Implementation
+### 5.2.5 Development Environment and Infrastructure Tools
 
-### 5.4.1 Application Entry and Route Structure
+The development environment uses:
 
-The backend application is initialized through the FastAPI entry point and versioned route composition. The API layer exposes endpoints for:
+- Visual Studio Code
+- Git and GitHub
+- Docker and Docker Compose
+- Pytest and frontend testing tools
+- OpenAPI and route verification tooling
 
-- authentication
-- workspaces
-- datasets
-- documents
-- agents
-- conversations
-- direct query
-- runs
+These tools made the system repeatable, testable, and practical to develop as both an AI pipeline and a product platform.
+
+## 5.3 Developing the Solution
+
+The implementation of Grounded AI can be understood through the same two-part story used throughout the document:
+
+1. implementation of the advanced adaptive pipeline
+2. implementation of the grounded AI product around that pipeline
+
+### 5.3.1 Backend Application Entry and API Routing
+
+The backend application provides the product and pipeline capabilities through structured routes and service orchestration. The API layer exposes endpoints for authentication, workspaces, datasets, uploads, agents, conversations, grounded query execution, runs, dashboard views, and API keys.
+
+This is important because the platform is not exposed only as an experimental retrieval module. It is exposed as a full product backend.
+
+### 5.3.2 Authentication and Tenant Context Implementation
+
+Authentication and tenant resolution are implemented so that all major actions occur in the correct ownership scope. This supports organizational separation and makes the product safe for multi-tenant use.
+
+The implementation includes:
+
+- API key lookup and validation
+- tenant-context construction
+- ownership checks on resources such as workspaces, datasets, agents, and runs
+
+### 5.3.3 Workspace and Dataset Implementation
+
+One of the most important product features is that users do not simply upload files into one flat corpus. Instead, they organize knowledge into datasets.
+
+The implementation includes:
+
+- workspace creation and listing
+- dataset creation, retrieval, and update
+- dataset-level metadata and management
+- document listing within dataset context
+
+This is a core part of the product contribution because it gives organizations a practical way to structure their internal knowledge.
+
+### 5.3.4 Document Upload and Ingestion Implementation
+
+The platform supports document upload for supported file types. After upload, the system creates the necessary records and begins ingestion processing.
+
+This implementation includes:
+
+- file validation
+- canonical storage handling
+- duplicate detection
+- document record creation
+- ingestion job creation and tracking
+
+This stage is where raw organizational data begins to enter the grounded AI workflow.
+
+### 5.3.5 Extraction and Normalization Implementation
+
+Uploaded documents are converted into normalized textual content that can be processed further. This is necessary because organizations upload knowledge in different file formats but the grounding pipeline needs a consistent representation for chunking and retrieval.
+
+### 5.3.6 Semantic Chunking Implementation
+
+The system implements chunking in a way intended to preserve meaning more effectively than naive fixed-size splitting. This supports the research goal of improving on basic RAG.
+
+By producing more coherent evidence units, the system improves the quality of downstream retrieval and answer grounding.
+
+### 5.3.7 Sparse and Dense Indexing Implementation
+
+The implementation supports both lexical and semantic retrieval paths.
+
+- sparse or lexical indexing supports exact wording and text search behavior
+- dense indexing supports semantic retrieval over embeddings
+
+This directly reflects the decision to improve on basic single-path retrieval.
+
+### 5.3.8 Query Analysis and Transformation Implementation
+
+The system analyzes user queries before retrieval. This is important because one of the main research goals is reducing query ambiguity.
+
+The implementation supports:
+
+- identification of the incoming request context
+- preparation of retrieval-oriented query behavior
+- handling of broad or natural-language user questions in a more deliberate way than direct pass-through retrieval
+
+### 5.3.9 Hybrid Retrieval Implementation
+
+The retrieval implementation combines sparse and dense methods rather than relying on only one of them. This improves evidence selection for both exact phrasing and semantic meaning.
+
+This is one of the clearest ways the system improves on basic RAG in practice.
+
+### 5.3.10 Ranking and Evidence Selection Implementation
+
+After initial retrieval, the system refines candidate evidence before answer generation. This includes stronger ranking and evidence packaging logic so that the grounding stage receives better support material.
+
+This improves reliability compared with simply sending the first top-k retrieved chunks to the model.
+
+### 5.3.11 Grounded Query Orchestration Implementation
+
+The main query service coordinates the grounding workflow. It accepts the query request, resolves the relevant context, performs retrieval, packages evidence, calls generation, applies trust-oriented shaping, and persists the resulting run.
+
+This service is important because it embodies the transition from a set of isolated techniques into one working adaptive grounded flow.
+
+### 5.3.12 Response Shaping and Structured Output Implementation
+
+The system does not return only raw model text. It shapes the response into a structured grounded output that includes citations and trust-related fields. This supports the project goal of making answers inspectable and useful.
+
+### 5.3.13 Verification Implementation
+
+Verification is implemented so that final answers can be assessed against their support. This helps reduce hallucination risk and makes the system more dependable than basic RAG approaches that generate directly from loosely selected context.
+
+### 5.3.14 Agent Implementation
+
+Agents are a key product feature. The platform allows users to create reusable grounded assistants and attach datasets to them.
+
+This means the product is not only a dataset query tool. It also supports assistant-oriented workflows where different teams or use cases can have different grounded agents.
+
+### 5.3.15 Conversation and Chat Implementation
+
+The chat page is one of the primary user-facing features of the system. Conversation support allows users to interact naturally with the platform rather than thinking in terms of retrieval operations.
+
+The implementation includes:
+
+- conversation creation and management
+- message persistence
+- grounded answer generation in conversational flow
+- linking of chat responses to runs and evidence
+
+This is central to the product contribution because it is how many users experience the intelligence core of the system.
+
+### 5.3.16 Run Trace and Inspection Implementation
+
+Every grounded execution is persisted as a run or trace record. This supports inspectability and helps the system avoid becoming a black box.
+
+Stored details include:
+
+- query and routing context
+- retrieved evidence references
+- selected support references
+- citations and trust-related metadata
+- answer-related trace information
+
+### 5.3.17 Dashboard and Product Visibility Implementation
+
+The dashboard implementation provides operational visibility into the platform. It aggregates counts, recent activity, ingestion progress, and run summaries so that users and operators can understand system activity.
+
+This matters because a serious organizational product requires not only intelligence, but also visibility and manageability.
+
+### 5.3.18 API Key Management Implementation
+
+API key support allows developer-facing integration while preserving controlled access. This is part of the product story because organizations often need both UI-based workflows and programmatic access.
+
+### 5.3.19 Frontend Product Implementation
+
+The frontend translates the backend and intelligence capabilities into practical workflows. Major implemented areas include:
+
+- landing page
+- login and sign-up pages
+- onboarding flow
 - dashboard
-- API keys
-
-This route structure reflects the product model directly.
-
-### 5.4.2 Authentication and Tenant Context
-
-Authentication is implemented through API keys and email-based preview access. The authentication layer resolves tenant context and ensures that all downstream operations remain tenant-scoped. This is essential for an organizational platform where one tenant's data must not mix with another's.
-
-### 5.4.3 Data Model Implementation
-
-The core implemented models include:
-
-- Tenant
-- APIKey
-- Workspace
-- Dataset or namespace entity
-- Document
-- DocumentChunkRecord
-- IngestionJob
-- Agent
-- AgentDataset
-- Conversation
-- Message
-- QueryTrace
-
-These models are important because they represent both the product structure seen by users and the internal structure used by the grounding engine.
-
-## 5.5 Product Workflow Implementation
-
-### 5.5.1 Workspace and Dataset Formation
-
-The system allows users to create workspaces and then create datasets inside those workspaces. Dataset formation is one of the most important product features because it gives organizations a practical way to organize knowledge into manageable retrieval scopes.
-
-In implementation terms, datasets are not just file folders. They are the boundary used for document ownership, retrieval scope, and later agent attachment.
-
-### 5.5.2 Document Upload and Ingestion
-
-Document upload is implemented as a structured workflow rather than a simple file post.
-
-The process includes:
-
-1. validating the file
-2. computing checksum information
-3. checking duplicates
-4. storing the source file in object storage
-5. creating document and ingestion-job records
-6. handing heavy processing to background ingestion
-
-This design keeps the product responsive while still preparing data correctly for grounded retrieval.
-
-### 5.5.3 Ingestion Processing
-
-The ingestion worker transforms uploaded files into retrieval-ready artifacts. It performs text extraction, normalization, chunk creation, sparse indexing, and dense indexing. This is the point where organizational uploads become usable AI knowledge.
-
-### 5.5.4 Agent Implementation
-
-Agents are implemented as reusable grounded assistants. A user can create an agent, store its instructions, and attach datasets to it. This gives the product an important practical dimension because the platform is not limited to one general assistant. Different agents can serve different teams, domains, or workflows.
-
-### 5.5.5 Conversation and Chat Implementation
-
-The chat experience is implemented through conversations and messages linked to an agent. When a user opens the chat page, asks a question, and receives an answer, that answer is connected to both the conversation history and the grounding run.
-
-This means the chat page is not only a UI surface. It is a persistent product workflow backed by dataset-attached knowledge and traceable execution.
-
-### 5.5.6 Dashboard and Runs Implementation
-
-The dashboard and runs pages expose operational visibility. Dashboard services aggregate recent jobs and recent runs. The runs subsystem stores answer traces and allows them to be inspected later. This is one of the features that makes the product suitable for organizations that care about transparency.
-
-### 5.5.7 API Key Management Implementation
-
-API keys are implemented to support secure programmatic access. The system supports key creation, listing, last-used visibility, and revocation. This allows the product to be used not only through the browser but also through developer workflows.
-
-## 5.6 Grounding Engine Implementation
-
-The internal grounding engine is the research-oriented part that operates behind the product experience.
-
-### 5.6.1 Chunk Preparation
-
-The system prepares extracted text into retrieval-ready chunks. This ensures that uploaded documents can be searched and cited at useful granularity.
-
-### 5.6.2 Sparse and Dense Retrieval
-
-The retrieval system uses PostgreSQL full-text search for sparse retrieval and Qdrant for dense semantic retrieval. This combination improves coverage across both exact and meaning-based questions.
-
-### 5.6.3 Fusion and Evidence Selection
-
-After retrieval, the system combines results and selects the most useful evidence. This reduces the chance that weak first-pass retrieval alone determines the final answer.
-
-### 5.6.4 Answer Construction and Response Shaping
-
-The answer layer builds grounded responses from the selected evidence. The response is shaped into a structured form with citations and supporting metadata rather than being returned as an unstructured model completion.
-
-### 5.6.5 Verification and Trace Persistence
-
-The verification and trace components preserve execution details so that the system can later expose what happened during a grounded answer. This contributes directly to trust and inspectability.
-
-## 5.7 Frontend Implementation
-
-The frontend translates backend functionality into usable pages.
-
-### 5.7.1 Implemented Pages
-
-The major pages include:
-
-- home page
-- login page
-- sign-up page
-- onboarding page
-- dashboard page
 - datasets page
 - dataset detail page
 - agents page
@@ -194,32 +242,40 @@ The major pages include:
 - runs page
 - settings page
 
-### 5.7.2 Product Experience Design in the Frontend
+These pages collectively form the real product experience of Grounded AI.
 
-The frontend was implemented to make the system understandable to non-expert users. The dataset pages focus on knowledge organization and upload state. The agents page focuses on reusable assistants. The chat page focuses on asking questions naturally. The runs page focuses on visibility. The settings page focuses on access management.
+### 5.3.20 Implementation of the Research Contribution and Product Contribution
 
-This reflects the product goal of making grounded AI practical rather than complicated.
+The final implementation can be summarized in two parts.
 
-## 5.8 Challenges Encountered During Development
+#### Research Contribution in Implementation
 
-Several challenges were encountered.
+The system improves on basic RAG by implementing stronger preprocessing, retrieval, ranking, verification, and attribution behavior than a simple vector-only top-k pipeline.
 
-### 5.8.1 Balancing Product Simplicity and Grounding Strength
+#### Product Contribution in Implementation
 
-The system had to remain simple for users while still using a meaningful internal grounding process.
+The system turns that improved grounding pipeline into a usable platform where organizations can upload data, structure it into datasets, create grounded agents, interact through chat, inspect runs, and manage access.
 
-### 5.8.2 Maintaining Tenant-Safe Boundaries
+## 5.4 Challenges Encountered During Development
 
-Because the platform is organization-oriented, ownership and scoping had to be enforced carefully across datasets, agents, conversations, and runs.
+Several key challenges were addressed during implementation.
 
-### 5.8.3 Turning Uploads into Searchable Knowledge Reliably
+### 5.4.1 Balancing Research Depth and Product Usability
 
-File storage, extraction, ingestion states, and indexing had to work together so users could trust that uploaded data would become usable.
+One challenge was ensuring that the project did not become only a technical retrieval experiment or only a surface-level product shell. The solution was to build the product directly around the improved pipeline rather than treating the two as separate efforts.
 
-### 5.8.4 Making Chat Trustworthy Rather Than Merely Fluent
+### 5.4.2 Improving RAG Without Overcomplicating the User Experience
 
-The system needed to ensure that the chat product experience remained tied to evidence, not just good wording.
+Another challenge was that the internal pipeline became more advanced than basic RAG, but the user experience still needed to remain simple. The platform solves this by keeping the complexity inside the system while exposing a user-friendly workflow built around uploads, datasets, agents, and chat.
 
-## 5.9 Chapter Summary
+### 5.4.3 Preserving Organizational Separation
 
-This chapter showed how Grounded AI was implemented as a complete product platform backed by a grounding engine. It described the implementation of authentication, workspaces, datasets, document upload, ingestion, agents, chat, runs, dashboard features, and API keys, while also explaining the internal retrieval and response layers that make the product grounded and useful.
+Because the system is intended for organizational use, data ownership and resource boundaries had to be implemented carefully across datasets, agents, and conversations.
+
+### 5.4.4 Making Trust Visible
+
+It was not enough for the system to be grounded internally. The answer quality also had to be visible to the user through citations, structure, and traceability.
+
+## 5.5 Chapter Summary
+
+This chapter explained how the final system was implemented. It showed that the project was built around two connected goals: implementing an advanced adaptive pipeline that improves on basic RAG, and implementing a practical grounded AI product around that pipeline. The result is a system where organizations do not need to build RAG themselves. Instead, they can upload knowledge, organize it into datasets, create agents, use chat, inspect runs, and benefit from a stronger grounded intelligence core behind the scenes.

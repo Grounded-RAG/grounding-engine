@@ -1,153 +1,198 @@
 # Chapter Six: System Evaluation
 
-## 6.1 Overview
+## 6.1 Preparing Sample Test Plans
 
-This chapter evaluates Grounded AI as both an implemented product and a grounded AI system. The evaluation therefore does not focus only on internal retrieval behavior. It also examines whether the product workflows that matter to organizations work correctly in practice.
+The evaluation of Grounded AI had to reflect the same two-part structure used throughout the project.
 
-The main evaluation question is whether a user can upload organizational data, organize it into datasets, connect those datasets to agents, use chat meaningfully, and inspect results with enough trust and clarity.
+1. evaluate whether the system improves on basic RAG in meaningful ways
+2. evaluate whether the final product works practically for organizations and users
 
-## 6.2 Evaluation Objectives
+For this reason, evaluation was not limited to surface-level interface testing. It included both technical and product-oriented verification.
 
-The evaluation aimed to verify that:
+### 6.1.1 Evaluation Objectives
 
-1. the platform supports the complete organizational workflow from upload to grounded answer
-2. datasets and documents are processed into queryable knowledge successfully
-3. agents can be created and attached to datasets correctly
-4. chat responses are grounded and traceable
-5. run inspection gives useful operational visibility
-6. API key workflows support secure access
-7. the internal grounding process improves answer quality and reduces unsupported behavior
+The evaluation aimed to verify the following:
 
-## 6.3 Types of Evaluation Used
+1. the system successfully supports organizational document upload and dataset formation
+2. the system supports agent creation, dataset attachment, and chat-based grounded interaction
+3. the pipeline improves retrieval and grounding behavior beyond a simple basic RAG path
+4. the system reduces the effects of query ambiguity through stronger query handling
+5. the system improves retrieval reliability through stronger evidence selection behavior
+6. the system exposes citations, trust metadata, and inspectable run traces
+7. the product workflows are usable for organizational knowledge interaction
 
-The study used the following evaluation categories.
+### 6.1.2 Types of Tests Used
 
-### 6.3.1 Functional Evaluation
+The evaluation plan included the following categories.
 
-This checks whether visible features and workflows behave as expected.
+#### Functional Testing
 
-### 6.3.2 Integration Evaluation
+This verifies whether visible product features behave as expected.
 
-This checks whether multiple subsystems work together across end-to-end product usage.
+#### Integration Testing
 
-### 6.3.3 Grounding-Oriented Evaluation
+This verifies whether multiple subsystems work together across full workflows.
 
-This checks whether answers remain tied to evidence and whether traces are preserved.
+#### Grounding and Retrieval Evaluation
 
-### 6.3.4 Product Usability Evaluation
+This verifies whether the system behaves more reliably than a basic direct-retrieve-and-generate flow.
 
-This checks whether the implemented system actually supports the intended organizational workflow clearly.
+#### Product Workflow Evaluation
 
-## 6.4 Functional Test Cases
+This verifies whether the platform supports the user and organizational story intended by the project.
 
-### Table 6.1. Product Workflow Test Cases
+#### Traceability and Trust Evaluation
 
-| Test ID | Test Case | Expected Result | Outcome |
+This verifies whether the system exposes the evidence and run details required for user trust.
+
+### 6.1.3 Test Preparation Strategy
+
+Test scenarios were prepared by mapping both the technical pipeline and the product workflows into verifiable cases. This included:
+
+- authentication and access
+- workspace creation
+- dataset creation
+- upload and ingestion progression
+- agent creation and dataset attachment
+- chat interaction
+- grounded answer generation
+- run inspection
+- API key lifecycle
+
+### 6.1.4 Success Criteria
+
+The project was considered successful if:
+
+- users could upload and organize knowledge successfully
+- grounded chat worked over dataset-backed knowledge
+- the system produced answers with citations and trust-related structure
+- the product exposed inspectable runs and practical management workflows
+- the improved pipeline behavior clearly addressed the weaknesses of basic RAG in the target scope
+
+## 6.2 Evaluating the Proposed Design and Solutions
+
+### 6.2.1 Functional Test Cases
+
+Table 6.1 presents representative product-oriented functional test cases.
+
+### Table 6.1. Functional Test Cases
+
+| Test ID | Test Case | Expected Result | Status |
 |---|---|---|---|
-| TC-01 | user sign-up and sign-in | user receives authenticated access | Pass |
-| TC-02 | workspace creation | workspace is created and retrievable | Pass |
-| TC-03 | dataset creation | dataset is stored successfully | Pass |
-| TC-04 | document upload | document and ingestion job are created | Pass |
-| TC-05 | ingestion monitoring | job status becomes visible to user | Pass |
-| TC-06 | agent creation | reusable agent is stored | Pass |
-| TC-07 | dataset attachment to agent | agent gains dataset linkage | Pass |
-| TC-08 | chat question over agent | grounded answer is returned | Pass |
-| TC-09 | conversation persistence | messages remain linked to conversation | Pass |
-| TC-10 | run inspection | prior run details are viewable | Pass |
-| TC-11 | dashboard summaries | operational data is visible | Pass |
-| TC-12 | API key lifecycle | key creation and revocation work correctly | Pass |
+| TC-01 | User sign-up and sign-in | authenticated session established | Pass |
+| TC-02 | Workspace creation | workspace stored and retrievable | Pass |
+| TC-03 | Dataset creation | dataset created successfully | Pass |
+| TC-04 | Document upload | file stored and ingestion started | Pass |
+| TC-05 | Ingestion status visibility | progress visible to user | Pass |
+| TC-06 | Agent creation | reusable grounded agent created | Pass |
+| TC-07 | Dataset attachment to agent | agent linked to selected dataset | Pass |
+| TC-08 | Chat interaction | answer returned through grounded chat flow | Pass |
+| TC-09 | Run inspection | run details visible with evidence-related fields | Pass |
+| TC-10 | API key creation and revocation | key lifecycle handled correctly | Pass |
 
-## 6.5 Integration Evaluation
+### 6.2.2 Pipeline-Oriented Evaluation
 
-### 6.5.1 Scenario 1: Upload to Dataset Readiness
+The technical side of the evaluation focused on whether the system improves on basic RAG behavior in the target scope of the project.
 
-This scenario verifies that an organizational user can upload files and later use them as knowledge.
+#### Query Ambiguity Handling Evaluation
 
-Expected flow:
+Basic RAG often struggles when the user asks broad or imprecise questions. The evaluated system introduces stronger query handling before retrieval. Observed behavior showed that the system was better able to align retrieval with user intent than a naive direct query path.
 
-1. create dataset
-2. upload file
-3. store file and create ingestion job
-4. process extraction and indexing
-5. mark document as ready
+#### Retrieval Reliability Evaluation
 
-Observed outcome:
+The evaluated system combines multiple retrieval ideas rather than depending on one simple retrieval step. In practice, this improved the quality of evidence selection and reduced the weakness of relying only on a simple dense top-k path.
 
-The workflow completed correctly and exposed operational state through the product interface.
+#### Groundedness and Trust Evaluation
 
-### 6.5.2 Scenario 2: Dataset to Agent to Chat
+The system exposed citations and answer-related trust structure more clearly than a minimal RAG flow. This improved inspectability and made outputs more practical for organizational use.
 
-This scenario verifies the most important product flow.
+### 6.2.3 Integration Evaluation
+
+The final design was also evaluated through end-to-end integration scenarios.
+
+#### Integration Scenario 1: Upload to Searchable Knowledge
 
 Expected flow:
 
-1. create dataset
+1. create or select dataset
 2. upload documents
+3. process them through ingestion
+4. convert them into searchable grounded knowledge
+
+Observed result:
+
+- the workflow completed successfully and reflected correct dataset and document lifecycle behavior
+
+#### Integration Scenario 2: Dataset to Agent to Chat
+
+Expected flow:
+
+1. create dataset
+2. upload knowledge
 3. create agent
 4. attach dataset to agent
-5. open chat
-6. ask question
-7. receive grounded answer
+5. ask question through chat
+6. receive grounded answer
 
-Observed outcome:
+Observed result:
 
-The workflow executed correctly and demonstrated the central organizational use case of the platform.
+- the workflow completed successfully and reflected the intended product story of the system
 
-### 6.5.3 Scenario 3: Chat to Run Inspection
+#### Integration Scenario 3: Chat to Run Inspection
 
 Expected flow:
 
 1. user asks question in chat
-2. answer is generated and returned
-3. run trace is stored
-4. user inspects run later
+2. system performs grounded query execution
+3. answer is returned
+4. run is persisted
+5. user opens runs page and inspects output
 
-Observed outcome:
+Observed result:
 
-The workflow succeeded and showed that the system does not hide its execution history.
+- the workflow completed successfully and provided inspectable trace behavior
 
-### 6.5.4 Scenario 4: Developer Access Through API Keys
+### 6.2.4 Trust and Traceability Evaluation
 
-Expected flow:
+The final system was evaluated for whether it provides user-visible evidence and trace details rather than acting as a black box.
 
-1. user creates API key
-2. client uses key for access
-3. revocation prevents further use
+Observed strengths included:
 
-Observed outcome:
+- answer structure included grounded references
+- run information remained inspectable after execution
+- the product exposed a stronger trust posture than ordinary basic RAG chat behavior
 
-The workflow succeeded and confirmed that product access is not limited to the browser interface.
+### 6.2.5 Evaluation of the Product Contribution
 
-## 6.6 Grounding and Trust Evaluation
+From the product perspective, the evaluation showed that the system successfully supports the main organizational workflow intended by the project.
 
-The system was also evaluated from the internal grounded-answer perspective.
+Organizations and users can:
 
-### 6.6.1 Citation Presence
+- upload their own documents
+- organize them into datasets
+- create agents connected to those datasets
+- ask questions through chat
+- inspect runs and outputs
+- manage access through product workflows
 
-Grounded responses returned citations when evidence was available. This indicates that the answer flow remained connected to retrieved support.
+This confirms that the project is not only a research pipeline but also a usable platform.
 
-### 6.6.2 Evidence Alignment
+## 6.3 Result Analysis
 
-The response structure preserved links between answer content and supporting evidence. This improves user trust compared with systems that answer without visible grounding.
+The evaluation results support the overall claim of the project.
 
-### 6.6.3 Behavior Under Weak Support
+### 6.3.1 Research-Side Analysis
 
-When evidence was weak or incomplete, the system surfaced degraded reasoning instead of pretending to have strong support. This is important because it shows the product behaves more honestly in uncertain cases.
+The system demonstrates a stronger approach than ordinary basic RAG because it does not rely only on a minimal direct retrieve-and-generate flow. Instead, it introduces stronger handling around retrieval quality, ambiguity reduction, evidence selection, and trust shaping.
 
-### 6.6.4 Run Trace Visibility
+### 6.3.2 Product-Side Analysis
 
-The system persisted run information that could later be reviewed through the runs page and dashboard views. This supports inspection, debugging, and organizational accountability.
+The system also succeeds as a product because it exposes the improved pipeline through practical features that organizations can actually use. The user does not need to manage embeddings, vector indexing, or retrieval orchestration directly. Instead, the user interacts with a product built around datasets, agents, chat, and dashboards.
 
-## 6.7 Evaluation Discussion
+### 6.3.3 Overall Analysis
 
-The evaluation shows that Grounded AI succeeds in balancing product utility and grounding quality.
+The most important result is that the project successfully combines research-driven pipeline improvement with product-oriented system delivery. This balance is one of the main strengths of the final work.
 
-From the product side, the system supports the intended organizational workflow clearly: upload data, form datasets, attach them to agents, ask questions in chat, and inspect results.
+## 6.4 Chapter Summary
 
-From the grounding side, the system provides evidence-aware responses, citations, and execution traces that make the product more trustworthy than a simple chat assistant.
-
-The system therefore meets its intended role as a practical document AI platform rather than only a research demonstration.
-
-## 6.8 Chapter Summary
-
-This chapter evaluated Grounded AI as both a product and a grounded AI system. The results show that the implemented platform successfully supports organizational usage through datasets, agents, chat, runs, and API keys while also preserving grounded answering behavior and answer traceability.
+This chapter evaluated Grounded AI from both a technical and practical perspective. It showed that the system supports the intended organizational workflows and that the final platform expresses a stronger grounded behavior than a simple basic RAG arrangement. The evaluation therefore supports the study’s overall claim: the project improves on basic RAG and turns that improvement into a real grounded AI product for organizations and users.

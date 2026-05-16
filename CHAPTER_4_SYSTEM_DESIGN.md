@@ -2,209 +2,323 @@
 
 ## 4.1 Overview
 
-This chapter presents the design of Grounded AI as a complete product platform backed by a grounded retrieval engine. The design is intentionally described from the outside in.
+This chapter presents the design of the final system. The design must satisfy the two main commitments of the study.
 
-From the outside, users see a product with pages for dashboard, datasets, dataset details, agents, chat, runs, and settings. They upload files, manage datasets, create agents, converse with those agents, and inspect results.
+The first commitment is the research-side commitment: improve on basic RAG by addressing pipeline complexity, unreliable retrieval, and query ambiguity.
 
-From the inside, the platform uses a retrieval-and-answer architecture that turns uploaded organizational documents into grounded responses. This chapter explains both layers clearly so that the system is understood as a product for organizations, not only as a research pipeline.
+The second commitment is the product-side commitment: transform that improved grounding approach into a usable platform for organizations and users.
 
-## 4.2 Design Goals
+For this reason, the design of Grounded AI is not described as only a retrieval flow and not only as a dashboard product. It is described as a combination of both:
 
-The system was designed with the following goals:
+1. an advanced adaptive grounding pipeline as the intelligence core
+2. a real software platform around that core, including datasets, uploads, agents, chat, run inspection, and access workflows
 
-1. make grounded AI simple for organizations to use
-2. reduce the complexity of building RAG from scratch
-3. provide clear product workflows for upload, dataset management, agent usage, and chat
-4. improve answer reliability through stronger retrieval and grounded response design
-5. preserve traceability through runs, citations, and operational visibility
-6. support secure multitenant usage and API-based integration
+This chapter explains how these parts fit together into one coherent system.
 
-## 4.3 Overall Product Design
+## 4.2 Specifying the Design Goals
 
-Grounded AI is designed as a multitenant knowledge product with the following major user-facing areas.
+The design goals of the system follow directly from the problem analysis and study objectives.
 
-### 4.3.1 Authentication and Entry
+### 4.2.1 Improve Basic RAG
 
-Users enter the system through sign-up and sign-in flows. Authentication establishes the tenant context that is used to scope workspaces, datasets, agents, conversations, runs, and API keys.
+The system should improve on basic RAG rather than simply reproduce it. This means the design must include mechanisms that reduce ambiguity, strengthen retrieval, and improve trust.
 
-### 4.3.2 Dashboard
+### 4.2.2 Reduce Complexity for Organizations
 
-The dashboard provides an overview of the workspace state. It aggregates high-level counts and recent operational activity such as recent runs and recent ingestion jobs. This page helps a user understand the health and usage of the system without navigating into every section individually.
+Organizations should not need to design and orchestrate an entire RAG stack by themselves. The platform should absorb the complexity of ingestion, indexing, retrieval, grounding, and inspection into one manageable product.
 
-### 4.3.3 Datasets Page
+### 4.2.3 Support Practical Knowledge Workflows
 
-The datasets page is where users create and manage knowledge collections. A dataset acts as a logical container for a related set of documents. This design is important because datasets become the retrieval boundary for later grounded answering.
+The system should support how organizations actually use knowledge. This includes uploading documents, grouping them into datasets, connecting them to agents, chatting over those datasets, and inspecting outputs.
 
-### 4.3.4 Dataset Detail Page
+### 4.2.4 Increase Trust and Groundedness
 
-The dataset detail page allows document upload, document listing, and ingestion visibility. This is the page where a user turns files into usable knowledge. Each upload creates document records and ingestion jobs. The design keeps the operational state visible so that users know whether a document is still processing or already indexed.
+The system should not only answer questions. It should answer with evidence, structure, traceability, and user-visible trust signals.
 
-### 4.3.5 Agents Page
+### 4.2.5 Preserve Security and Separation
 
-The agents page allows users to create reusable grounded assistants. An agent stores instructions and can be attached to one or more datasets. This is important because the system is not limited to one generic chat experience. Different teams can create different agents for different knowledge domains.
+The platform should isolate organizational data correctly through tenant and dataset ownership boundaries.
 
-### 4.3.6 Agent Chat Page
+### 4.2.6 Remain Extensible
 
-The chat page is one of the most important product surfaces. It is where the organizational user interacts with grounded AI directly. The page supports conversational interaction, preserves message history, and returns grounded answers using the datasets attached to the agent. The design treats chat as a serious workflow backed by evidence and traceability rather than a simple prompt box.
+The architecture should support future improvements in retrieval, verification, product features, and organizational integration.
 
-### 4.3.7 Runs Page
+## 4.3 System Design
 
-The runs page exposes previous grounded executions. This gives the system transparency. A user can inspect what happened in prior answers instead of treating the product as an opaque assistant.
+### 4.3.1 Design Overview
 
-### 4.3.8 Settings and API Keys
+Grounded AI is designed as a layered platform whose central intelligence is an advanced adaptive RAG pipeline. Around that pipeline, the product provides the workflows that organizations and users actually interact with.
 
-The settings area includes API key management and capability visibility. This supports organizational and developer use cases in which external clients or services need controlled access to the platform.
+At a high level, the system can be understood in two connected views.
 
-## 4.4 Architectural Design
+#### View 1: Intelligence-Core View
 
-### 4.4.1 Layered Architecture
+This view explains how the system improves on basic RAG internally through stronger preprocessing, retrieval, ranking, grounding, verification, and attribution.
 
-The system follows a layered architecture with these major layers:
+#### View 2: Product-Workflow View
 
-1. presentation layer
-2. API and application layer
-3. domain service layer
-4. ingestion and worker layer
-5. retrieval and grounding layer
-6. persistence and infrastructure layer
+This view explains how the system appears to the user as a product. Users upload documents, organize them into datasets, connect datasets to agents, ask questions through chat, inspect runs, and manage access.
 
-### 4.4.2 Presentation Layer
+The design is successful only if both views work together.
 
-This layer is implemented in React and TypeScript. It contains the dashboard, dataset, agent, chat, run, and settings interfaces.
+### 4.3.2 The Advanced Adaptive Pipeline
 
-### 4.4.3 API and Application Layer
+The intelligence core of the system is an advanced adaptive RAG pipeline designed to improve basic RAG. Rather than treating ordinary retrieval and generation as sufficient, the design introduces a more deliberate sequence of stages.
 
-This layer is implemented with FastAPI and exposes endpoints for authentication, workspaces, datasets, documents, agents, conversations, direct query, runs, dashboard data, and API keys.
+#### Stage 1: Pre-Retrieval Improvement
 
-### 4.4.4 Domain Service Layer
+This stage improves the quality of what enters retrieval.
 
-This layer contains the business logic for the product. It coordinates uploads, dataset rules, agent behavior, conversations, run persistence, and grounded response flows.
+##### 1. Query Transformation
 
-### 4.4.5 Ingestion and Worker Layer
+The system analyzes the user request and improves it for retrieval when necessary. Broad or vague queries may be decomposed into clearer sub-queries so that retrieval is better aligned with the actual user intent.
 
-This layer transforms uploaded files into retrieval-ready artifacts. It handles extraction, chunk formation, indexing, and job-state updates.
+##### 2. Semantic Chunking
 
-### 4.4.6 Retrieval and Grounding Layer
+The system prepares document content in semantically coherent segments rather than relying only on arbitrary fixed-length chunking. This helps preserve meaning and improves the usefulness of retrieved evidence.
 
-This layer is the core research-engine portion of the system. It handles retrieval, ranking, answer construction, and trust-oriented shaping.
+##### 3. Namespace Isolation
 
-### 4.4.7 Persistence and Infrastructure Layer
+The system ensures that all retrieval happens within the correct organizational and dataset boundaries. This supports product safety and organizational data separation.
 
-This layer uses PostgreSQL for relational and sparse-search data, Qdrant for vector retrieval, MinIO for object storage, Redis for support services, and Docker Compose for local orchestration.
+#### Stage 2: Retrieval Improvement
 
-## 4.5 Core Product Entities
+This stage strengthens evidence selection compared with basic vector-only retrieval.
 
-The main entities of the platform are:
+##### 4. Hybrid Retrieval
 
-1. tenant
-2. workspace
-3. dataset
-4. document
-5. ingestion job
-6. document chunk
-7. agent
-8. agent-dataset attachment
-9. conversation
-10. message
-11. query trace or run
+The system combines lexical retrieval and semantic retrieval. This design improves performance on both exact wording and conceptual similarity.
 
-These entities are important because they define the product model seen by users and the internal model used by the grounding engine.
+##### 5. Temporal Ranking
 
-## 4.6 Subsystem Decomposition
+When freshness matters, the system incorporates time-aware ranking so that recent information can be favored over outdated material.
 
-### 4.6.1 Workspace and Dataset Management Subsystem
+#### Stage 3: Evidence Refinement and Correction
 
-This subsystem supports the formation and management of knowledge collections. It allows users to create datasets, update them, and inspect related documents and jobs.
+This stage improves the quality of the retrieved evidence before final answer production.
 
-### 4.6.2 Document Upload and Ingestion Subsystem
+##### 6. Reranking
 
-This subsystem receives uploaded files, stores them, creates ingestion jobs, extracts text, and prepares retrieval-ready content.
+The system refines the order of retrieved candidates so that the strongest evidence is prioritized for grounding.
 
-### 4.6.3 Agent Subsystem
+##### 7. Corrective Retrieval Behavior
 
-This subsystem allows creation and maintenance of reusable grounded agents. Agents provide the product abstraction through which knowledge is reused.
+When the first retrieval result is weak, incomplete, or low-confidence, the system can trigger additional corrective behavior instead of proceeding blindly.
 
-### 4.6.4 Conversation and Chat Subsystem
+##### 8. Internal Retrieval Support
 
-This subsystem supports conversational usage over agent-attached knowledge. It stores messages and links responses to grounded runs.
+For cases that require broader context, the system can inspect larger bodies of text or deeper internal evidence rather than depending only on narrow chunk retrieval.
 
-### 4.6.5 Query and Grounding Subsystem
+#### Stage 4: Grounded Answer and Trust Layer
 
-This subsystem accepts a question, retrieves supporting evidence from the selected datasets, shapes the answer, and returns grounded output.
+This stage focuses on answer quality, structure, and user trust.
 
-### 4.6.6 Run Trace and Dashboard Subsystem
+##### 9. Verification Loop
 
-This subsystem provides transparency into operations and answers by exposing recent runs, recent jobs, summaries, and detailed trace records.
+The system evaluates the grounded answer in relation to its supporting evidence and determines whether the answer is sufficiently supported.
 
-### 4.6.7 API Key and Access Subsystem
+##### 10. Structured Enforcement
 
-This subsystem supports secure client access and credential lifecycle management.
+The system shapes the response into a structured form so that citations and trust metadata are consistently represented.
 
-## 4.7 Internal Grounding Design
+##### 11. Source Attribution
 
-The internal grounding design explains what happens between user question and final answer.
+The final answer links back to the supporting evidence so that users can inspect where claims came from.
 
-### 4.7.1 Document Preparation
+### 4.3.3 Adaptive Behavior and Execution Depth
 
-Uploaded documents are extracted into text and broken into retrieval-ready chunks. This makes organization-owned data queryable.
+The system is adaptive because not all queries need the same amount of processing. Some questions are simple and can be answered quickly. Others require deeper retrieval, stronger verification, and broader evidence handling.
 
-### 4.7.2 Retrieval Design
+For this reason, the design includes routing behavior that can apply different execution depth depending on the nature of the request. This is one of the ways the system improves on basic RAG, which often treats all queries with the same fixed path.
 
-The system uses both sparse and dense retrieval so that it can handle exact terminology and semantic meaning together.
+### 4.3.4 Product Architecture Around the Pipeline
 
-### 4.7.3 Fusion and Selection
+The improved pipeline is only one part of the solution. It becomes useful to organizations because it is embedded inside a real platform.
 
-The retrieval layer combines multiple result sets and selects the most useful evidence candidates for answer generation.
+#### Workspace Layer
 
-### 4.7.4 Grounded Response Construction
+The workspace layer groups product activity for an organization or user environment. It provides the top-level structure for datasets, agents, conversations, and operational visibility.
 
-The final answer is constructed from selected evidence and returned with citations and trace data rather than as a free-floating generated paragraph.
+#### Dataset Layer
 
-### 4.7.5 Trust and Inspection
+Datasets are the main knowledge-organization unit of the product. Instead of treating all uploaded documents as one undifferentiated corpus, the system allows users to organize knowledge into datasets. This makes knowledge management more practical and allows grounded behavior to be targeted.
 
-The design keeps runs available for later inspection so that users can review prior grounded executions.
+Each dataset acts as a curated knowledge collection that can receive uploaded documents, be processed into grounded evidence, and later be attached to agents or queried directly.
 
-## 4.8 Database Design
+#### Document Upload and Ingestion Layer
 
-The relational model is tenant-centered. Each major product object belongs to a tenant and is linked through foreign-key relationships. Datasets own documents. Documents produce ingestion jobs and chunks. Agents attach to datasets. Conversations belong to agents. Runs connect answers back to their execution context.
+This part of the design handles the path from raw user documents to searchable grounded knowledge. The product allows users to upload supported files, stores them safely, tracks their ingestion state, and transforms them into indexed evidence used by the grounding pipeline.
 
-This structure supports both product usability and grounded retrieval boundaries.
+#### Agent Layer
 
-## 4.9 Deployment Design
+Agents are reusable grounded assistants. They allow users to define a named assistant and connect it to one or more datasets. This design is important because organizations often want different assistants for different domains or teams, such as policy support, technical support, research assistance, or internal operations.
 
-The deployment model includes:
+#### Conversation and Chat Layer
 
-1. browser client
+The chat page is one of the main user interaction points. It gives users a natural-language interface for asking grounded questions. Instead of manually navigating the retrieval system, the user interacts through conversation. The system then applies the intelligence pipeline behind the scenes and returns grounded answers with citations and trust signals.
+
+#### Run Inspection and Traceability Layer
+
+The product includes run visibility so that users can inspect previous executions. This is essential because a grounded system should not act as a black box. Users need to see evidence references, answer structure, and other trace details.
+
+#### Dashboard and Operational Visibility Layer
+
+The dashboard gives product-level visibility into the system. It helps users and operators monitor datasets, documents, ingestion progress, recent runs, and system activity. This makes the platform operationally practical rather than only technically functional.
+
+#### API Access Layer
+
+The platform also supports developer-facing access through API keys and backend endpoints. This allows the system to be integrated into broader workflows while still preserving product structure and access control.
+
+### 4.3.5 Proposed Software Architecture
+
+The system uses a layered software architecture.
+
+#### Presentation Layer
+
+This is the frontend product interface built with React and TypeScript. It provides the landing page, authentication pages, onboarding, dashboard, dataset pages, agent pages, chat workflows, runs page, and settings.
+
+#### API and Application Layer
+
+This layer is implemented with FastAPI. It exposes the product capabilities through structured REST endpoints.
+
+#### Domain Service Layer
+
+This layer contains the main business logic for documents, datasets, agents, conversations, retrieval, generation, verification, and dashboard aggregation.
+
+#### Ingestion and Processing Layer
+
+This layer handles extraction, chunking, indexing, and background processing after upload.
+
+#### Grounding and Retrieval Layer
+
+This layer implements the adaptive RAG logic that improves on basic RAG.
+
+#### Persistence and Infrastructure Layer
+
+This layer includes PostgreSQL, Qdrant, MinIO, Redis support, and Docker-managed infrastructure.
+
+### 4.3.6 Subsystem Decomposition
+
+The final system can be decomposed into the following major subsystems.
+
+1. authentication and tenant-context subsystem
+2. workspace-management subsystem
+3. dataset-management subsystem
+4. document upload and ingestion subsystem
+5. chunking and indexing subsystem
+6. retrieval subsystem
+7. grounding and response-shaping subsystem
+8. verification subsystem
+9. agent and conversation subsystem
+10. dashboard and run-inspection subsystem
+11. API key management subsystem
+
+### 4.3.7 Database Design
+
+The database design is centered on organizational ownership and grounded traceability.
+
+#### Key Entities
+
+The major entities include:
+
+- tenant
+- API key
+- workspace
+- dataset
+- document
+- document chunk record
+- ingestion job
+- agent
+- agent-dataset attachment
+- conversation
+- message
+- query trace or run record
+
+#### Design Rationale
+
+This design reflects the product story directly. Organizations need structured ownership of knowledge, datasets need to own documents, agents need to attach to datasets, conversations need to persist interaction history, and runs need to preserve grounded execution details.
+
+### 4.3.8 Deployment Design
+
+The deployment design separates user interaction, application logic, storage, and retrieval infrastructure.
+
+#### Main Deployment Nodes
+
+1. client browser
 2. frontend web application
-3. backend API service
-4. PostgreSQL
-5. Qdrant
-6. MinIO
-7. Redis
+3. FastAPI backend service
+4. PostgreSQL database
+5. Qdrant vector service
+6. MinIO object storage
+7. Redis support service
 
-This separation makes the system easier to reason about and closer to how a real organizational deployment would be structured.
+This structure supports both product usability and pipeline operation.
 
-## 4.10 Security Design
+### 4.3.9 User Interface Design
 
-Security is built into the design through:
+The user interface is designed to expose the platform as a practical organizational product.
 
-1. authenticated access
-2. API key hashing and revocation
-3. tenant-scoped resource resolution
-4. safe dataset and agent ownership checks
-5. trace persistence with controlled metadata
+#### Main Pages
 
-## 4.11 Requirement Verification in the Design
+- landing page
+- login and sign-up pages
+- onboarding page
+- dashboard page
+- datasets page
+- dataset detail page
+- agents page
+- agent chat page
+- runs page
+- settings page
 
-The design satisfies the earlier requirements in the following ways:
+#### UI Design Intent
 
-1. organizational usability is supported through dashboard, datasets, agents, chat, runs, and settings pages
-2. grounded answering is supported through retrieval, evidence selection, and answer shaping services
-3. dataset-based knowledge organization is supported through explicit dataset entities and attachment flows
-4. reusable assistants are supported through the agent model
-5. transparency is supported through run traces and inspection pages
-6. secure access is supported through tenant scope and API keys
+Each page supports part of the user story:
 
-## 4.12 Chapter Summary
+- datasets support knowledge formation
+- uploads support corpus growth
+- agents support reusable grounded assistants
+- chat supports natural-language interaction
+- runs support traceability
+- dashboard supports visibility
+- settings support access control
 
-This chapter described Grounded AI as a product-first grounded AI platform. It showed how the design supports organizational use through datasets, agents, chat, dashboard visibility, runs, and settings, while also supporting a stronger retrieval-and-answer engine inside the platform. The chapter makes clear that the implemented system is both a usable product and a grounding architecture.
+### 4.3.10 Security Design
+
+Security is part of both the research and product story because grounded organizational systems must protect data boundaries.
+
+#### Authentication and Authorization
+
+Requests are authenticated and resolved within the correct ownership scope.
+
+#### Data Isolation
+
+Tenant and dataset ownership are preserved across storage and retrieval behavior.
+
+#### Safe Operational Access
+
+API keys, resource checks, and structured ownership rules help protect the product environment.
+
+## 4.4 Verifying the Requirements in the Design
+
+The design was verified against the requirements identified in Chapter Three.
+
+### 4.4.1 Verification of Research-Side Requirements
+
+- improved query handling is represented through query analysis and transformation behavior
+- improved retrieval quality is represented through hybrid retrieval, temporal ranking, and reranking
+- corrective behavior is represented through recovery-oriented retrieval handling
+- trust improvements are represented through verification, structured enforcement, and attribution
+
+### 4.4.2 Verification of Product-Side Requirements
+
+- dataset formation is represented through dataset and document subsystems
+- organizational knowledge upload is represented through ingestion workflows
+- grounded agents are represented through agent and attachment structures
+- chat interaction is represented through conversation and message workflows
+- run visibility is represented through trace persistence and run inspection
+- operational usability is represented through dashboard and settings workflows
+
+## 4.5 Chapter Summary
+
+This chapter presented the complete design of Grounded AI. It showed how the system improves on basic RAG through an advanced adaptive pipeline and how that pipeline is embedded inside a real product for organizations and users. The design makes clear that the final system is not only a research idea and not only a software interface. It is a grounded AI platform whose internal intelligence core solves RAG weaknesses and whose product workflows make that intelligence usable in practice.
