@@ -34,6 +34,7 @@ def support_summary_for_response(
         "LOW_CONFIDENCE_SUPPORT",
         "QUERY_REQUIRES_CLARIFICATION",
         "INSUFFICIENT_QUERY_ALIGNMENT",
+        "GENERATION_PROVIDER_FAILED",
     }:
         return "insufficient"
     if normalized_reasons & {"PARTIAL_EVIDENCE", "AMBIGUOUS_SUPPORT"}:

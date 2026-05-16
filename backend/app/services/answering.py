@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.core.llm_client import GroundedGenerationError
+from app.core.telemetry import get_logger
 from app.pipeline.contracts import EvidencePackage
 from app.schemas.query import GroundedAnswerResponse
 from app.services.generation import generate_answer_from_evidence
@@ -11,6 +12,9 @@ from app.services.response_shaping import (
     shape_degraded_response,
     shape_grounded_response,
 )
+
+
+logger = get_logger("app.answering")
 
 
 async def answer_from_evidence(
@@ -35,7 +39,20 @@ async def answer_from_evidence(
             draft=draft,
             evidence_package=evidence_package,
         )
-    except (GroundedGenerationError, ResponseShapingError):
+    except (GroundedGenerationError, ResponseShapingError) as exc:
+        logger.warning(
+            "answer_from_evidence_failed",
+            reason=str(exc),
+            evidence_count=len(evidence_package.items),
+        )
+        if "configured generation provider" in str(exc).lower():
+            return shape_degraded_response(
+                reason="GENERATION_PROVIDER_FAILED",
+                answer_text=(
+                    "I do not have an answer for this request because the configured "
+                    "model could not produce a grounded response."
+                ),
+            )
         return shape_degraded_response(
             reason="INSUFFICIENT_SUPPORT",
             answer_text=(

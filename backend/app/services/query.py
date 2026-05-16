@@ -19,11 +19,12 @@ from app.core.query_analysis import (
     ConversationContext,
     build_conversation_context,
     build_query_plan,
+    final_answer_mode,
     refine_query_plan_for_execution_tier,
     query_plan_metadata,
     QueryPlan,
 )
-from app.core.telemetry import bind_execution_context
+from app.core.telemetry import bind_execution_context, get_logger
 from app.models import ExecutionTier, FreshnessProfile, MessageRole, Namespace, QueryTrace, UserFacingMode
 from app.schemas.query import GroundedAnswerResponse, QueryRequest
 from app.services.messages import MessageServiceError, list_conversation_messages
@@ -35,6 +36,9 @@ from app.services.response_shaping import (
     shape_grounded_response,
 )
 from app.services.retrieval import RetrievalBundle, RetrievalError, retrieve_hybrid_candidates
+
+
+logger = get_logger("app.query")
 
 
 class QueryServiceError(RuntimeError):
@@ -95,6 +99,11 @@ def _degraded_reason_for_generation_exception(exc: Exception) -> tuple[str, str]
             "INSUFFICIENT_QUERY_ALIGNMENT",
             "I found related material, but not enough evidence that directly answers this question.",
         )
+    if "configured generation provider" in message:
+        return (
+            "GENERATION_PROVIDER_FAILED",
+            "I do not have an answer for this request because the configured model could not produce a grounded response.",
+        )
     return (
         "INSUFFICIENT_SUPPORT",
         "I found some related material, but not enough grounded evidence to answer confidently.",
@@ -116,6 +125,50 @@ def _evidence_debug_summary(*, selected_evidence_ids: list[str], evidence_packag
             }
         )[:5],
     }
+
+
+def _log_query_identification(*, query_plan: QueryPlan) -> None:
+    """Log query classification details used for routing and answer shaping."""
+
+    profile = query_plan.profile
+    logger.info(
+        "query_identified",
+        query_text=query_plan.raw_query_text,
+        resolved_query_text=query_plan.resolved_query_text,
+        query_kind=profile.query_kind,
+        answer_mode=final_answer_mode(profile),
+        terms=sorted(profile.terms)[:12],
+        attribute_terms=sorted(profile.attribute_terms),
+        semantic_tags=sorted(profile.semantic_tags),
+        context_terms=sorted(profile.context_terms),
+        retrieval_queries=list(query_plan.retrieval_queries),
+        used_conversation_context=query_plan.used_conversation_context,
+    )
+
+
+def _log_selected_evidence(*, query_text: str, evidence_package) -> None:
+    """Log the final evidence package handed to generation."""
+
+    logger.debug(
+        "evidence_package_selected",
+        query_text=query_text,
+        selected_count=len(evidence_package.items),
+        selected_evidence=[
+            {
+                "citation_id": item.citation_id,
+                "chunk_id": item.chunk_id,
+                "document_id": str(item.document_id),
+                "chunk_index": item.chunk_index,
+                "score": item.score,
+                "sources": list(item.sources),
+                "section_title": item.section_title,
+                "section_slug": item.section_slug,
+                "chunk_role": item.chunk_role,
+                "text_preview": item.text[:220],
+            }
+            for item in evidence_package.items
+        ],
+    )
 
 
 def _supports_execution_tier(*, available_tier: ExecutionTier, required_tier: ExecutionTier) -> bool:
@@ -516,6 +569,7 @@ async def execute_standard_query(
             query_plan,
             execution_tier=routing_decision.effective_tier,
         )
+        _log_query_identification(query_plan=query_plan)
 
     if not _supports_execution_tier(
         available_tier=routing_decision.effective_tier,
@@ -601,6 +655,10 @@ async def execute_standard_query(
         retrieval_bundle,
         query_text=query_plan.resolved_query_text,
         execution_tier=routing_decision.effective_tier,
+    )
+    _log_selected_evidence(
+        query_text=query_plan.resolved_query_text,
+        evidence_package=evidence_package,
     )
     evidence_ms = int((time.perf_counter() - evidence_started) * 1000)
 
