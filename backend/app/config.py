@@ -17,6 +17,7 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 GeneratorBackend = Literal["local_grounded_v1", "gemini_v1", "openai_compatible_v1"]
 EmbeddingBackend = Literal["local_hash_v1", "gemini_v1", "openai_compatible_v1"]
 RerankerBackend = Literal["disabled", "stub", "gemini_v1"]
+RetrievalMode = Literal["hybrid", "dense_only"]
 
 
 class Settings(BaseSettings):
@@ -64,6 +65,7 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     retrieval_candidate_limit: int = 8
     retrieval_overfetch_factor: int = 4
+    retrieval_mode: RetrievalMode = "dense_only"
     rrf_smoothing_constant: int = 60
     evidence_package_limit: int = 3
     enterprise_enabled: bool = True
@@ -197,6 +199,16 @@ class Settings(BaseSettings):
         normalized = value.strip()
         if not normalized:
             raise ValueError("EMBEDDING_BACKEND must not be empty.")
+        return normalized
+
+    @field_validator("retrieval_mode")
+    @classmethod
+    def validate_retrieval_mode(cls, value: str) -> str:
+        """Ensure retrieval mode is explicit and supported."""
+
+        normalized = value.strip().lower()
+        if normalized not in {"hybrid", "dense_only"}:
+            raise ValueError("RETRIEVAL_MODE must be either 'hybrid' or 'dense_only'.")
         return normalized
 
     @field_validator("dense_embedding_dimensions")
