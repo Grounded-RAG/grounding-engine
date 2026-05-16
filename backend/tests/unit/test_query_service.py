@@ -1080,9 +1080,28 @@ async def test_execute_standard_query_persists_critical_request_trace_metadata(m
         assert kwargs["execution_tier"] is ExecutionTier.STANDARD
         return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
 
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+        del query_text, evidence_package
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": "Grounded supports tenant-safe uploads [E001].",
+                "cited_evidence_ids": ["chunk-1"],
+                "citation_snippets": {"chunk-1": "Grounded supports tenant-safe uploads."},
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 0.98,
+                "source_diversity": 1,
+            },
+        )()
+
     monkeypatch.setattr(
         "app.services.query.retrieve_hybrid_candidates",
         fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
     )
     monkeypatch.setattr(
         "app.services.query.get_settings",

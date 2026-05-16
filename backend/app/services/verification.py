@@ -36,6 +36,15 @@ _STOPWORDS = {
     "to",
     "with",
 }
+_LOW_SIGNAL_CLAIM_TERMS = {
+    "grounded",
+    "support",
+    "supports",
+    "supported",
+    "using",
+    "uses",
+    "system",
+}
 
 
 @dataclass(frozen=True)
@@ -75,7 +84,12 @@ def _claim_terms(claim_text: str) -> tuple[str, ...]:
 
     terms: list[str] = []
     for token in _TOKEN_PATTERN.findall(_normalize_text(claim_text)):
-        if len(token) < 3 or token in _STOPWORDS:
+        if (
+            len(token) < 3
+            or token in _STOPWORDS
+            or token in _LOW_SIGNAL_CLAIM_TERMS
+            or re.fullmatch(r"e\d+", token)
+        ):
             continue
         if token not in terms:
             terms.append(token)
@@ -160,24 +174,34 @@ def verify_critical_response(
     for claim in claims:
         terms = _claim_terms(claim)
         matched_chunk_ids: list[str] = []
-        missing_terms = list(terms)
+        best_present_terms: list[str] = []
+        best_supported_chunk_ids: list[str] = []
 
         if terms:
             for chunk_id, evidence_text in evidence_text_by_chunk.items():
                 present_terms = [term for term in terms if term in evidence_text]
                 if not present_terms:
                     continue
-                matched_chunk_ids.append(chunk_id)
-                missing_terms = [term for term in missing_terms if term not in present_terms]
+                coverage_ratio = len(present_terms) / len(terms)
+                if coverage_ratio >= 0.8:
+                    matched_chunk_ids.append(chunk_id)
+                if len(present_terms) > len(best_present_terms):
+                    best_present_terms = present_terms
+                    best_supported_chunk_ids = [chunk_id] if coverage_ratio >= 0.8 else []
+                elif len(present_terms) == len(best_present_terms) and coverage_ratio >= 0.8:
+                    best_supported_chunk_ids.append(chunk_id)
+
+        missing_terms = [term for term in terms if term not in best_present_terms]
+        best_coverage_ratio = (len(best_present_terms) / len(terms)) if terms else 1.0
 
         if not terms:
             status = "supported"
             supported_claim_count += 1
-        elif not matched_chunk_ids:
+        elif best_coverage_ratio < 0.5:
             status = "unsupported"
             unsupported_detected = True
             unsupported_claim_count += 1
-        elif missing_terms:
+        elif best_coverage_ratio < 1.0:
             status = "partially_supported"
             partial_detected = True
             partially_supported_claim_count += 1
@@ -185,11 +209,13 @@ def verify_critical_response(
             status = "supported"
             supported_claim_count += 1
 
+        persisted_chunk_ids = best_supported_chunk_ids if status == "supported" else matched_chunk_ids
+
         verified_claims.append(
             VerifiedClaim(
                 text=claim,
                 status=status,
-                matched_chunk_ids=tuple(matched_chunk_ids),
+                matched_chunk_ids=tuple(persisted_chunk_ids),
                 missing_terms=tuple(missing_terms),
             )
         )
