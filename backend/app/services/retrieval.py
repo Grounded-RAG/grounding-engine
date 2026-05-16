@@ -253,6 +253,7 @@ async def _apply_enterprise_freshness_scoring(
     """Prefer newer evidence when the Enterprise query explicitly needs freshness."""
 
     settings = get_settings()
+    retrieval_mode = getattr(settings, "retrieval_mode", "hybrid")
     if (
         execution_tier is not ExecutionTier.ENTERPRISE
         or not getattr(settings, "enterprise_temporal_scoring_enabled", True)
@@ -863,9 +864,10 @@ async def retrieve_hybrid_candidates(
     execution_tier: ExecutionTier = ExecutionTier.STANDARD,
     freshness_profile: FreshnessProfile = FreshnessProfile.BALANCED,
 ) -> RetrievalBundle:
-    """Run sparse and dense retrieval, then merge candidates with RRF."""
+    """Run configured retrieval paths, then shape candidates into fused-hit form."""
 
     settings = get_settings()
+    retrieval_mode = getattr(settings, "retrieval_mode", "hybrid")
     final_limit = limit or settings.retrieval_candidate_limit
     overfetch_limit = max(
         final_limit,
@@ -877,15 +879,16 @@ async def retrieve_hybrid_candidates(
     sparse_hits: list[RetrievedChunk] = []
     dense_hits: list[RetrievedChunk] = []
     for retrieval_query in plan.retrieval_queries:
-        sparse_hits.extend(
-            await sparse_retrieve_chunks(
-                session=session,
-                tenant_id=tenant_id,
-                namespace_id=namespace_id,
-                query_text=retrieval_query,
-                limit=overfetch_limit,
+        if retrieval_mode == "hybrid":
+            sparse_hits.extend(
+                await sparse_retrieve_chunks(
+                    session=session,
+                    tenant_id=tenant_id,
+                    namespace_id=namespace_id,
+                    query_text=retrieval_query,
+                    limit=overfetch_limit,
+                )
             )
-        )
         dense_hits.extend(
             await dense_retrieve_chunks(
                 tenant_id=tenant_id,
@@ -900,6 +903,23 @@ async def retrieve_hybrid_candidates(
         sparse_hits,
         dense_hits,
         rrf_k=settings.rrf_smoothing_constant,
+    )
+    logger.debug(
+        "retrieval_results",
+        query_text=query_text,
+        retrieval_mode=retrieval_mode,
+        sparse_count=len(sparse_hits),
+        dense_count=len(dense_hits),
+        retrieved_count=len(fused_hits),
+        retrieved_chunks=[
+            {
+                "chunk_id": hit.chunk_id,
+                "rank": index,
+                "score": hit.fused_score,
+                "text_preview": hit.text[:200],
+            }
+            for index, hit in enumerate(fused_hits[:5], start=1)
+        ],
     )
     supporting_hits = await _fetch_supporting_context_hits(
         session=session,
