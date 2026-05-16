@@ -11,6 +11,7 @@ from app.core.query_analysis import (
     is_collection_query,
     is_comparison_query,
     is_count_query,
+    is_definition_query,
     is_entity_context_query,
     primary_intent,
     query_plan_metadata,
@@ -35,6 +36,16 @@ def test_build_query_profile_extracts_generic_attribute_phrase() -> None:
 
     assert "pricing model" in profile.attribute_terms
     assert profile.query_kind == "lookup"
+
+
+def test_build_query_profile_routes_concept_what_is_question_as_definition() -> None:
+    """Concept explanations should not be handled as exact field extraction."""
+
+    profile = build_query_profile("What is continual learning? How does it work?")
+
+    assert profile.query_kind == "definition"
+    assert is_definition_query(profile) is True
+    assert final_answer_mode(profile) == "open"
 
 
 def test_build_query_profile_corrects_common_attribute_typo() -> None:

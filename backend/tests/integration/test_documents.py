@@ -551,4 +551,4 @@ def test_document_upload_autoruns_pipeline_and_query_returns_grounded_answer(
             )
             trace_row = cursor.fetchone()
 
-    assert trace_row == ("standard", "phase1_standard_query")
+    assert trace_row == ("standard", "standard_default")
