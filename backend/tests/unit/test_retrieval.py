@@ -237,22 +237,11 @@ def test_fuse_retrieval_hits_rewards_mutual_agreement() -> None:
 
 @pytest.mark.asyncio()
 async def test_retrieve_hybrid_candidates_dedupes_rewrite_repeats_before_fusion(monkeypatch) -> None:
-    """Repeated hits across rewrites should not inflate RRF scoring."""
+    """Repeated dense hits across rewrites should not inflate fused scoring."""
 
     tenant_id = uuid.uuid4()
     namespace_id = uuid.uuid4()
     document_id = uuid.uuid4()
-    shared_sparse = RetrievedChunk(
-        chunk_id="shared",
-        tenant_id=tenant_id,
-        namespace_id=namespace_id,
-        document_id=document_id,
-        chunk_index=0,
-        text="The pricing model is usage-based.",
-        score=0.9,
-        rank=1,
-        source="sparse",
-    )
     shared_dense = RetrievedChunk(
         chunk_id="shared",
         tenant_id=tenant_id,
@@ -265,18 +254,10 @@ async def test_retrieve_hybrid_candidates_dedupes_rewrite_repeats_before_fusion(
         source="dense",
     )
 
-    async def fake_sparse_retrieve_chunks(**kwargs):
-        del kwargs
-        return [shared_sparse]
-
     async def fake_dense_retrieve_chunks(**kwargs):
         del kwargs
         return [shared_dense]
 
-    monkeypatch.setattr(
-        "app.services.retrieval.sparse_retrieve_chunks",
-        fake_sparse_retrieve_chunks,
-    )
     monkeypatch.setattr(
         "app.services.retrieval.dense_retrieve_chunks",
         fake_dense_retrieve_chunks,
@@ -314,15 +295,15 @@ async def test_retrieve_hybrid_candidates_dedupes_rewrite_repeats_before_fusion(
         limit=4,
     )
 
-    assert [hit.chunk_id for hit in bundle.sparse_hits] == ["shared"]
+    assert bundle.sparse_hits == []
     assert [hit.chunk_id for hit in bundle.dense_hits] == ["shared"]
     assert bundle.fused_hits[0].chunk_id == "shared"
-    assert bundle.fused_hits[0].fused_score == pytest.approx(2 / 61, rel=1e-6)
+    assert bundle.fused_hits[0].fused_score == pytest.approx(1 / 61, rel=1e-6)
 
 
 @pytest.mark.asyncio()
-async def test_retrieve_hybrid_candidates_runs_both_paths(monkeypatch) -> None:
-    """Hybrid retrieval should return sparse, dense, and fused candidate sets."""
+async def test_retrieve_hybrid_candidates_runs_dense_path_only_when_sparse_disabled(monkeypatch) -> None:
+    """Dense-only retrieval should return dense and fused candidates only."""
 
     sparse_hits = [
         RetrievedChunk(
@@ -360,10 +341,6 @@ async def test_retrieve_hybrid_candidates_runs_both_paths(monkeypatch) -> None:
         return dense_hits
 
     monkeypatch.setattr(
-        "app.services.retrieval.sparse_retrieve_chunks",
-        fake_sparse_retrieve_chunks,
-    )
-    monkeypatch.setattr(
         "app.services.retrieval.dense_retrieve_chunks",
         fake_dense_retrieve_chunks,
     )
@@ -376,9 +353,9 @@ async def test_retrieve_hybrid_candidates_runs_both_paths(monkeypatch) -> None:
         limit=4,
     )
 
-    assert bundle.sparse_hits == sparse_hits
+    assert bundle.sparse_hits == []
     assert bundle.dense_hits == dense_hits
-    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-1", "chunk-2"]
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-2"]
 
 
 @pytest.mark.asyncio()
@@ -819,7 +796,6 @@ async def test_retrieve_hybrid_candidates_skips_enterprise_reranker_for_standard
             del query_text, hits, limit
             raise AssertionError("Standard retrieval should not invoke Enterprise reranking.")
 
-    monkeypatch.setattr("app.services.retrieval.sparse_retrieve_chunks", fake_sparse_retrieve_chunks)
     monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
     monkeypatch.setattr(
         "app.services.retrieval.resolve_retrieval_reranker",
@@ -835,7 +811,7 @@ async def test_retrieve_hybrid_candidates_skips_enterprise_reranker_for_standard
         limit=4,
     )
 
-    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-1", "chunk-2"]
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-2"]
 
 
 @pytest.mark.asyncio()
@@ -895,7 +871,6 @@ async def test_retrieve_hybrid_candidates_uses_stub_reranker_for_enterprise(monk
                 ],
             )
 
-    monkeypatch.setattr("app.services.retrieval.sparse_retrieve_chunks", fake_sparse_retrieve_chunks)
     monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
     monkeypatch.setattr(
         "app.services.retrieval.resolve_retrieval_reranker",
@@ -921,7 +896,7 @@ async def test_retrieve_hybrid_candidates_uses_stub_reranker_for_enterprise(monk
         limit=2,
     )
 
-    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-2", "chunk-1"]
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-2"]
 
 
 @pytest.mark.asyncio()
@@ -976,7 +951,6 @@ async def test_retrieve_hybrid_candidates_falls_back_when_enterprise_reranker_er
 
             raise RerankerError("reranker unavailable")
 
-    monkeypatch.setattr("app.services.retrieval.sparse_retrieve_chunks", fake_sparse_retrieve_chunks)
     monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
     monkeypatch.setattr(
         "app.services.retrieval.resolve_retrieval_reranker",
@@ -1002,7 +976,7 @@ async def test_retrieve_hybrid_candidates_falls_back_when_enterprise_reranker_er
         limit=2,
     )
 
-    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-1", "chunk-2"]
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-2"]
 
 
 @pytest.mark.asyncio()
@@ -1160,7 +1134,7 @@ async def test_retrieve_hybrid_candidates_keeps_standard_order_without_freshness
     namespace_id = uuid.uuid4()
     document_id = uuid.uuid4()
 
-    sparse_hits = [
+    dense_hits = [
         RetrievedChunk(
             chunk_id="older-result",
             tenant_id=tenant_id,
@@ -1170,7 +1144,7 @@ async def test_retrieve_hybrid_candidates_keeps_standard_order_without_freshness
             text="Current release notes mention the older policy.",
             score=0.9,
             rank=1,
-            source="sparse",
+            source="dense",
         ),
         RetrievedChunk(
             chunk_id="newer-result",
@@ -1181,17 +1155,17 @@ async def test_retrieve_hybrid_candidates_keeps_standard_order_without_freshness
             text="Current release notes mention the new policy.",
             score=0.7,
             rank=2,
-            source="sparse",
+            source="dense",
         ),
     ]
 
     async def fake_sparse_retrieve_chunks(**kwargs):
         del kwargs
-        return sparse_hits
+        return []
 
     async def fake_dense_retrieve_chunks(**kwargs):
         del kwargs
-        return []
+        return dense_hits
 
     async def fake_fetch_supporting_context_hits(**kwargs):
         del kwargs
@@ -1201,7 +1175,6 @@ async def test_retrieve_hybrid_candidates_keeps_standard_order_without_freshness
         del kwargs
         raise AssertionError("Standard retrieval should not fetch freshness metadata.")
 
-    monkeypatch.setattr("app.services.retrieval.sparse_retrieve_chunks", fake_sparse_retrieve_chunks)
     monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
     monkeypatch.setattr(
         "app.services.retrieval._fetch_supporting_context_hits",
