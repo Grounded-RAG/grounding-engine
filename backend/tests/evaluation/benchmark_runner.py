@@ -20,7 +20,7 @@ from tests.evaluation.benchmark_variants import BenchmarkExecutionContext, get_v
 
 FIXTURE_DIR = Path(__file__).with_name("fixtures")
 DEFAULT_FIXTURES = [
-    FIXTURE_DIR / "rag_eval_testset.json",
+    FIXTURE_DIR / "standard_quality_cases.json",
     FIXTURE_DIR / "temporal_cases.json",
     FIXTURE_DIR / "contradiction_cases.json",
     FIXTURE_DIR / "insufficient_evidence_cases.json",
@@ -99,14 +99,41 @@ def parse_args() -> argparse.Namespace:
         default="reports/benchmark",
         help="Output directory for JSONL, JSON summary, and Markdown report.",
     )
+    parser.add_argument(
+        "--beir-dataset",
+        default="",
+        help="Path to a BEIR dataset directory (corpus.jsonl + queries.jsonl + qrels/dev.tsv). "
+             "When provided, cases are loaded from the dataset instead of fixture files.",
+    )
+    parser.add_argument(
+        "--beir-limit",
+        type=int,
+        default=None,
+        help="Limit the number of BEIR queries to run (useful for smoke runs).",
+    )
     return parser.parse_args()
+
+
+def load_cases_for_beir(dataset_path: Path, limit: int | None = None) -> list[BenchmarkCase]:
+    """Load benchmark cases from a BEIR-formatted dataset directory."""
+    from tests.evaluation.datasets.beir_loader import BEIRLoader
+
+    loader = BEIRLoader(root=dataset_path).load()
+    cases = loader.to_benchmark_cases(limit=limit)
+    print(f"Loaded {len(cases)} BEIR cases from {dataset_path}")
+    return cases
 
 
 async def main() -> None:
     args = parse_args()
-    suites = [item.strip() for item in args.suites.split(",") if item.strip()]
     variants = [item.strip() for item in args.variants.split(",") if item.strip()]
-    cases = load_cases_for_suites(suites)
+
+    if args.beir_dataset:
+        cases = load_cases_for_beir(Path(args.beir_dataset), limit=args.beir_limit)
+    else:
+        suites = [item.strip() for item in args.suites.split(",") if item.strip()]
+        cases = load_cases_for_suites(suites)
+
     results = await run_benchmark(cases=cases, variant_names=variants)
     write_benchmark_outputs(results, Path(args.output))
 

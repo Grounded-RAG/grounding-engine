@@ -125,7 +125,12 @@ class BenchmarkResult:
 
 
 def load_benchmark_cases(paths: list[Path]) -> list[BenchmarkCase]:
-    """Load benchmark cases from one or more JSON fixture files."""
+    """Load benchmark cases from one or more JSON fixture files.
+
+    Handles two formats:
+    1. Canonical BenchmarkCase format (list of dicts with 'id', 'query', etc.)
+    2. Legacy standard_quality format (list of dicts with 'name', 'evidence', 'query')
+    """
 
     import json
 
@@ -135,9 +140,40 @@ def load_benchmark_cases(paths: list[Path]) -> list[BenchmarkCase]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, list):
             raise ValueError(f"Benchmark fixture must contain a list: {path}")
-        cases.extend(
-            BenchmarkCase.from_dict(entry, default_suite=default_suite)
-            for entry in payload
-            if isinstance(entry, dict)
-        )
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            if "evidence" in entry:
+                cases.append(_from_legacy_entry(entry, default_suite))
+            else:
+                cases.append(BenchmarkCase.from_dict(entry, default_suite=default_suite))
     return cases
+
+
+def _from_legacy_entry(entry: dict[str, Any], default_suite: str) -> BenchmarkCase:
+    evidence: list[dict[str, Any]] = entry.get("evidence", [])
+    return BenchmarkCase(
+        id=str(entry["name"]),
+        query=str(entry["query"]),
+        query_type="grounded",
+        difficulty="unknown",
+        expected_answer=None,
+        ground_truth_chunk_ids=[
+            str(e["chunk_id"]) for e in evidence if e.get("chunk_id")
+        ],
+        ground_truth_statements=[],
+        domain="mixed",
+        suite="standard_quality",
+        expected_behavior=None,
+        stale_chunk_ids=[],
+        candidate_chunks=[
+            {
+                "chunk_id": str(e.get("chunk_id", "")),
+                "citation_id": str(e.get("citation_id", "")),
+                "text": str(e.get("text", "")),
+                "score": float(e.get("score", 0.0)),
+            }
+            for e in evidence
+        ],
+        variant_outputs={},
+    )

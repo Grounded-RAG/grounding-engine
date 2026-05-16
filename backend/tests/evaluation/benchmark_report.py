@@ -22,9 +22,10 @@ def write_benchmark_outputs(results: list[BenchmarkResult], output_dir: Path) ->
         encoding="utf-8",
     )
     (output_dir / "benchmark_report.md").write_text(
-        render_markdown_report(summary),
+        render_markdown_report(summary, results),
         encoding="utf-8",
     )
+    write_queries_csv(results, output_dir / "benchmark_queries.csv")
 
 
 def write_results_jsonl(results: list[BenchmarkResult], path: Path) -> None:
@@ -57,7 +58,7 @@ def build_summary(results: list[BenchmarkResult]) -> dict[str, object]:
     }
 
 
-def render_markdown_report(summary: dict[str, object]) -> str:
+def render_markdown_report(summary: dict[str, object], results: list[BenchmarkResult] | None = None) -> str:
     """Render a compact human-readable benchmark report."""
 
     variants = summary.get("variants", {})
@@ -127,6 +128,25 @@ def render_markdown_report(summary: dict[str, object]) -> str:
                 f"{int(comparison.get('latency_cost_ms', 0))}ms | "
                 f"{comparison.get('recommendation', '')} |"
             )
+
+    if results:
+        lines.extend([
+            "",
+            "## Sample Queries",
+            "",
+            "| Query | Type | Best Variant |",
+            "|---|---|---|",
+        ])
+        unique_queries = {r.query_id: r for r in results}.values()
+        for r in list(unique_queries)[:20]:
+            best = max(
+                [res for res in results if res.query_id == r.query_id],
+                key=lambda x: x.metrics.ragas_score,
+                default=None,
+            )
+            best_variant = best.variant if best else "N/A"
+            query_text = r.query[:60] + "..." if len(r.query) > 60 else r.query
+            lines.append(f"| {query_text} | {r.query_type} | {best_variant} |")
 
     return "\n".join(lines) + "\n"
 
@@ -223,3 +243,23 @@ def _fmt(value, *, digits: int = 3) -> str:
         return f"{float(value):.{digits}f}"
     except (TypeError, ValueError):
         return "0.000"
+
+
+def write_queries_csv(results: list[BenchmarkResult], path: Path) -> None:
+    """Write all queries to a CSV file for analysis."""
+    import csv
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["query_id", "variant", "query", "query_type", "ragas_score", "recall_at_k", "faithfulness", "answer"])
+        for r in results:
+            writer.writerow([
+                r.query_id,
+                r.variant,
+                r.query[:500],  # truncate for CSV
+                r.query_type,
+                _fmt(r.metrics.ragas_score),
+                _fmt(r.metrics.recall_at_k),
+                _fmt(r.metrics.faithfulness),
+                r.answer[:200] if r.answer else "",
+            ])
