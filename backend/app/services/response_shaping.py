@@ -62,8 +62,6 @@ def _calculate_confidence(
         calibrated = max(calibrated - 0.08, 0.0)
     if len(cited_items) >= 2 and support_signal < 0.68:
         calibrated = max(calibrated - 0.04, 0.0)
-    if ":fallback_from_" in draft.generator_provider:
-        calibrated = max(calibrated - 0.03, 0.0)
     return round(
         calibrated,
         4,
