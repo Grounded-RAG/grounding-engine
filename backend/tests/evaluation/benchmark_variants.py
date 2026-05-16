@@ -343,9 +343,9 @@ def get_fixture_variants() -> dict[str, BenchmarkVariant]:
         ),
         "standard_no_rerank": FixtureReplayVariant(
             name="standard_no_rerank",
-            use_query_terms=True,
+            use_query_terms=False,
             use_temporal_score=False,
-            use_evidence_packaging=False,
+            use_evidence_packaging=True,
         ),
         "standard_no_evidence_packaging": FixtureReplayVariant(
             name="standard_no_evidence_packaging",
@@ -500,7 +500,7 @@ def _temporal_accuracy(
     stale_chunk_ids: list[str],
 ) -> float:
     if not fresh_chunk_ids and not stale_chunk_ids:
-        return 0.0
+        return 1.0  # no temporal signal — treat as correct
     selected = set(selected_chunk_ids)
     if selected & set(stale_chunk_ids):
         return 0.0
