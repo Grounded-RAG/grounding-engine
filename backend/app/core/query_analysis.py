@@ -64,7 +64,7 @@ _COLLECTION_ATTRIBUTE_HINTS = {
     "languages", "method", "methods", "project", "projects", "requirement", "requirements",
     "responsibility", "responsibilities", "role", "roles", "section", "sections",
     "service", "services", "skill", "skills", "technology", "technologies",
-    "tool", "tools",
+    "step", "steps", "tool", "tools",
 }
 
 _GENERIC_QUERY_VOCABULARY = {
@@ -517,6 +517,34 @@ def _is_summary_query(*, normalized_text: str, terms: set[str]) -> bool:
     return dataset_like and summary_like
 
 
+def _is_concept_definition_query(
+    *,
+    normalized_text: str,
+    terms: set[str],
+    attribute_terms: set[str],
+    semantic_tags: set[str],
+) -> bool:
+    """Return whether a query asks to explain a concept, not extract a field."""
+
+    if _DEFINITION_QUERY_PATTERN.match(normalized_text):
+        return True
+    if re.search(r"\bhow\s+(?:does\s+it\s+work|it\s+works)\b", normalized_text):
+        return True
+    if semantic_tags:
+        return False
+    if any(_attribute_is_collection_like(attribute) for attribute in attribute_terms):
+        return False
+    if attribute_terms and normalized_text.startswith(("what is the ", "what are the ")):
+        return False
+    if re.search(r"\b(?:her|his|their|person|service|dataset|document|file)\b", normalized_text):
+        return False
+    if " of " in normalized_text or " for " in normalized_text:
+        return False
+    if normalized_text.startswith(("what is ", "what are ")):
+        return True
+    return False
+
+
 def _attribute_is_collection_like(attribute: str) -> bool:
     normalized_attribute = _normalize_text(attribute)
     if not normalized_attribute:
@@ -548,7 +576,12 @@ def _classify_query_kind(
 
     if _is_summary_query(normalized_text=normalized_text, terms=terms):
         return "summary"
-    if _DEFINITION_QUERY_PATTERN.match(normalized_text):
+    if _is_concept_definition_query(
+        normalized_text=normalized_text,
+        terms=terms,
+        attribute_terms=attribute_terms,
+        semantic_tags=semantic_tags,
+    ):
         return "definition"
     if _COUNT_QUERY_PATTERN.match(normalized_text):
         return "count"
@@ -1492,7 +1525,8 @@ def score_text_against_query(
 
     if is_definition_query(profile):
         if re.search(
-            r"\b(is|means|refers to|defined as|definition|explains?)\b",
+            r"\b(is|means|refers to|defined as|definition|explains?|"
+            r"works? by|operates? by)\b",
             normalized_text,
         ):
             score += 8.0

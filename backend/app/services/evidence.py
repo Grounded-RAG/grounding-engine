@@ -111,6 +111,8 @@ def _select_hits_for_query(
         )
     if answer_mode == "summary":
         return _select_summary_hits(ranked_hits, limit=limit)
+    if profile.query_kind == "definition":
+        return _select_top_hits(ranked_hits, limit=max(limit, 5))
     if any(
         (
             is_action_query(profile),
