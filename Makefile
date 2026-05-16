@@ -1,4 +1,4 @@
-.PHONY: infra-up infra-down backend-run test test-foundation compile migrate migrate-check ci format tree
+.PHONY: infra-up infra-down backend-run test test-foundation compile migrate migrate-check ci format tree benchmark-beir benchmark-beir-smoke
 
 infra-up:
 	docker compose up -d postgres redis qdrant minio
@@ -7,7 +7,7 @@ infra-down:
 	docker compose down
 
 backend-run:
-	cd backend && python -m uvicorn app.main:app --reload
+	cd backend && python -m uvicorn app.main:app --reload --reload-dir app --reload-dir alembic --reload-exclude .venv/* --reload-exclude venv/* --reload-exclude vevn/*
 
 test:
 	cd backend && pytest
@@ -31,6 +31,19 @@ migrate-check:
 	cd backend && python -m alembic heads
 
 ci: compile migrate-check test-foundation
+
+benchmark-beir:
+	cd backend && python -m tests.evaluation.benchmark_runner \
+		--beir-dataset ../nfcorpus \
+		--variants naive_dense_only,standard_hybrid,standard_no_rerank \
+		--output reports/benchmark-beir-nfcorpus
+
+benchmark-beir-smoke:
+	cd backend && python -m tests.evaluation.benchmark_runner \
+		--beir-dataset ../nfcorpus \
+		--beir-limit 20 \
+		--variants naive_dense_only,standard_hybrid,standard_no_rerank \
+		--output reports/benchmark-beir-nfcorpus-smoke
 
 format:
 	@echo "Formatting will be added in a later milestone."
