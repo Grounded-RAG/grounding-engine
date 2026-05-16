@@ -30,9 +30,15 @@ from app.models import ExecutionTier, FreshnessProfile, MessageRole, Namespace, 
 from app.schemas.query import GroundedAnswerResponse, QueryRequest
 from app.services.messages import MessageServiceError, list_conversation_messages
 from app.services.evidence import package_evidence
-from app.services.external_fallback import resolve_external_fallback_policy
+from app.services.external_fallback import (
+    resolve_external_fallback_policy,
+    run_allowlisted_external_fallback,
+)
 from app.services.generation import generate_answer_from_evidence
-from app.services.internal_model_retrieval import resolve_internal_model_retrieval_policy
+from app.services.internal_model_retrieval import (
+    resolve_internal_model_retrieval_policy,
+    run_internal_model_retrieval,
+)
 from app.services.response_shaping import (
     ResponseShapingError,
     shape_degraded_response,
@@ -573,6 +579,7 @@ def _apply_critical_verification(
         "supported_claim_count": verifier_result.supported_claim_count,
         "partially_supported_claim_count": verifier_result.partially_supported_claim_count,
         "unsupported_claim_count": verifier_result.unsupported_claim_count,
+        "contradicted_claim_count": verifier_result.contradicted_claim_count,
         "retry_query_text": verifier_result.retry_query_text,
         "claims": [
             {
@@ -580,6 +587,8 @@ def _apply_critical_verification(
                 "status": claim.status,
                 "matched_chunk_ids": list(claim.matched_chunk_ids),
                 "missing_terms": list(claim.missing_terms),
+                "support_score": claim.support_score,
+                "contradiction_chunk_ids": list(claim.contradiction_chunk_ids),
             }
             for claim in verifier_result.claims
         ],
@@ -682,14 +691,95 @@ async def _run_critical_corrective_retry(
         draft=draft,
         evidence_package=evidence_package,
     )
+    response = response.model_copy(
+        update={
+            "verification_status": "passed",
+            "degraded_reasons": [],
+        }
+    )
     response, critical_verifier_metadata = _apply_critical_verification(
         response=response,
         evidence_package=evidence_package,
     )
+    if critical_verifier_metadata.get("decision") == "accept":
+        response = response.model_copy(
+            update={
+                "verification_status": "passed",
+                "degraded_reasons": [],
+                "support_summary": "grounded",
+            }
+        )
     critical_verifier_metadata = {
         **critical_verifier_metadata,
         "bounded_correction_attempted": True,
+        "corrective_attempt": {
+            "attempt_number": 1,
+            "retry_query_text": retry_query_text,
+            "retrieval_query_count": len(retry_plan.retrieval_queries),
+            "selected_evidence_ids": list(evidence_package.selected_evidence_ids),
+            "resulting_decision": critical_verifier_metadata.get("decision"),
+            "resulting_reason": critical_verifier_metadata.get("reason"),
+        },
     }
+
+
+def _apply_critical_recovery_paths(
+    *,
+    namespace: Namespace,
+    response: GroundedAnswerResponse,
+    evidence_package,
+    critical_verifier_metadata: dict[str, object],
+) -> tuple[GroundedAnswerResponse, object, dict[str, object], dict[str, object]]:
+    """Apply bounded internal and external recovery paths for Critical mode."""
+
+    recovery_metadata: dict[str, object] = {
+        "internal_model_retrieval": {
+            "attempted": False,
+            "used": False,
+            "reason": None,
+        },
+        "external_fallback": {
+            "attempted": False,
+            "used": False,
+            "reason": None,
+            "sources_consulted": [],
+        },
+    }
+
+    updated_evidence_package = evidence_package
+    updated_response = response
+
+    internal_result = run_internal_model_retrieval(
+        namespace=namespace,
+        evidence_package=evidence_package,
+    )
+    recovery_metadata["internal_model_retrieval"] = {
+        "attempted": internal_result.attempted,
+        "used": internal_result.used,
+        "reason": internal_result.reason,
+    }
+    if internal_result.evidence_package is not None:
+        updated_evidence_package = internal_result.evidence_package
+
+    if critical_verifier_metadata.get("decision") in {"refuse", "degrade"}:
+        external_result = run_allowlisted_external_fallback(
+            namespace=namespace,
+            degraded_response=updated_response,
+        )
+        recovery_metadata["external_fallback"] = {
+            "attempted": external_result.attempted,
+            "used": external_result.used,
+            "reason": external_result.reason,
+            "sources_consulted": list(external_result.sources_consulted),
+        }
+        if external_result.response is not None and updated_response.verification_status == "degraded":
+            updated_response = external_result.response
+
+    updated_metadata = {
+        **critical_verifier_metadata,
+        "recovery_paths": recovery_metadata,
+    }
+    return updated_response, updated_evidence_package, updated_metadata, recovery_metadata
     return (
         retrieval_bundle,
         evidence_package,
@@ -909,6 +999,13 @@ async def execute_standard_query(
                             **critical_verifier_metadata,
                             "bounded_correction_attempted": True,
                         }
+                if response.verification_status == "degraded":
+                    response, evidence_package, critical_verifier_metadata, recovery_metadata = _apply_critical_recovery_paths(
+                        namespace=namespace,
+                        response=response,
+                        evidence_package=evidence_package,
+                        critical_verifier_metadata=critical_verifier_metadata,
+                    )
             else:
                 critical_verifier_metadata = None
         except (GroundedGenerationError, ResponseShapingError) as exc:
@@ -936,9 +1033,33 @@ async def execute_standard_query(
             "critical_verifier": critical_verifier_metadata,
         }
     if routing_decision.effective_tier is ExecutionTier.CRITICAL:
+        policy_metadata = _critical_policy_metadata(namespace=namespace)
+        if critical_verifier_metadata is not None:
+            recovery_paths = critical_verifier_metadata.get("recovery_paths")
+            if isinstance(recovery_paths, dict):
+                if isinstance(recovery_paths.get("external_fallback"), dict):
+                    external_recovery = {
+                        key: value
+                        for key, value in recovery_paths["external_fallback"].items()
+                        if value is not None and not (key == "sources_consulted" and value == [])
+                    }
+                    policy_metadata["external_fallback"] = {
+                        **policy_metadata["external_fallback"],
+                        **external_recovery,
+                    }
+                if isinstance(recovery_paths.get("internal_model_retrieval"), dict):
+                    internal_recovery = {
+                        key: value
+                        for key, value in recovery_paths["internal_model_retrieval"].items()
+                        if value is not None
+                    }
+                    policy_metadata["internal_model_retrieval"] = {
+                        **policy_metadata["internal_model_retrieval"],
+                        **internal_recovery,
+                    }
         evidence_debug = {
             **evidence_debug,
-            "critical_policy": _critical_policy_metadata(namespace=namespace),
+            "critical_policy": policy_metadata,
         }
 
     trace_started = time.perf_counter()

@@ -55,6 +55,8 @@ class VerifiedClaim:
     status: str
     matched_chunk_ids: tuple[str, ...]
     missing_terms: tuple[str, ...]
+    support_score: float
+    contradiction_chunk_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -68,13 +70,23 @@ class VerifierResult:
     supported_claim_count: int = 0
     partially_supported_claim_count: int = 0
     unsupported_claim_count: int = 0
+    contradicted_claim_count: int = 0
     retry_query_text: str | None = None
     contradiction_detected: bool = False
     bounded_correction_attempted: bool = False
 
 
+@dataclass(frozen=True)
+class _EvidenceAssessment:
+    chunk_id: str
+    matched_terms: tuple[str, ...]
+    missing_terms: tuple[str, ...]
+    support_score: float
+    contradicts_claim: bool
+
+
 def _normalize_text(value: str) -> str:
-    """Normalize free text for simple lexical support checks."""
+    """Normalize free text for support checks."""
 
     return _WHITESPACE_PATTERN.sub(" ", value.casefold()).strip()
 
@@ -99,7 +111,7 @@ def _claim_terms(claim_text: str) -> tuple[str, ...]:
 def extract_claims(answer_text: str) -> tuple[str, ...]:
     """Split one answer into simple auditable claims."""
 
-    normalized = answer_text.strip()
+    normalized = re.sub(r"\s*\[[A-Z]\d+\]", "", answer_text).strip()
     if not normalized:
         return ()
 
@@ -111,40 +123,56 @@ def extract_claims(answer_text: str) -> tuple[str, ...]:
     return tuple(claims or [normalized])
 
 
-def _detect_contradiction(
-    *,
-    claims: tuple[str, ...],
-    evidence_text_by_chunk: dict[str, str],
-) -> bool:
-    """Detect simple support conflicts across evidence for the same claim terms."""
+def _contains_negation(text: str) -> bool:
+    return any(f" {term} " in f" {text} " for term in _NEGATION_TERMS)
 
-    if len(evidence_text_by_chunk) < 2:
-        return False
 
-    claim_terms = {
-        term
-        for claim in claims
-        for term in _claim_terms(claim)
-    }
-    if not claim_terms:
-        return False
+def _assess_claim_against_evidence(*, claim: str, evidence_text_by_chunk: dict[str, str]) -> tuple[_EvidenceAssessment, tuple[str, ...]]:
+    """Assess one claim against all evidence and return best support plus contradictions."""
 
-    chunk_texts = list(evidence_text_by_chunk.values())
-    has_affirming = False
-    has_negating = False
+    terms = _claim_terms(claim)
+    claim_has_negation = _contains_negation(_normalize_text(claim))
+    best = _EvidenceAssessment(
+        chunk_id="",
+        matched_terms=(),
+        missing_terms=terms,
+        support_score=1.0 if not terms else 0.0,
+        contradicts_claim=False,
+    )
+    contradiction_chunk_ids: list[str] = []
 
-    for evidence_text in chunk_texts:
-        if not any(term in evidence_text for term in claim_terms):
-            continue
-        contains_negation = any(f" {term} " in f" {evidence_text} " for term in _NEGATION_TERMS)
-        if contains_negation:
-            has_negating = True
+    for chunk_id, evidence_text in evidence_text_by_chunk.items():
+        if not terms:
+            score = 1.0
+            matched_terms = ()
+            missing_terms = ()
         else:
-            has_affirming = True
-        if has_affirming and has_negating:
-            return True
+            matched_terms = tuple(term for term in terms if term in evidence_text)
+            missing_terms = tuple(term for term in terms if term not in matched_terms)
+            score = len(matched_terms) / len(terms)
 
-    return False
+        evidence_has_negation = _contains_negation(evidence_text)
+        contradicts = bool(terms) and matched_terms and claim_has_negation != evidence_has_negation
+
+        assessment = _EvidenceAssessment(
+            chunk_id=chunk_id,
+            matched_terms=matched_terms,
+            missing_terms=missing_terms,
+            support_score=score,
+            contradicts_claim=contradicts,
+        )
+
+        if contradicts:
+            contradiction_chunk_ids.append(chunk_id)
+
+        if assessment.support_score > best.support_score:
+            best = assessment
+        elif assessment.support_score == best.support_score:
+            # Prefer non-contradicting evidence at the same score.
+            if best.contradicts_claim and not assessment.contradicts_claim:
+                best = assessment
+
+    return best, tuple(dict.fromkeys(contradiction_chunk_ids))
 
 
 def verify_critical_response(
@@ -159,64 +187,54 @@ def verify_critical_response(
         item.chunk_id: _normalize_text(item.text)
         for item in evidence_package.items
     }
-    contradiction_detected = _detect_contradiction(
-        claims=claims,
-        evidence_text_by_chunk=evidence_text_by_chunk,
-    )
 
     verified_claims: list[VerifiedClaim] = []
     unsupported_detected = False
     partial_detected = False
+    contradiction_detected = False
     supported_claim_count = 0
     partially_supported_claim_count = 0
     unsupported_claim_count = 0
+    contradicted_claim_count = 0
 
     for claim in claims:
         terms = _claim_terms(claim)
-        matched_chunk_ids: list[str] = []
-        best_present_terms: list[str] = []
-        best_supported_chunk_ids: list[str] = []
+        best_assessment, contradiction_chunk_ids = _assess_claim_against_evidence(
+            claim=claim,
+            evidence_text_by_chunk=evidence_text_by_chunk,
+        )
 
-        if terms:
-            for chunk_id, evidence_text in evidence_text_by_chunk.items():
-                present_terms = [term for term in terms if term in evidence_text]
-                if not present_terms:
-                    continue
-                coverage_ratio = len(present_terms) / len(terms)
-                if coverage_ratio >= 0.8:
-                    matched_chunk_ids.append(chunk_id)
-                if len(present_terms) > len(best_present_terms):
-                    best_present_terms = present_terms
-                    best_supported_chunk_ids = [chunk_id] if coverage_ratio >= 0.8 else []
-                elif len(present_terms) == len(best_present_terms) and coverage_ratio >= 0.8:
-                    best_supported_chunk_ids.append(chunk_id)
-
-        missing_terms = [term for term in terms if term not in best_present_terms]
-        best_coverage_ratio = (len(best_present_terms) / len(terms)) if terms else 1.0
-
-        if not terms:
+        if contradiction_chunk_ids:
+            status = "contradicted"
+            contradiction_detected = True
+            contradicted_claim_count += 1
+        elif not terms:
             status = "supported"
             supported_claim_count += 1
-        elif best_coverage_ratio < 0.5:
-            status = "unsupported"
-            unsupported_detected = True
-            unsupported_claim_count += 1
-        elif best_coverage_ratio < 1.0:
+        elif best_assessment.support_score >= 0.85:
+            status = "supported"
+            supported_claim_count += 1
+        elif best_assessment.support_score >= 0.5:
             status = "partially_supported"
             partial_detected = True
             partially_supported_claim_count += 1
         else:
-            status = "supported"
-            supported_claim_count += 1
+            status = "unsupported"
+            unsupported_detected = True
+            unsupported_claim_count += 1
 
-        persisted_chunk_ids = best_supported_chunk_ids if status == "supported" else matched_chunk_ids
+        persisted_chunk_ids = ()
+        if best_assessment.chunk_id and status in {"supported", "partially_supported"}:
+            persisted_chunk_ids = (best_assessment.chunk_id,)
 
         verified_claims.append(
             VerifiedClaim(
                 text=claim,
                 status=status,
-                matched_chunk_ids=tuple(persisted_chunk_ids),
-                missing_terms=tuple(missing_terms),
+                matched_chunk_ids=persisted_chunk_ids,
+                missing_terms=best_assessment.missing_terms,
+                support_score=best_assessment.support_score,
+                contradiction_chunk_ids=contradiction_chunk_ids,
             )
         )
 
@@ -263,6 +281,7 @@ def verify_critical_response(
         supported_claim_count=supported_claim_count,
         partially_supported_claim_count=partially_supported_claim_count,
         unsupported_claim_count=unsupported_claim_count,
+        contradicted_claim_count=contradicted_claim_count,
         retry_query_text=retry_query_text,
         contradiction_detected=contradiction_detected,
     )
