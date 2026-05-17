@@ -1,0 +1,1221 @@
+"""Unit tests for sparse, dense, and fused retrieval helpers."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+import uuid
+from types import SimpleNamespace
+
+import pytest
+
+from app.core.query_analysis import QueryPlan, QueryProfile
+from app.models import ExecutionTier, FreshnessProfile
+from app.pipeline.contracts import FusedRetrievedChunk, RetrievedChunk
+from app.services.retrieval import (
+    dense_retrieve_chunks,
+    fuse_retrieval_hits,
+    retrieve_hybrid_candidates,
+    sparse_retrieve_chunks,
+)
+
+
+class FakeAsyncResult:
+    """Minimal mapping result wrapper for async SQL execution tests."""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self._rows = rows
+
+    def mappings(self) -> "FakeAsyncResult":
+        return self
+
+    def all(self) -> list[dict[str, object]]:
+        return self._rows
+
+
+class FakeScalarQueryResult:
+    """Minimal scalar iterable wrapper for ORM-style retrieval tests."""
+
+    def __init__(self, rows: list[object]) -> None:
+        self._rows = rows
+
+    def scalars(self) -> "FakeScalarQueryResult":
+        return self
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class FakeAsyncSession:
+    """Minimal async session stub for sparse retrieval tests."""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+        self.executed = []
+
+    async def execute(self, statement, params=None):
+        self.executed.append((statement, params))
+        return FakeAsyncResult(self.rows)
+
+
+class ScalarAsyncSession(FakeAsyncSession):
+    """Async session stub that returns ORM-like scalar rows."""
+
+    async def execute(self, statement, params=None):
+        self.executed.append((statement, params))
+        return FakeScalarQueryResult(self.rows)
+
+
+@pytest.mark.asyncio()
+async def test_sparse_retrieve_chunks_maps_database_rows() -> None:
+    """Sparse retrieval should convert DB rows into ordered retrieval hits."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    session = FakeAsyncSession(
+        [
+            {
+                "chunk_id": "chunk-1",
+                "tenant_id": tenant_id,
+                "namespace_id": namespace_id,
+                "doc_id": document_id,
+                "chunk_index": 0,
+                "chunk_text": "alpha beta",
+                "score": 0.42,
+            },
+            {
+                "chunk_id": "chunk-2",
+                "tenant_id": tenant_id,
+                "namespace_id": namespace_id,
+                "doc_id": document_id,
+                "chunk_index": 1,
+                "chunk_text": "beta gamma",
+                "score": 0.35,
+            },
+        ]
+    )
+
+    hits = await sparse_retrieve_chunks(
+        session=session,
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="beta",
+        limit=2,
+    )
+
+    assert [hit.chunk_id for hit in hits] == ["chunk-1", "chunk-2"]
+    assert [hit.rank for hit in hits] == [1, 2]
+    assert hits[0].source == "sparse"
+    assert session.executed[0][1]["query_text"] == "beta"
+
+
+@pytest.mark.asyncio()
+async def test_dense_retrieve_chunks_maps_qdrant_points(monkeypatch) -> None:
+    """Dense retrieval should convert Qdrant points into retrieval hits."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    async def fake_embed_texts(texts: list[str], *, purpose: str = "generic"):
+        assert texts == ["alpha query"]
+        assert purpose == "query"
+        from app.core.embeddings import DenseEmbedding
+
+        return [DenseEmbedding(text="alpha query", vector=[0.1, 0.2, 0.3])]
+
+    def fake_search_dense_points(*, query_vector, tenant_id, namespace_id, limit):
+        assert query_vector == [0.1, 0.2, 0.3]
+        assert limit == 3
+        return [
+            SimpleNamespace(
+                score=0.9,
+                payload={
+                    "chunk_id": "chunk-1",
+                    "tenant_id": str(tenant_id),
+                    "namespace_id": str(namespace_id),
+                    "document_id": str(document_id),
+                    "chunk_index": 0,
+                    "text": "alpha beta",
+                    "section_title": "OVERVIEW",
+                    "section_slug": "overview",
+                    "chunk_role": "section_header",
+                    "starts_with_heading": True,
+                    "is_list_block": False,
+                },
+            )
+        ]
+
+    monkeypatch.setattr("app.services.retrieval.embed_texts", fake_embed_texts)
+    monkeypatch.setattr(
+        "app.services.retrieval.search_dense_points",
+        fake_search_dense_points,
+    )
+
+    hits = await dense_retrieve_chunks(
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="alpha query",
+        limit=3,
+    )
+
+    assert len(hits) == 1
+    assert hits[0].chunk_id == "chunk-1"
+    assert hits[0].rank == 1
+    assert hits[0].source == "dense"
+    assert hits[0].section_title == "OVERVIEW"
+    assert hits[0].chunk_role == "section_header"
+
+
+def test_fuse_retrieval_hits_rewards_mutual_agreement() -> None:
+    """RRF should rank chunks found by both paths above single-path candidates."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="shared",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="shared text",
+            score=0.8,
+            rank=1,
+            source="sparse",
+        ),
+        RetrievedChunk(
+            chunk_id="sparse-only",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=1,
+            text="sparse only",
+            score=0.6,
+            rank=2,
+            source="sparse",
+        ),
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="dense-only",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=2,
+            text="dense only",
+            score=0.7,
+            rank=1,
+            source="dense",
+        ),
+        RetrievedChunk(
+            chunk_id="shared",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="shared text",
+            score=0.65,
+            rank=2,
+            source="dense",
+        ),
+    ]
+
+    fused_hits = fuse_retrieval_hits(sparse_hits, dense_hits, rrf_k=60)
+
+    assert isinstance(fused_hits[0], FusedRetrievedChunk)
+    assert fused_hits[0].chunk_id == "shared"
+    assert fused_hits[0].sources == ("dense", "sparse")
+    assert {hit.chunk_id for hit in fused_hits} == {
+        "shared",
+        "sparse-only",
+        "dense-only",
+    }
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_dedupes_rewrite_repeats_before_fusion(monkeypatch) -> None:
+    """Repeated dense hits across rewrites should not inflate fused scoring."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    shared_dense = RetrievedChunk(
+        chunk_id="shared",
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        document_id=document_id,
+        chunk_index=0,
+        text="The pricing model is usage-based.",
+        score=0.9,
+        rank=1,
+        source="dense",
+    )
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return [shared_dense]
+
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    plan = QueryPlan(
+        raw_query_text="What is the pricing model of this service?",
+        resolved_query_text="What is the pricing model of this service?",
+        profile=QueryProfile(
+            raw_text="What is the pricing model of this service?",
+            normalized_text="what is the pricing model of this service",
+            terms=frozenset({"pricing", "model", "service"}),
+            expanded_terms=frozenset({"pricing", "model", "service"}),
+            attribute_terms=frozenset({"pricing model"}),
+            context_terms=frozenset(),
+            semantic_tags=frozenset(),
+            query_kind="lookup",
+            document_reference_rank=None,
+        ),
+        retrieval_query_text="what is the pricing model of this service",
+        retrieval_queries=(
+            "what is the pricing model of this service",
+            "pricing model service",
+        ),
+        explanation="kind=lookup",
+        used_conversation_context=False,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What is the pricing model of this service?",
+        query_plan=plan,
+        limit=4,
+    )
+
+    assert bundle.sparse_hits == []
+    assert [hit.chunk_id for hit in bundle.dense_hits] == ["shared"]
+    assert bundle.fused_hits[0].chunk_id == "shared"
+    assert bundle.fused_hits[0].fused_score == pytest.approx(1 / 61, rel=1e-6)
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_runs_dense_path_only_when_sparse_disabled(monkeypatch) -> None:
+    """Dense-only retrieval should return dense and fused candidates only."""
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-1",
+            tenant_id=uuid.uuid4(),
+            namespace_id=uuid.uuid4(),
+            document_id=uuid.uuid4(),
+            chunk_index=0,
+            text="alpha beta",
+            score=0.7,
+            rank=1,
+            source="sparse",
+        )
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-2",
+            tenant_id=uuid.uuid4(),
+            namespace_id=uuid.uuid4(),
+            document_id=uuid.uuid4(),
+            chunk_index=1,
+            text="beta gamma",
+            score=0.8,
+            rank=1,
+            source="dense",
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        assert kwargs["query_text"] == "beta query"
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        assert kwargs["query_text"] == "beta query"
+        return dense_hits
+
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=uuid.uuid4(),
+        namespace_id=uuid.uuid4(),
+        query_text="beta query",
+        limit=4,
+    )
+
+    assert bundle.sparse_hits == []
+    assert bundle.dense_hits == dense_hits
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-2"]
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_reranks_for_answerable_name_query(monkeypatch) -> None:
+    """Hybrid retrieval should surface more directly answerable chunks for field-style questions."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-awards",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=3,
+            text="Selected as 1 of 10 students for a prestigious ICT award.",
+            score=0.8,
+            rank=1,
+            source="sparse",
+        ),
+        RetrievedChunk(
+            chunk_id="chunk-name",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="Samrawit Gebremaryam Bahta\nsamrawit@example.com",
+            score=0.2,
+            rank=6,
+            source="sparse",
+        ),
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-experience",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=2,
+            text="AI Engineer at iCog Labs building grounded retrieval systems.",
+            score=0.91,
+            rank=1,
+            source="dense",
+        ),
+        RetrievedChunk(
+            chunk_id="chunk-name",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="Samrawit Gebremaryam Bahta\nsamrawit@example.com",
+            score=0.51,
+            rank=7,
+            source="dense",
+        ),
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        assert kwargs["limit"] == 16
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        assert kwargs["limit"] == 16
+        return dense_hits
+
+    monkeypatch.setattr(
+        "app.services.retrieval.sparse_retrieve_chunks",
+        fake_sparse_retrieve_chunks,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What is the resume owner's name?",
+        limit=4,
+    )
+
+    assert bundle.fused_hits[0].chunk_id == "chunk-name"
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_recovers_header_context_from_relevant_document(
+    monkeypatch,
+) -> None:
+    """Header chunks from a relevant document should be recoverable even when initial hits miss them."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-awards",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=4,
+            text="AWARDS\nSelected for Huawei Seeds for the Future.",
+            score=0.82,
+            rank=1,
+            source="sparse",
+        )
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-experience",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=2,
+            text="PROFESSIONAL EXPERIENCE\nAI Engineer at iCog Labs.",
+            score=0.91,
+            rank=1,
+            source="dense",
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        return dense_hits
+
+    class FakeScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def __iter__(self):
+            return iter(self._rows)
+
+    class SupportingSession(FakeAsyncSession):
+        async def execute(self, statement, params=None):
+            del statement, params
+            return FakeScalarResult(
+                [
+                    SimpleNamespace(
+                        chunk_id="chunk-header",
+                        tenant_id=tenant_id,
+                        namespace_id=namespace_id,
+                        doc_id=document_id,
+                        chunk_index=0,
+                        chunk_text="Samrawit Gebremaryam Bahta\nsamrawit@example.com",
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "app.services.retrieval.sparse_retrieve_chunks",
+        fake_sparse_retrieve_chunks,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=SupportingSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What is the person's name?",
+        limit=4,
+    )
+
+    assert bundle.fused_hits[0].chunk_id == "chunk-header"
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_supports_dataset_summary_queries(monkeypatch) -> None:
+    """Dataset-summary questions should be able to use leading namespace chunks even without lexical hits."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return []
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return []
+
+    monkeypatch.setattr(
+        "app.services.retrieval.sparse_retrieve_chunks",
+        fake_sparse_retrieve_chunks,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    session = ScalarAsyncSession(
+        [
+            SimpleNamespace(
+                chunk_id="chunk-header",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                doc_id=document_id,
+                chunk_index=0,
+                chunk_text="Samrawit Gebremaryam Bahta\nEDUCATION\nBSc in Software Engineering",
+            ),
+            SimpleNamespace(
+                chunk_id="chunk-skills",
+                tenant_id=tenant_id,
+                namespace_id=namespace_id,
+                doc_id=document_id,
+                chunk_index=1,
+                chunk_text="TECHNICAL SKILLS\nPython, Go, TypeScript, FastAPI",
+            ),
+        ]
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=session,
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What is the dataset about?",
+        limit=4,
+    )
+
+    assert [hit.chunk_id for hit in bundle.fused_hits[:2]] == ["chunk-header", "chunk-skills"]
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_handles_typoed_experience_query(monkeypatch) -> None:
+    """Typos in focused field questions should still surface the best experience chunk."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-name",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="Samrawit Gebremaryam Bahta\nsamrawit@example.com",
+            score=0.84,
+            rank=1,
+            source="sparse",
+        ),
+        RetrievedChunk(
+            chunk_id="chunk-experience",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=2,
+            text="PROFESSIONAL EXPERIENCE\nAI Engineer at iCog Labs building grounded systems.",
+            score=0.41,
+            rank=5,
+            source="sparse",
+        ),
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-experience",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=2,
+            text="PROFESSIONAL EXPERIENCE\nAI Engineer at iCog Labs building grounded systems.",
+            score=0.91,
+            rank=1,
+            source="dense",
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        return dense_hits
+
+    monkeypatch.setattr(
+        "app.services.retrieval.sparse_retrieve_chunks",
+        fake_sparse_retrieve_chunks,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="what is her work experiance",
+        limit=4,
+    )
+
+    assert bundle.fused_hits[0].chunk_id == "chunk-experience"
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_prefers_matching_section_metadata_for_collection_query(
+    monkeypatch,
+) -> None:
+    """Section-aware reranking should prefer the matching section over incidental wording."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-award",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=6,
+            text="Enhanced skills in advanced ICT through targeted workshops.",
+            score=0.88,
+            rank=1,
+            source="sparse",
+            section_title="AWARDS",
+            section_slug="awards",
+            chunk_role="section_body",
+        ),
+        RetrievedChunk(
+            chunk_id="chunk-skills",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=8,
+            text="TECHNICAL SKILLS\nProgramming Languages: Python, Go, TypeScript",
+            score=0.52,
+            rank=4,
+            source="sparse",
+            section_title="TECHNICAL SKILLS",
+            section_slug="technical-skills",
+            chunk_role="section_header",
+            starts_with_heading=True,
+            is_list_block=True,
+        ),
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-skills",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=8,
+            text="TECHNICAL SKILLS\nProgramming Languages: Python, Go, TypeScript",
+            score=0.91,
+            rank=1,
+            source="dense",
+            section_title="TECHNICAL SKILLS",
+            section_slug="technical-skills",
+            chunk_role="section_header",
+            starts_with_heading=True,
+            is_list_block=True,
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return dense_hits
+
+    monkeypatch.setattr(
+        "app.services.retrieval.sparse_retrieve_chunks",
+        fake_sparse_retrieve_chunks,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.dense_retrieve_chunks",
+        fake_dense_retrieve_chunks,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What are her skills?",
+        limit=4,
+    )
+
+    assert bundle.fused_hits[0].chunk_id == "chunk-skills"
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_skips_enterprise_reranker_for_standard_tier(monkeypatch) -> None:
+    """Standard retrieval should not invoke the Enterprise reranker abstraction."""
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-1",
+            tenant_id=uuid.uuid4(),
+            namespace_id=uuid.uuid4(),
+            document_id=uuid.uuid4(),
+            chunk_index=0,
+            text="alpha beta",
+            score=0.7,
+            rank=1,
+            source="sparse",
+        )
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-2",
+            tenant_id=uuid.uuid4(),
+            namespace_id=uuid.uuid4(),
+            document_id=uuid.uuid4(),
+            chunk_index=1,
+            text="beta gamma",
+            score=0.8,
+            rank=1,
+            source="dense",
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return dense_hits
+
+    class FailIfCalledReranker:
+        backend_name = "fail"
+
+        async def rerank(self, *, query_text, hits, limit):
+            del query_text, hits, limit
+            raise AssertionError("Standard retrieval should not invoke Enterprise reranking.")
+
+    monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
+    monkeypatch.setattr(
+        "app.services.retrieval.resolve_retrieval_reranker",
+        lambda **kwargs: FailIfCalledReranker(),
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=uuid.uuid4(),
+        namespace_id=uuid.uuid4(),
+        query_text="beta query",
+        execution_tier=ExecutionTier.STANDARD,
+        limit=4,
+    )
+
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-2"]
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_uses_stub_reranker_for_enterprise(monkeypatch) -> None:
+    """Enterprise retrieval should be able to delegate final ordering to the reranker interface."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-1",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="first chunk",
+            score=0.7,
+            rank=1,
+            source="sparse",
+        )
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-2",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=1,
+            text="second chunk",
+            score=0.8,
+            rank=1,
+            source="dense",
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return dense_hits
+
+    class ReverseStubReranker:
+        backend_name = "stub"
+
+        async def rerank(self, *, query_text, hits, limit):
+            del query_text, limit
+            return SimpleNamespace(
+                backend_name="stub",
+                applied=True,
+                hits=[
+                    SimpleNamespace(chunk_id=hit.chunk_id, score=1.0 - index, rank=index + 1)
+                    for index, hit in enumerate(reversed(hits))
+                ],
+            )
+
+    monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
+    monkeypatch.setattr(
+        "app.services.retrieval.resolve_retrieval_reranker",
+        lambda **kwargs: ReverseStubReranker(),
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.get_settings",
+        lambda: SimpleNamespace(
+            retrieval_candidate_limit=8,
+            retrieval_overfetch_factor=4,
+            rrf_smoothing_constant=60,
+            evidence_package_limit=3,
+            enterprise_reranker_candidate_limit=8,
+        ),
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="beta query",
+        execution_tier=ExecutionTier.ENTERPRISE,
+        limit=2,
+    )
+
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-2"]
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_falls_back_when_enterprise_reranker_errors(monkeypatch) -> None:
+    """Enterprise retrieval should stay usable when the reranker backend fails."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-1",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="first chunk",
+            score=0.7,
+            rank=1,
+            source="sparse",
+        )
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="chunk-2",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=1,
+            text="second chunk",
+            score=0.8,
+            rank=1,
+            source="dense",
+        )
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return dense_hits
+
+    class FailingReranker:
+        backend_name = "gemini_v1"
+
+        async def rerank(self, *, query_text, hits, limit):
+            del query_text, hits, limit
+            from app.core.reranker import RerankerError
+
+            raise RerankerError("reranker unavailable")
+
+    monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
+    monkeypatch.setattr(
+        "app.services.retrieval.resolve_retrieval_reranker",
+        lambda **kwargs: FailingReranker(),
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.get_settings",
+        lambda: SimpleNamespace(
+            retrieval_candidate_limit=8,
+            retrieval_overfetch_factor=4,
+            rrf_smoothing_constant=60,
+            evidence_package_limit=3,
+            enterprise_reranker_candidate_limit=8,
+        ),
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="beta query",
+        execution_tier=ExecutionTier.ENTERPRISE,
+        limit=2,
+    )
+
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["chunk-2"]
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_applies_enterprise_freshness_scoring(monkeypatch) -> None:
+    """Enterprise retrieval should prefer newer documents when the query explicitly asks for recency."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    old_document_id = uuid.uuid4()
+    new_document_id = uuid.uuid4()
+
+    sparse_hits = [
+        RetrievedChunk(
+            chunk_id="old-policy",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=old_document_id,
+            chunk_index=0,
+            text="Policy version 2023.09 remains available for reference.",
+            score=0.9,
+            rank=1,
+            source="sparse",
+        ),
+        RetrievedChunk(
+            chunk_id="new-policy",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=new_document_id,
+            chunk_index=0,
+            text="Policy version 2025.01 is the latest published update.",
+            score=0.7,
+            rank=2,
+            source="sparse",
+        ),
+    ]
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="old-policy",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=old_document_id,
+            chunk_index=0,
+            text="Policy version 2023.09 remains available for reference.",
+            score=0.88,
+            rank=1,
+            source="dense",
+        ),
+        RetrievedChunk(
+            chunk_id="new-policy",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=new_document_id,
+            chunk_index=0,
+            text="Policy version 2025.01 is the latest published update.",
+            score=0.6,
+            rank=2,
+            source="dense",
+        ),
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return sparse_hits
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return dense_hits
+
+    async def fake_fetch_supporting_context_hits(**kwargs):
+        del kwargs
+        return []
+
+    async def fake_fetch_document_freshness_metadata(**kwargs):
+        del kwargs
+        return {
+            old_document_id: datetime(2023, 9, 1, tzinfo=UTC),
+            new_document_id: datetime(2025, 1, 10, tzinfo=UTC),
+        }
+
+    async def fake_apply_enterprise_reranker(hits, **kwargs):
+        del kwargs
+        return hits, {
+            "attempted": False,
+            "applied": False,
+            "backend": "disabled",
+        }
+
+    monkeypatch.setattr("app.services.retrieval.sparse_retrieve_chunks", fake_sparse_retrieve_chunks)
+    monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
+    monkeypatch.setattr(
+        "app.services.retrieval._fetch_supporting_context_hits",
+        fake_fetch_supporting_context_hits,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval._fetch_document_freshness_metadata",
+        fake_fetch_document_freshness_metadata,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval._apply_enterprise_reranker",
+        fake_apply_enterprise_reranker,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval.get_settings",
+        lambda: SimpleNamespace(
+            retrieval_candidate_limit=8,
+            retrieval_overfetch_factor=4,
+            rrf_smoothing_constant=60,
+            evidence_package_limit=3,
+            enterprise_reranker_candidate_limit=8,
+            enterprise_temporal_scoring_enabled=True,
+        ),
+    )
+
+    plan = QueryPlan(
+        raw_query_text="What is the latest policy version?",
+        resolved_query_text="What is the latest policy version?",
+        profile=QueryProfile(
+            raw_text="What is the latest policy version?",
+            normalized_text="what is the latest policy version",
+            terms=frozenset({"latest", "policy", "version"}),
+            expanded_terms=frozenset({"latest", "policy", "version"}),
+            attribute_terms=frozenset({"policy version"}),
+            context_terms=frozenset(),
+            semantic_tags=frozenset({"date"}),
+            query_kind="lookup",
+            document_reference_rank=None,
+        ),
+        retrieval_query_text="what is the latest policy version",
+        retrieval_queries=("what is the latest policy version",),
+        explanation="kind=lookup",
+        used_conversation_context=False,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What is the latest policy version?",
+        query_plan=plan,
+        execution_tier=ExecutionTier.ENTERPRISE,
+        freshness_profile=FreshnessProfile.AGGRESSIVE,
+        limit=2,
+    )
+
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["new-policy", "old-policy"]
+    assert bundle.debug is not None
+    assert bundle.debug["freshness"]["applied"] is True
+
+
+@pytest.mark.asyncio()
+async def test_retrieve_hybrid_candidates_keeps_standard_order_without_freshness_scoring(monkeypatch) -> None:
+    """Standard retrieval should ignore freshness boosts even for recency-sensitive wording."""
+
+    tenant_id = uuid.uuid4()
+    namespace_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+
+    dense_hits = [
+        RetrievedChunk(
+            chunk_id="older-result",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=document_id,
+            chunk_index=0,
+            text="Current release notes mention the older policy.",
+            score=0.9,
+            rank=1,
+            source="dense",
+        ),
+        RetrievedChunk(
+            chunk_id="newer-result",
+            tenant_id=tenant_id,
+            namespace_id=namespace_id,
+            document_id=uuid.uuid4(),
+            chunk_index=0,
+            text="Current release notes mention the new policy.",
+            score=0.7,
+            rank=2,
+            source="dense",
+        ),
+    ]
+
+    async def fake_sparse_retrieve_chunks(**kwargs):
+        del kwargs
+        return []
+
+    async def fake_dense_retrieve_chunks(**kwargs):
+        del kwargs
+        return dense_hits
+
+    async def fake_fetch_supporting_context_hits(**kwargs):
+        del kwargs
+        return []
+
+    async def fail_fetch_document_freshness_metadata(**kwargs):
+        del kwargs
+        raise AssertionError("Standard retrieval should not fetch freshness metadata.")
+
+    monkeypatch.setattr("app.services.retrieval.dense_retrieve_chunks", fake_dense_retrieve_chunks)
+    monkeypatch.setattr(
+        "app.services.retrieval._fetch_supporting_context_hits",
+        fake_fetch_supporting_context_hits,
+    )
+    monkeypatch.setattr(
+        "app.services.retrieval._fetch_document_freshness_metadata",
+        fail_fetch_document_freshness_metadata,
+    )
+
+    plan = QueryPlan(
+        raw_query_text="What is the latest policy version?",
+        resolved_query_text="What is the latest policy version?",
+        profile=QueryProfile(
+            raw_text="What is the latest policy version?",
+            normalized_text="what is the latest policy version",
+            terms=frozenset({"latest", "policy", "version"}),
+            expanded_terms=frozenset({"latest", "policy", "version"}),
+            attribute_terms=frozenset({"policy version"}),
+            context_terms=frozenset(),
+            semantic_tags=frozenset({"date"}),
+            query_kind="lookup",
+            document_reference_rank=None,
+        ),
+        retrieval_query_text="what is the latest policy version",
+        retrieval_queries=("what is the latest policy version",),
+        explanation="kind=lookup",
+        used_conversation_context=False,
+    )
+
+    bundle = await retrieve_hybrid_candidates(
+        session=FakeAsyncSession([]),
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_text="What is the latest policy version?",
+        query_plan=plan,
+        execution_tier=ExecutionTier.STANDARD,
+        freshness_profile=FreshnessProfile.AGGRESSIVE,
+        limit=2,
+    )
+
+    assert [hit.chunk_id for hit in bundle.fused_hits] == ["older-result", "newer-result"]
+    assert bundle.debug is not None
+    assert bundle.debug["freshness"]["applied"] is False
