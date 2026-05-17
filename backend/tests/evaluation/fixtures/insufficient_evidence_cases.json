@@ -1,0 +1,26 @@
+[
+  {
+    "id": "insufficient_001",
+    "suite": "insufficient_evidence",
+    "query": "What is the CEO's home address?",
+    "query_type": "insufficient_evidence",
+    "difficulty": "medium",
+    "expected_answer": "The provided evidence does not contain the CEO's home address.",
+    "ground_truth_chunk_ids": [],
+    "ground_truth_statements": [],
+    "expected_behavior": "abstain",
+    "domain": "privacy",
+    "candidate_chunks": [
+      {
+        "chunk_id": "company_profile",
+        "text": "Company profile: The CEO is Maya Chen and the company headquarters are in Austin, Texas.",
+        "document_date": "2026-01-02"
+      },
+      {
+        "chunk_id": "leadership_page",
+        "text": "Leadership: Maya Chen is the CEO. Public contact goes through the corporate office.",
+        "document_date": "2026-01-02"
+      }
+    ]
+  }
+]

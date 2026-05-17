@@ -11,11 +11,14 @@ from app.core.query_analysis import (
     is_collection_query,
     is_comparison_query,
     is_count_query,
+    is_definition_query,
     is_entity_context_query,
     primary_intent,
     query_plan_metadata,
+    refine_query_plan_for_execution_tier,
     requested_attribute_label,
 )
+from app.models import ExecutionTier
 
 
 def test_build_query_profile_detects_dataset_summary_with_common_typo() -> None:
@@ -33,6 +36,16 @@ def test_build_query_profile_extracts_generic_attribute_phrase() -> None:
 
     assert "pricing model" in profile.attribute_terms
     assert profile.query_kind == "lookup"
+
+
+def test_build_query_profile_routes_concept_what_is_question_as_definition() -> None:
+    """Concept explanations should not be handled as exact field extraction."""
+
+    profile = build_query_profile("What is continual learning? How does it work?")
+
+    assert profile.query_kind == "definition"
+    assert is_definition_query(profile) is True
+    assert final_answer_mode(profile) == "open"
 
 
 def test_build_query_profile_corrects_common_attribute_typo() -> None:
@@ -153,6 +166,87 @@ def test_build_query_plan_expands_morphological_aliases_for_retrieval() -> None:
     plan = build_query_plan("Did she work in pattern miner?")
 
     assert any("mining" in query.casefold() for query in plan.retrieval_queries)
+
+
+def test_refine_query_plan_for_standard_keeps_standard_variants() -> None:
+    """Standard refinement should be a no-op to preserve the baseline behavior."""
+
+    plan = build_query_plan("Compare option A and option B deployment costs.")
+
+    refined = refine_query_plan_for_execution_tier(
+        plan,
+        execution_tier=ExecutionTier.STANDARD,
+    )
+
+    assert refined == plan
+
+
+def test_refine_query_plan_for_enterprise_adds_controlled_comparison_rewrites() -> None:
+    """Enterprise planning should add a few extra retrieval intents for hard comparisons."""
+
+    plan = build_query_plan("Compare option A and option B deployment costs and staffing.")
+
+    refined = refine_query_plan_for_execution_tier(
+        plan,
+        execution_tier=ExecutionTier.ENTERPRISE,
+    )
+
+    assert len(refined.retrieval_queries) > len(plan.retrieval_queries)
+    assert any("difference" in query.casefold() for query in refined.retrieval_queries)
+    assert "enterprise_planning=true" in refined.explanation
+
+
+def test_refine_query_plan_for_enterprise_adds_follow_up_focus_variant() -> None:
+    """Enterprise planning should keep a controlled follow-up variant for context-heavy queries."""
+
+    conversation_context = build_conversation_context(
+        recent_user_queries=[
+            "What did she do at iCog Labs?",
+            "What about the previous document?",
+        ],
+    )
+    assert conversation_context is not None
+    plan = build_query_plan(
+        "did it mention pattern miner there",
+        conversation_context=conversation_context,
+    )
+
+    refined = refine_query_plan_for_execution_tier(
+        plan,
+        execution_tier=ExecutionTier.ENTERPRISE,
+    )
+
+    assert len(refined.retrieval_queries) >= len(plan.retrieval_queries)
+    assert any("follow up" in query.casefold() for query in refined.retrieval_queries)
+
+
+def test_refine_query_plan_for_enterprise_decomposes_start_end_lookup() -> None:
+    """Enterprise planning should decompose start/end lookups into bounded date intents."""
+
+    plan = build_query_plan("When did the pilot start and end?")
+
+    refined = refine_query_plan_for_execution_tier(
+        plan,
+        execution_tier=ExecutionTier.ENTERPRISE,
+    )
+
+    assert any("start date" in query.casefold() for query in refined.retrieval_queries)
+    assert any("end date" in query.casefold() for query in refined.retrieval_queries)
+
+
+def test_refine_query_plan_for_enterprise_decomposes_multi_attribute_lookup() -> None:
+    """Enterprise planning should split multi-attribute lookups into tighter attribute queries."""
+
+    plan = build_query_plan("What are the methods, the tools?")
+
+    refined = refine_query_plan_for_execution_tier(
+        plan,
+        execution_tier=ExecutionTier.ENTERPRISE,
+    )
+
+    assert len(refined.retrieval_queries) > len(plan.retrieval_queries)
+    assert any("method" in query.casefold() for query in refined.retrieval_queries)
+    assert any("tool" in query.casefold() for query in refined.retrieval_queries)
 
 
 def test_build_query_plan_uses_previous_user_query_for_underspecified_follow_up() -> None:

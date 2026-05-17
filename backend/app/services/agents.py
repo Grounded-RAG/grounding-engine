@@ -15,6 +15,14 @@ from app.services.capabilities import get_current_supported_modes
 from app.schemas.agents import AgentCreateRequest, AgentUpdateRequest
 
 
+_ORDERED_AGENT_MODES: tuple[UserFacingMode, ...] = (
+    UserFacingMode.AUTO,
+    UserFacingMode.INSTANT,
+    UserFacingMode.THINKING,
+    UserFacingMode.VERIFIED,
+)
+
+
 class AgentServiceError(RuntimeError):
     """Raised when an agent operation cannot be completed."""
 
@@ -67,7 +75,9 @@ def _normalize_allowed_modes(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 
-    requested_modes = allowed_modes or [UserFacingMode.AUTO, UserFacingMode.INSTANT]
+    requested_modes = allowed_modes or [
+        mode for mode in _ORDERED_AGENT_MODES if mode in current_modes
+    ]
     normalized_values: list[str] = []
     seen: set[str] = set()
     for mode in requested_modes:

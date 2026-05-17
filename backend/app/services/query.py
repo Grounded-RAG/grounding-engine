@@ -13,15 +13,19 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext
+from app.config import get_settings
 from app.core.llm_client import GroundedGenerationError
 from app.core.query_analysis import (
     ConversationContext,
     build_conversation_context,
     build_query_plan,
+    final_answer_mode,
+    refine_query_plan_for_execution_tier,
     query_plan_metadata,
     QueryPlan,
 )
-from app.models import ExecutionTier, MessageRole, Namespace, QueryTrace, UserFacingMode
+from app.core.telemetry import bind_execution_context, get_logger
+from app.models import ExecutionTier, FreshnessProfile, MessageRole, Namespace, QueryTrace, UserFacingMode
 from app.schemas.query import GroundedAnswerResponse, QueryRequest
 from app.services.messages import MessageServiceError, list_conversation_messages
 from app.services.evidence import package_evidence
@@ -32,6 +36,9 @@ from app.services.response_shaping import (
     shape_grounded_response,
 )
 from app.services.retrieval import RetrievalBundle, RetrievalError, retrieve_hybrid_candidates
+
+
+logger = get_logger("app.query")
 
 
 class QueryServiceError(RuntimeError):
@@ -71,6 +78,12 @@ _SMALLTALK_QUERIES = {
 
 _GREETING_PREFIXES = ("hi", "hello", "hey", "hiya", "yo")
 
+_TIER_RANK: dict[ExecutionTier, int] = {
+    ExecutionTier.STANDARD: 1,
+    ExecutionTier.ENTERPRISE: 2,
+    ExecutionTier.CRITICAL: 3,
+}
+
 
 def _degraded_reason_for_generation_exception(exc: Exception) -> tuple[str, str]:
     """Map generator/shaping failures to clearer Standard degraded outcomes."""
@@ -86,10 +99,82 @@ def _degraded_reason_for_generation_exception(exc: Exception) -> tuple[str, str]
             "INSUFFICIENT_QUERY_ALIGNMENT",
             "I found related material, but not enough evidence that directly answers this question.",
         )
+    if "configured generation provider" in message:
+        return (
+            "GENERATION_PROVIDER_FAILED",
+            "I do not have an answer for this request because the configured model could not produce a grounded response.",
+        )
     return (
         "INSUFFICIENT_SUPPORT",
         "I found some related material, but not enough grounded evidence to answer confidently.",
     )
+
+
+def _evidence_debug_summary(*, selected_evidence_ids: list[str], evidence_package) -> dict[str, object]:
+    """Build a compact evidence summary for persisted trace inspection."""
+
+    return {
+        "selected_evidence_ids": list(selected_evidence_ids),
+        "item_count": len(evidence_package.items),
+        "document_count": len({item.document_id for item in evidence_package.items}),
+        "section_slugs": sorted(
+            {
+                item.section_slug
+                for item in evidence_package.items
+                if item.section_slug
+            }
+        )[:5],
+    }
+
+
+def _log_query_identification(*, query_plan: QueryPlan) -> None:
+    """Log query classification details used for routing and answer shaping."""
+
+    profile = query_plan.profile
+    logger.info(
+        "query_identified",
+        query_text=query_plan.raw_query_text,
+        resolved_query_text=query_plan.resolved_query_text,
+        query_kind=profile.query_kind,
+        answer_mode=final_answer_mode(profile),
+        terms=sorted(profile.terms)[:12],
+        attribute_terms=sorted(profile.attribute_terms),
+        semantic_tags=sorted(profile.semantic_tags),
+        context_terms=sorted(profile.context_terms),
+        retrieval_queries=list(query_plan.retrieval_queries),
+        used_conversation_context=query_plan.used_conversation_context,
+    )
+
+
+def _log_selected_evidence(*, query_text: str, evidence_package) -> None:
+    """Log the final evidence package handed to generation."""
+
+    logger.debug(
+        "evidence_package_selected",
+        query_text=query_text,
+        selected_count=len(evidence_package.items),
+        selected_evidence=[
+            {
+                "citation_id": item.citation_id,
+                "chunk_id": item.chunk_id,
+                "document_id": str(item.document_id),
+                "chunk_index": item.chunk_index,
+                "score": item.score,
+                "sources": list(item.sources),
+                "section_title": item.section_title,
+                "section_slug": item.section_slug,
+                "chunk_role": item.chunk_role,
+                "text_preview": item.text[:220],
+            }
+            for item in evidence_package.items
+        ],
+    )
+
+
+def _supports_execution_tier(*, available_tier: ExecutionTier, required_tier: ExecutionTier) -> bool:
+    """Return whether the resolved execution tier satisfies one namespace requirement."""
+
+    return _TIER_RANK[available_tier] >= _TIER_RANK[required_tier]
 
 
 def _is_smalltalk_query(query_text: str) -> bool:
@@ -138,12 +223,139 @@ def _smalltalk_response() -> GroundedAnswerResponse:
     )
 
 
+def _requested_tier_from_mode(selected_mode: UserFacingMode | None) -> ExecutionTier | None:
+    """Map user-facing modes into their backing execution tiers."""
+
+    if selected_mode is UserFacingMode.THINKING:
+        return ExecutionTier.ENTERPRISE
+    if selected_mode is UserFacingMode.VERIFIED:
+        return ExecutionTier.CRITICAL
+    return None
+
+
+def _enterprise_route_reasons(query_plan: QueryPlan) -> tuple[str, ...]:
+    """Return explainable triggers for minimal hard-query Enterprise routing."""
+
+    profile = query_plan.profile
+    reasons: list[str] = []
+
+    if profile.query_kind == "comparison":
+        reasons.append("comparison_query")
+    if profile.query_kind == "action":
+        reasons.append("action_query")
+    if len(profile.attribute_terms) > 1 and profile.query_kind in {"comparison", "list", "lookup"}:
+        reasons.append("multi_attribute_query")
+    if profile.document_reference_rank is not None:
+        reasons.append("document_reference_query")
+    if query_plan.used_conversation_context and profile.query_kind in {"comparison", "entity", "open", "summary"}:
+        reasons.append("follow_up_context_query")
+    if len(query_plan.retrieval_queries) >= 3 and profile.query_kind in {"comparison", "action", "entity"}:
+        reasons.append("multi_intent_retrieval")
+
+    deduped_reasons: list[str] = []
+    for reason in reasons:
+        if reason not in deduped_reasons:
+            deduped_reasons.append(reason)
+    return tuple(deduped_reasons)
+
+
+def _resolve_execution_routing(
+    *,
+    query_request: QueryRequest,
+    selected_mode: UserFacingMode | None,
+    query_plan: QueryPlan | None = None,
+) -> ExecutionRoutingDecision:
+    """Resolve which execution tier is being requested and which is currently active."""
+
+    settings = get_settings()
+    requested_from_mode = _requested_tier_from_mode(selected_mode)
+
+    if query_request.requested_tier is not None:
+        requested_tier = query_request.requested_tier
+        request_source = "query_request"
+    elif requested_from_mode is not None:
+        requested_tier = requested_from_mode
+        request_source = "selected_mode"
+    elif (
+        query_plan is not None
+        and selected_mode in {None, UserFacingMode.AUTO}
+        and settings.enterprise_enabled
+        and settings.enterprise_auto_routing_enabled
+        and _enterprise_route_reasons(query_plan)
+    ):
+        requested_tier = ExecutionTier.ENTERPRISE
+        request_source = "auto_router"
+    else:
+        requested_tier = ExecutionTier.STANDARD
+        request_source = "default"
+
+    route_triggers = _enterprise_route_reasons(query_plan) if query_plan is not None else ()
+    router_recommendation = requested_tier
+
+    if requested_tier is ExecutionTier.ENTERPRISE:
+        if settings.enterprise_enabled:
+            effective_tier = ExecutionTier.ENTERPRISE
+            if request_source == "auto_router":
+                routing_reason = "enterprise_auto_hard_query"
+            elif selected_mode is UserFacingMode.THINKING:
+                routing_reason = "thinking_mode_enterprise"
+            else:
+                routing_reason = "enterprise_requested_enabled"
+        else:
+            effective_tier = ExecutionTier.STANDARD
+            routing_reason = (
+                "thinking_mode_fallback_standard"
+                if selected_mode is UserFacingMode.THINKING
+                else "enterprise_requested_fallback_standard"
+            )
+    elif requested_tier is ExecutionTier.CRITICAL:
+        effective_tier = ExecutionTier.STANDARD
+        routing_reason = "critical_requested_fallback_standard"
+    else:
+        effective_tier = ExecutionTier.STANDARD
+        routing_reason = "standard_default"
+
+    return ExecutionRoutingDecision(
+        requested_tier=requested_tier,
+        router_recommendation=router_recommendation,
+        effective_tier=effective_tier,
+        routing_reason=routing_reason,
+        request_source=request_source,
+        route_triggers=route_triggers,
+    )
+
+
 @dataclass(frozen=True)
 class QueryExecutionResult:
     """Completed Standard query result including persisted trace metadata."""
 
     response: GroundedAnswerResponse
     trace_id: uuid.UUID
+
+
+@dataclass(frozen=True)
+class ExecutionRoutingDecision:
+    """Resolved execution-tier decision for one query request."""
+
+    requested_tier: ExecutionTier
+    router_recommendation: ExecutionTier
+    effective_tier: ExecutionTier
+    routing_reason: str
+    request_source: str
+    route_triggers: tuple[str, ...] = ()
+
+    def trace_metadata(self, *, enterprise_enabled: bool) -> dict[str, object]:
+        """Return compact routing metadata for persisted traces and debugging."""
+
+        return {
+            "requested_tier": self.requested_tier.value,
+            "router_recommendation": self.router_recommendation.value,
+            "effective_tier": self.effective_tier.value,
+            "routing_reason": self.routing_reason,
+            "request_source": self.request_source,
+            "route_triggers": list(self.route_triggers),
+            "enterprise_enabled": enterprise_enabled,
+        }
 
 
 async def _get_namespace_for_tenant(
@@ -179,11 +391,22 @@ async def _persist_query_trace(
     total_latency_ms: int,
     generator_provider: str,
     query_plan: QueryPlan | None = None,
+    evidence_debug: dict[str, object] | None = None,
+    routing_decision: ExecutionRoutingDecision | None = None,
     agent_id: uuid.UUID | None = None,
     conversation_id: uuid.UUID | None = None,
     selected_mode: UserFacingMode | None = None,
 ) -> QueryTrace:
     """Persist one Standard query trace for later debugging and evaluation."""
+
+    settings = get_settings()
+    resolved_routing = routing_decision or ExecutionRoutingDecision(
+        requested_tier=ExecutionTier.STANDARD,
+        router_recommendation=ExecutionTier.STANDARD,
+        effective_tier=ExecutionTier.STANDARD,
+        routing_reason="standard_default",
+        request_source="default",
+    )
 
     trace = QueryTrace(
         tenant_id=tenant_context.tenant_id,
@@ -191,10 +414,10 @@ async def _persist_query_trace(
         agent_id=agent_id,
         conversation_id=conversation_id,
         selected_mode=selected_mode,
-        requested_tier=ExecutionTier.STANDARD,
-        router_recommendation=ExecutionTier.STANDARD,
-        effective_tier=ExecutionTier.STANDARD,
-        routing_reason="phase1_standard_query",
+        requested_tier=resolved_routing.requested_tier,
+        router_recommendation=resolved_routing.router_recommendation,
+        effective_tier=resolved_routing.effective_tier,
+        routing_reason=resolved_routing.routing_reason,
         query_redacted=query_request.query,
         query_ciphertext=None,
         retrieved_chunk_ids=[hit.chunk_id for hit in retrieval_bundle.fused_hits],
@@ -203,6 +426,13 @@ async def _persist_query_trace(
         verifier_result={
             "status": response.verification_status,
             "query_plan": query_plan_metadata(query_plan) if query_plan is not None else None,
+            "execution_routing": (
+                resolved_routing.trace_metadata(enterprise_enabled=settings.enterprise_enabled)
+                if settings.enterprise_trace_metadata_enabled
+                else None
+            ),
+            "retrieval_debug": retrieval_bundle.debug if settings.enterprise_trace_metadata_enabled else None,
+            "evidence_debug": evidence_debug if settings.enterprise_trace_metadata_enabled else None,
         },
         final_answer_redacted=response.answer,
         citations=[citation.model_dump(mode="json") for citation in response.citations],
@@ -312,15 +542,53 @@ async def execute_standard_query(
         tenant_id=tenant_context.tenant_id,
         namespace_id=query_request.namespace_id,
     )
-    if namespace.min_execution_tier is not ExecutionTier.STANDARD:
+    started_at = time.perf_counter()
+    query_plan: QueryPlan | None = None
+
+    if _is_smalltalk_query(query_request.query):
+        routing_decision = _resolve_execution_routing(
+            query_request=query_request,
+            selected_mode=selected_mode,
+        )
+    else:
+        query_plan = build_query_plan(
+            query_request.query,
+            conversation_context=await _resolve_conversation_context(
+                session=session,
+                tenant_id=tenant_context.tenant_id,
+                conversation_id=conversation_id,
+                current_query=query_request.query,
+            ),
+        )
+        routing_decision = _resolve_execution_routing(
+            query_request=query_request,
+            selected_mode=selected_mode,
+            query_plan=query_plan,
+        )
+        query_plan = refine_query_plan_for_execution_tier(
+            query_plan,
+            execution_tier=routing_decision.effective_tier,
+        )
+        _log_query_identification(query_plan=query_plan)
+
+    if not _supports_execution_tier(
+        available_tier=routing_decision.effective_tier,
+        required_tier=namespace.min_execution_tier,
+    ):
         raise QueryServiceError(
-            "Namespace requires a higher execution tier than Standard.",
+            "Namespace requires a higher execution tier than the resolved query path.",
             status_code=status.HTTP_409_CONFLICT,
         )
 
-    started_at = time.perf_counter()
+    bind_execution_context(
+        requested_tier=routing_decision.requested_tier.value,
+        router_recommendation=routing_decision.router_recommendation.value,
+        effective_tier=routing_decision.effective_tier.value,
+        routing_reason=routing_decision.routing_reason,
+        selected_mode=selected_mode.value if selected_mode is not None else None,
+    )
 
-    if _is_smalltalk_query(query_request.query):
+    if query_plan is None:
         retrieval_bundle = RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
         response = _smalltalk_response()
         stage_latencies_ms = {
@@ -339,6 +607,8 @@ async def execute_standard_query(
             total_latency_ms=int((time.perf_counter() - started_at) * 1000),
             generator_provider="clarification-handler-v1",
             query_plan=None,
+            evidence_debug=None,
+            routing_decision=routing_decision,
             agent_id=agent_id,
             conversation_id=conversation_id,
             selected_mode=selected_mode,
@@ -358,16 +628,6 @@ async def execute_standard_query(
             trace_id=trace.trace_id,
         )
 
-    query_plan = build_query_plan(
-        query_request.query,
-        conversation_context=await _resolve_conversation_context(
-            session=session,
-            tenant_id=tenant_context.tenant_id,
-            conversation_id=conversation_id,
-            current_query=query_request.query,
-        ),
-    )
-
     retrieval_started = time.perf_counter()
     try:
         retrieval_bundle = await retrieve_hybrid_candidates(
@@ -376,6 +636,12 @@ async def execute_standard_query(
             namespace_id=query_request.namespace_id,
             query_text=query_request.query,
             query_plan=query_plan,
+            execution_tier=routing_decision.effective_tier,
+            freshness_profile=getattr(
+                namespace,
+                "freshness_profile",
+                FreshnessProfile.BALANCED,
+            ),
         )
     except RetrievalError as exc:
         raise QueryServiceError(
@@ -388,6 +654,11 @@ async def execute_standard_query(
     evidence_package = package_evidence(
         retrieval_bundle,
         query_text=query_plan.resolved_query_text,
+        execution_tier=routing_decision.effective_tier,
+    )
+    _log_selected_evidence(
+        query_text=query_plan.resolved_query_text,
+        evidence_package=evidence_package,
     )
     evidence_ms = int((time.perf_counter() - evidence_started) * 1000)
 
@@ -423,6 +694,10 @@ async def execute_standard_query(
         "evidence_packaging_ms": evidence_ms,
         "answering_ms": answering_ms,
     }
+    evidence_debug = _evidence_debug_summary(
+        selected_evidence_ids=evidence_package.selected_evidence_ids,
+        evidence_package=evidence_package,
+    )
 
     trace_started = time.perf_counter()
     trace = await _persist_query_trace(
@@ -435,6 +710,8 @@ async def execute_standard_query(
         total_latency_ms=int((time.perf_counter() - started_at) * 1000),
         generator_provider=generator_provider,
         query_plan=query_plan,
+        evidence_debug=evidence_debug,
+        routing_decision=routing_decision,
         agent_id=agent_id,
         conversation_id=conversation_id,
         selected_mode=selected_mode,

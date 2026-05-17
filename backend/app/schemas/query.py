@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.enums import ExecutionTier
+
 
 class CitationResponse(BaseModel):
     """Verbatim citation returned alongside a grounded answer."""
@@ -23,6 +25,7 @@ class QueryRequest(BaseModel):
 
     namespace_id: UUID
     query: str = Field(min_length=1)
+    requested_tier: ExecutionTier | None = None
 
 
 class GroundedAnswerResponse(BaseModel):

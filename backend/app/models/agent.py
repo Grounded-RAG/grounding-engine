@@ -20,6 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.config import get_settings
 from app.core.database import Base
 from app.models.enums import AgentStatus, UserFacingMode, sqlalchemy_enum
 
@@ -33,7 +34,10 @@ if TYPE_CHECKING:
 def _default_allowed_modes() -> list[str]:
     """Return the current default allowed modes for newly created agents."""
 
-    return [UserFacingMode.AUTO.value, UserFacingMode.INSTANT.value]
+    allowed_modes = [UserFacingMode.AUTO.value, UserFacingMode.INSTANT.value]
+    if get_settings().enterprise_enabled:
+        allowed_modes.append(UserFacingMode.THINKING.value)
+    return allowed_modes
 
 
 class Agent(Base):

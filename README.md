@@ -201,13 +201,19 @@ cd grounding-engine
 ### 2. Create a virtual environment
 
 ```bash
-python -m venv .venv
+python -m venv backend/.venv
 ```
 
 ### 3. Activate the virtual environment
 
 ```bash
-source .venv/Scripts/activate
+source backend/.venv/bin/activate
+```
+
+If you are using Git Bash on Windows, activate it with:
+
+```bash
+source backend/.venv/Scripts/activate
 ```
 
 ### 4. Install backend dependencies
@@ -244,7 +250,7 @@ docker compose up -d postgres redis qdrant minio
 
 ```bash
 cd backend
-python -m uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload --reload-dir app --reload-dir alembic --reload-exclude .venv/* --reload-exclude venv/* --reload-exclude vevn/*
 ```
 
 The API should start on `http://localhost:8000`.

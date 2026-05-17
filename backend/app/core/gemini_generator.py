@@ -11,6 +11,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from app.config import get_settings
+from app.core.telemetry import get_logger
 from app.core.query_analysis import (
     build_query_profile,
     final_answer_mode,
@@ -21,6 +22,7 @@ from app.pipeline.contracts import EvidencePackage, GroundedAnswerDraft
 
 
 REFUSAL_TEXT = "I could not find the answer in the provided context."
+logger = get_logger("app.gemini_generator")
 
 
 class GeminiGenerationError(RuntimeError):
@@ -130,7 +132,11 @@ def _render_mode_instructions(answer_mode: str, query_kind: str) -> list[str]:
 
     return [
         "MODE: open",
-        "Answer concisely using only the supplied evidence.",
+        "Write a substantial grounded answer using only the supplied evidence.",
+        "Use Markdown formatting with short sections or bullets when it improves readability.",
+        "For definition or explanation questions, explain what the concept is, how it works, and key mechanisms or criteria found in evidence.",
+        "Prefer 3-6 well-developed paragraphs or bullets when the evidence supports that much detail.",
+        "Keep citations inline near the claims they support, using citation labels like [E001].",
         "Do not add unsupported details.",
         "If the answer is unsupported, set is_refusal=true.",
     ]
@@ -141,6 +147,8 @@ def _build_prompt(*, query_text: str, evidence_package: EvidencePackage) -> str:
 
     profile = build_query_profile(query_text)
     answer_mode = _answer_mode(profile)
+    mode_instructions = _render_mode_instructions(answer_mode, profile.query_kind)
+    focus_hints = query_focus_hints(profile)
     evidence_sections: list[str] = []
     for item in evidence_package.items:
         rendered_text = item.text.strip()
@@ -157,33 +165,20 @@ def _build_prompt(*, query_text: str, evidence_package: EvidencePackage) -> str:
 
     return "\n\n".join(
         [
-            "You are a strict grounded answer extractor.",
-            "Use ONLY the supplied evidence.",
-            "Do not use outside knowledge.",
-            "Answer ONLY the user's raw question exactly as asked.",
-            "You are not a creative writer. You are a grounded extraction engine.",
-            f"If the answer is unsupported, set is_refusal=true and answer_text exactly to: {REFUSAL_TEXT}",
-            "If is_refusal=true, cited_chunk_ids and citation_snippets MUST both be empty.",
-            "If is_refusal=false, cited_chunk_ids MUST contain only chunk_id values from the evidence below.",
-            "Never return citation IDs like E001 in cited_chunk_ids.",
-            "Every cited_chunk_id MUST have one matching citation_snippets entry with the same chunk_id.",
-            "Each citation snippet should be a short exact quote or exact substring from the supporting chunk whenever possible.",
-            "Return strict JSON only.",
-            "schema_contract:",
-            "- is_refusal: boolean",
-            "- answer_mode: string",
-            "- answer_text: string",
-            "- cited_chunk_ids: string[]",
-            "- citation_snippets: [{chunk_id: string, snippet: string}]",
-            * _render_mode_instructions(answer_mode, profile.query_kind),
-            f"query={query_text}",
-            f"query_kind={profile.query_kind}",
-            f"answer_mode={answer_mode}",
-            f"semantic_tags={','.join(sorted(profile.semantic_tags)) or 'none'}",
-            f"attribute_terms={','.join(sorted(profile.attribute_terms)) or 'none'}",
-            "focus_hints:",
-            "\n".join(query_focus_hints(profile)) or "none",
-            "evidence:",
+            "You are a helpful assistant that answers questions using the provided evidence.",
+            "Answer the user's question based ONLY on the evidence below.",
+            "Extract, synthesize, and explain relevant information from the evidence.",
+            "If evidence contains related information, use it to form your answer.",
+            "Instructions:",
+            "\n".join(f"- {instruction}" for instruction in mode_instructions),
+            "Focus hints:",
+            "\n".join(f"- {hint}" for hint in focus_hints) if focus_hints else "- Use the query wording to choose the answer shape.",
+            "Return this JSON:",
+            '{"is_refusal": false, "answer_mode": "summary", "answer_text": "your answer here", "cited_chunk_ids": ["chunk_id1"], "citation_snippets": [{"chunk_id": "chunk_id1", "snippet": "relevant text"}]}',
+            "answer_text may contain Markdown, but the overall response must still be valid JSON.",
+            "Never refuse unless evidence is completely unrelated.",
+            f"Query: {query_text}",
+            "Evidence:",
             "\n\n".join(evidence_sections),
         ]
     )
@@ -197,20 +192,20 @@ def _generation_config_for_mode(answer_mode: str) -> dict[str, object]:
             "temperature": 0,
             "topP": 0.05,
             "topK": 1,
-            "maxOutputTokens": 160,
+            "maxOutputTokens": 2048,  # Increased significantly
         }
     if answer_mode == "list_or_recommendation":
         return {
             "temperature": 0.1,
             "topP": 0.2,
             "topK": 5,
-            "maxOutputTokens": 200,
+            "maxOutputTokens": 3072,  # Increased
         }
     return {
         "temperature": 0.2,
         "topP": 0.8,
         "topK": 20,
-        "maxOutputTokens": 256,
+        "maxOutputTokens": 4096,  # Maximum for longer answers
     }
 
 
@@ -377,6 +372,93 @@ def _snippet_matches_evidence(*, snippet: str, evidence_text: str) -> bool:
     return bool(normalized_snippet) and normalized_snippet in normalized_evidence
 
 
+def _mode_family(answer_mode: str) -> str:
+    """Group answer modes by compatible validation and repair behavior."""
+
+    if answer_mode in {"open", "summary"}:
+        return "synthesis"
+    if answer_mode == "list_or_recommendation":
+        return "structured_list"
+    if answer_mode in {"exact_lookup", "event_lookup", "arithmetic_qa"}:
+        return "strict_extraction"
+    return answer_mode
+
+
+def _answer_mode_is_compatible(*, actual: str, expected: str) -> bool:
+    return actual == expected or _mode_family(actual) == _mode_family(expected)
+
+
+def _tokens_for_overlap(text: str) -> set[str]:
+    return {
+        token.casefold()
+        for token in re.findall(r"[A-Za-z0-9]+", text)
+        if len(token) >= 4
+    }
+
+
+def _candidate_evidence_sentences(text: str) -> list[str]:
+    candidates = [
+        sentence.strip()
+        for sentence in re.split(r"(?<!\d\.)(?<=[.!?])\s+|\n+|[\u2022\u00B7]+", text)
+        if sentence.strip()
+    ]
+    return candidates or [text.strip()]
+
+
+def _best_grounded_snippet(*, answer_text: str, evidence_text: str) -> str:
+    answer_terms = _tokens_for_overlap(answer_text)
+    best_sentence = ""
+    best_score = -1
+    for sentence in _candidate_evidence_sentences(evidence_text):
+        sentence_terms = _tokens_for_overlap(sentence)
+        score = len(answer_terms & sentence_terms)
+        if score > best_score:
+            best_sentence = sentence
+            best_score = score
+    return best_sentence or evidence_text.strip()
+
+
+def _repair_citation_snippets(
+    *,
+    result: GeminiResult,
+    evidence_package: EvidencePackage,
+    expected_answer_mode: str,
+) -> GeminiResult:
+    """Replace provider paraphrased snippets with exact grounded evidence spans."""
+
+    if result.is_refusal or _mode_family(expected_answer_mode) == "strict_extraction":
+        return result
+    item_by_chunk_id = {item.chunk_id: item for item in evidence_package.items}
+    repaired_snippets: dict[str, str] = {}
+    for chunk_id in result.cited_chunk_ids:
+        item = item_by_chunk_id.get(chunk_id)
+        if item is None:
+            repaired_snippets[chunk_id] = result.citation_snippets.get(chunk_id, "")
+            continue
+        snippet = result.citation_snippets.get(chunk_id, "")
+        if snippet and _snippet_matches_evidence(snippet=snippet, evidence_text=item.text):
+            repaired_snippets[chunk_id] = snippet
+            continue
+        repaired_snippet = _best_grounded_snippet(
+            answer_text=result.answer_text,
+            evidence_text=item.text,
+        )
+        repaired_snippets[chunk_id] = repaired_snippet
+        logger.info(
+            "gemini_citation_snippet_repaired",
+            chunk_id=chunk_id,
+            original_snippet_preview=snippet[:180] if snippet else "",
+            repaired_snippet_preview=repaired_snippet[:180],
+        )
+    return GeminiResult(
+        is_refusal=result.is_refusal,
+        answer_mode=result.answer_mode,
+        answer_text=result.answer_text,
+        cited_chunk_ids=result.cited_chunk_ids,
+        citation_snippets=repaired_snippets,
+    )
+
+
 def _validate_result_against_evidence(
     *,
     result: GeminiResult,
@@ -386,7 +468,10 @@ def _validate_result_against_evidence(
     """Validate cited chunk IDs and snippets against the evidence package."""
 
     allowed_items = {item.chunk_id: item for item in evidence_package.items}
-    if result.answer_mode != expected_answer_mode:
+    if not _answer_mode_is_compatible(
+        actual=result.answer_mode,
+        expected=expected_answer_mode,
+    ):
         raise GeminiGenerationError("Gemini returned an unexpected answer_mode.")
     if result.is_refusal:
         return
@@ -414,6 +499,19 @@ async def generate_gemini_draft(
         raise GeminiGenerationError("GEMINI_API_KEY is not configured.")
     profile = build_query_profile(query_text)
     answer_mode = _answer_mode(profile)
+
+    # Build prompt for logging
+    prompt_text = _build_prompt(
+        query_text=query_text,
+        evidence_package=evidence_package,
+    )
+    logger.debug(
+        "gemini_prompt",
+        query_text=query_text,
+        evidence_count=len(evidence_package.items),
+        answer_mode=answer_mode,
+        prompt_length=len(prompt_text),
+    )
 
     model_name = settings.gemini_model
     if not model_name.startswith("models/"):
@@ -462,6 +560,11 @@ async def generate_gemini_draft(
             max_retries=settings.provider_max_retries,
             backoff_ms=settings.provider_retry_backoff_ms,
         )
+        logger.debug(
+            "gemini_raw_response",
+            response_length=len(raw_body),
+            response_preview=raw_body[:500],
+        )
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
         if exc.code == 429:
@@ -478,12 +581,29 @@ async def generate_gemini_draft(
         response_payload = json.loads(raw_body)
         content_text = _extract_text_from_candidate(response_payload)
         parsed = _parse_result(json.loads(_coerce_json_text(content_text)))
+        parsed = _repair_citation_snippets(
+            result=parsed,
+            evidence_package=evidence_package,
+            expected_answer_mode=answer_mode,
+        )
         _validate_result_against_evidence(
             result=parsed,
             evidence_package=evidence_package,
             expected_answer_mode=answer_mode,
         )
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        # Check if MAX_TOKENS - provide better error
+        if "candidates" in response_payload:
+            usage = response_payload.get("usageMetadata", {})
+            finish_reason = None
+            if "candidates" in response_payload and response_payload["candidates"]:
+                finish_reason = response_payload["candidates"][0].get("finishReason")
+            if finish_reason == "MAX_TOKENS":
+                raise GeminiGenerationError(
+                    f"Gemini ran out of tokens (maxOutputTokens limit). "
+                    f"Prompt was {usage.get('promptTokenCount', '?')} tokens, "
+                    f"generated {usage.get('candidatesTokenCount', '?')} tokens."
+                ) from exc
         raise GeminiGenerationError("Gemini generation returned invalid JSON.") from exc
 
     used_items = [

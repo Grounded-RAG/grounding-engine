@@ -127,3 +127,31 @@ def test_settings_reject_negative_provider_retry_backoff() -> None:
 
     with pytest.raises(ValidationError):
         Settings(provider_retry_backoff_ms=-1)
+
+
+def test_settings_default_enterprise_scaffolding_flags() -> None:
+    """Enterprise scaffolding flags should default to safe no-op values."""
+
+    settings = Settings()
+
+    assert settings.enterprise_enabled is True
+    assert settings.enterprise_trace_metadata_enabled is True
+    assert settings.enterprise_auto_routing_enabled is True
+    assert settings.enterprise_reranker_enabled is True
+    assert settings.enterprise_reranker_backend == "gemini_v1"
+    assert settings.enterprise_temporal_scoring_enabled is True
+
+
+def test_settings_warn_when_enterprise_reranker_cannot_reach_gemini() -> None:
+    """Startup warnings should explain when Enterprise reranking will degrade safely."""
+
+    settings = Settings(
+        enterprise_enabled=True,
+        enterprise_reranker_enabled=True,
+        enterprise_reranker_backend="gemini_v1",
+        gemini_api_key=None,
+    )
+
+    warnings = settings.startup_warnings()
+
+    assert any("Enterprise reranking is enabled" in warning for warning in warnings)

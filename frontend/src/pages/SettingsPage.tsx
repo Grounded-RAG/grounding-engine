@@ -150,7 +150,7 @@ export default function SettingsPage() {
                 <div className="text-xs text-muted-foreground mt-1">{mode.description}</div>
                 {mode.enabled ? (
                   <Badge variant="success" className="text-[9px] mt-2">
-                    Available
+                    Live
                   </Badge>
                 ) : (
                   <Badge variant="coming" className="text-[9px] mt-2">

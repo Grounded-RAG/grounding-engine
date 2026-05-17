@@ -1,7 +1,7 @@
 # Phase 2 Enterprise Plan
 
-**Status:** planned  
-**Date:** 2026-03-23  
+**Status:** live backend path, rollout hardening in progress  
+**Date:** 2026-04-21  
 **Prerequisite:** Phase 1 Standard backend and Phase 1.5 product-shell backend are complete
 
 ## Purpose
@@ -22,9 +22,9 @@ knowledge, or high-assurance critic loops. Those belong later in Phase 3.
 
 ---
 
-## 1. What Is Already Live Before Phase 2
+## 1. What Was Already Live Before Phase 2
 
-Before Phase 2 starts, the platform already has:
+Before Phase 2 started, the platform already had:
 
 - Phase 1 Standard ingestion and query
 - hybrid sparse + dense retrieval
@@ -47,13 +47,21 @@ Before Phase 2 starts, the platform already has:
 
 Current live mode behavior:
 
-- `Auto` -> Standard
+- `Auto` -> Standard by default, with Enterprise auto-routing on eligible hard queries
 - `Instant` -> Standard
-- `Thinking` -> visible but disabled
+- `Thinking` -> enabled and backed by Enterprise
 - `Verified` -> visible but disabled
 
-So Phase 2 does **not** start from zero.
-It starts from a working product and a working Standard engine.
+So Phase 2 did **not** start from zero.
+It started from a working product and a working Standard engine.
+
+Current implementation status:
+
+- Enterprise routing is live
+- `Thinking` is enabled in capabilities and the product shell
+- Enterprise planning, temporal scoring, controlled decomposition, stronger evidence packaging, and trace metadata are implemented
+- Enterprise reranker rollout is enabled by default with a disabled-safe fallback when provider credentials are unavailable
+- `Verified` remains intentionally out of scope for Phase 2
 
 ---
 
@@ -81,7 +89,8 @@ In product terms:
 
 ## 3. What Phase 2 Includes
 
-Phase 2 includes these capabilities:
+Phase 2 includes these capabilities. The list below reflects the current live
+implementation unless explicitly marked as experimental or still gated.
 
 ### 3.1 Planner for eligible queries
 
@@ -149,11 +158,17 @@ Expected outcome:
 - fewer duplicated or weak candidates
 - stronger evidence packages before generation
 
+Current live rollout:
+
+- Enterprise reranking is enabled by default
+- Gemini is the default provider-backed reranker backend
+- if Gemini credentials are unavailable, Enterprise stays live and falls back to fused retrieval ordering with traceable reranker debug metadata
+
 ### 3.4 Stronger evidence packaging
 
 Standard already packages evidence.
 
-Enterprise should improve the quality of the final evidence package by using:
+Enterprise improves the quality of the final evidence package by using:
 
 - better candidate selection
 - better deduplication
@@ -182,9 +197,14 @@ Important rule:
 - semantic chunking is a **candidate upgrade path**
 - it is not automatically the new default
 
+Current state:
+
+- semantic chunking is not live as the Enterprise default
+- deterministic chunking remains the active baseline
+
 ### 3.6 Enterprise routing policies
 
-Phase 2 should introduce clearer rules for when a query belongs in Enterprise.
+Phase 2 introduces clearer rules for when a query belongs in Enterprise.
 
 Possible reasons:
 
@@ -194,7 +214,7 @@ Possible reasons:
 - weak Standard candidate quality
 - multi-hop retrieval need
 
-This logic should influence:
+This logic influences:
 
 - `Auto` mode routing
 - `Thinking` mode execution
@@ -339,6 +359,13 @@ Enterprise should record richer trace details such as:
 
 This is important so the system stays inspectable even as it becomes smarter.
 
+Current trace status:
+
+- Enterprise routing reasons are persisted
+- retrieval debug metadata is persisted
+- evidence debug metadata is persisted
+- reranker and freshness debug details are available in run traces
+
 ### 7.4 Evaluation hooks
 
 Phase 2 should add evaluation hooks around:
@@ -368,10 +395,10 @@ surface.
 
 ### What changes in the behavior
 
-- `Thinking` becomes enabled in capabilities
+- `Thinking` is enabled in capabilities
 - `Auto` may route some queries to Enterprise
-- `runs` should expose richer routing metadata
-- route explanations should become more informative
+- `runs` expose richer routing metadata
+- route explanations are more informative
 
 ### Suggested trace / run additions
 
@@ -391,7 +418,7 @@ to reason about.
 
 ## 9. Suggested Build Order
 
-The cleanest Phase 2 order is:
+The cleanest Phase 2 order was:
 
 1. planner eligibility rules and query transformation service
 2. trace fields for planning and Enterprise routing
@@ -403,7 +430,7 @@ The cleanest Phase 2 order is:
 8. Auto routing rules for Enterprise eligibility
 9. evaluation and benchmark pass
 
-This order keeps the changes measurable and reduces the risk of shipping too
+This order kept the changes measurable and reduced the risk of shipping too
 many interacting retrieval changes at once.
 
 ---
@@ -466,6 +493,11 @@ Phase 2 is complete when:
 5. `Auto` can route eligible queries into Enterprise correctly
 6. Enterprise does not quietly include Critical-only behavior
 7. run history and trace inspection stay clear and understandable
+
+Current completion note:
+
+- the Enterprise path itself is now live
+- the remaining work is rollout validation, broader manual smoke testing, and optional experiments such as semantic chunking
 
 ---
 

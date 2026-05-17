@@ -310,11 +310,11 @@ def test_agent_create_persists_supported_modes_only(
     assert payload["status"] == "active"
 
 
-def test_agent_create_rejects_unavailable_future_mode(
+def test_agent_create_allows_thinking_mode(
     agent_client: TestClient,
     seeded_agent_data: SeededAgentData,
 ) -> None:
-    """Agent configuration should reject modes that are not live yet."""
+    """Agent configuration should allow Thinking now that Enterprise is live."""
 
     response = agent_client.post(
         "/v1/agents",
@@ -326,10 +326,10 @@ def test_agent_create_rejects_unavailable_future_mode(
         },
     )
 
-    assert response.status_code == 422
-    assert response.json() == {
-        "detail": "Agent default mode 'thinking' is not available yet."
-    }
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["default_mode"] == "thinking"
+    assert payload["allowed_modes"] == ["auto", "instant", "thinking"]
 
 
 def test_agent_attach_dataset_requires_same_workspace(

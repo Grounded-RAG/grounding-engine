@@ -1,0 +1,63 @@
+[
+  {
+    "id": "temporal_001",
+    "suite": "temporal_freshness",
+    "query": "What is the current refund window?",
+    "query_type": "temporal_policy",
+    "difficulty": "medium",
+    "expected_answer": "The current refund window is 14 days.",
+    "ground_truth_chunk_ids": ["policy_2026_refund"],
+    "stale_chunk_ids": ["policy_2024_refund"],
+    "ground_truth_statements": [
+      "The current refund window is 14 days",
+      "The 30-day refund policy was superseded"
+    ],
+    "expected_behavior": "prefer_fresh_evidence",
+    "domain": "policy",
+    "candidate_chunks": [
+      {
+        "chunk_id": "policy_2024_refund",
+        "text": "Policy update 2024: Customers may return unused items within 30 days.",
+        "document_date": "2024-02-01"
+      },
+      {
+        "chunk_id": "policy_2026_refund",
+        "text": "Policy update 2026: The current refund window is 14 days. This supersedes the 30-day refund policy.",
+        "document_date": "2026-01-15"
+      },
+      {
+        "chunk_id": "policy_shipping",
+        "text": "Shipping policy: standard delivery takes 5 business days.",
+        "document_date": "2026-01-15"
+      }
+    ]
+  },
+  {
+    "id": "temporal_002",
+    "suite": "temporal_freshness",
+    "query": "Which data retention period applies now?",
+    "query_type": "temporal_policy",
+    "difficulty": "hard",
+    "expected_answer": "Employee records are retained for 7 years after account closure.",
+    "ground_truth_chunk_ids": ["retention_2026_current"],
+    "stale_chunk_ids": ["retention_2023_old"],
+    "ground_truth_statements": [
+      "Employee records are retained for 7 years after account closure",
+      "The 5-year retention period is no longer current"
+    ],
+    "expected_behavior": "prefer_fresh_evidence",
+    "domain": "compliance",
+    "candidate_chunks": [
+      {
+        "chunk_id": "retention_2023_old",
+        "text": "Retention policy 2023: Employee records are retained for 5 years after account closure.",
+        "document_date": "2023-04-10"
+      },
+      {
+        "chunk_id": "retention_2026_current",
+        "text": "Retention policy 2026: Employee records are retained for 7 years after account closure. This replaces the prior 5-year period.",
+        "document_date": "2026-03-03"
+      }
+    ]
+  }
+]

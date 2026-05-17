@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import or_, select, text
@@ -11,6 +12,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.reranker import RerankerError, resolve_retrieval_reranker
+from app.core.telemetry import get_logger
 from app.core.query_analysis import (
     QueryPlan,
     build_query_plan,
@@ -26,13 +29,16 @@ from app.core.query_analysis import (
     tokenize_meaningful_terms,
 )
 from app.core.embeddings import EmbeddingError, embed_texts
-from app.models import DocumentChunkRecord
+from app.models import Document, DocumentChunkRecord, ExecutionTier, FreshnessProfile
 from app.core.qdrant_client import VectorStoreError, search_dense_points
 from app.pipeline.contracts import FusedRetrievedChunk, RetrievedChunk
 
 
 class RetrievalError(RuntimeError):
     """Raised when a retrieval path cannot complete safely."""
+
+
+logger = get_logger("app.retrieval")
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,7 @@ class RetrievalBundle:
     sparse_hits: list[RetrievedChunk]
     dense_hits: list[RetrievedChunk]
     fused_hits: list[FusedRetrievedChunk]
+    debug: dict[str, object] | None = None
 
 
 def _query_term_coverage_score(*, text: str, query_plan: QueryPlan) -> float:
@@ -154,6 +161,167 @@ def _coerce_uuid(value: UUID | str) -> UUID:
     """Coerce UUID-like payload values into UUID instances."""
 
     return value if isinstance(value, UUID) else UUID(str(value))
+
+
+def _query_prefers_freshness(query_plan: QueryPlan) -> bool:
+    """Return whether the query explicitly asks for newer or current evidence."""
+
+    freshness_terms = {
+        "current",
+        "latest",
+        "new",
+        "newer",
+        "recent",
+        "update",
+        "updated",
+        "version",
+    }
+    profile = query_plan.profile
+    if set(profile.terms) & freshness_terms:
+        return True
+    if set(profile.attribute_terms) & freshness_terms:
+        return True
+    if set(profile.context_terms) & freshness_terms:
+        return True
+    return False
+
+
+def _freshness_boost_weight(freshness_profile: FreshnessProfile) -> float:
+    """Return one small score weight for the namespace freshness profile."""
+
+    if freshness_profile is FreshnessProfile.AGGRESSIVE:
+        return 0.7
+    if freshness_profile is FreshnessProfile.BALANCED:
+        return 0.4
+    return 0.15
+
+
+async def _fetch_document_freshness_metadata(
+    *,
+    session: AsyncSession,
+    tenant_id: UUID,
+    namespace_id: UUID,
+    document_ids: set[UUID],
+) -> dict[UUID, datetime]:
+    """Load effective freshness timestamps for the candidate documents."""
+
+    if not document_ids:
+        return {}
+
+    statement = select(
+        Document.doc_id,
+        Document.published_at,
+        Document.created_at,
+    ).where(
+        Document.tenant_id == tenant_id,
+        Document.namespace_id == namespace_id,
+        Document.doc_id.in_(sorted(document_ids, key=str)),
+    )
+
+    try:
+        result = await session.execute(statement)
+    except SQLAlchemyError as exc:
+        raise RetrievalError("Freshness metadata lookup failed.") from exc
+
+    rows = result.all() if hasattr(result, "all") else list(result)
+    metadata: dict[UUID, datetime] = {}
+    for row in rows:
+        if isinstance(row, dict):
+            document_id = _coerce_uuid(row["doc_id"])
+            published_at = row.get("published_at")
+            created_at = row.get("created_at")
+        else:
+            document_id = _coerce_uuid(getattr(row, "doc_id"))
+            published_at = getattr(row, "published_at", None)
+            created_at = getattr(row, "created_at", None)
+        effective_timestamp = published_at or created_at
+        if isinstance(effective_timestamp, datetime):
+            metadata[document_id] = effective_timestamp
+    return metadata
+
+
+async def _apply_enterprise_freshness_scoring(
+    fused_hits: list[FusedRetrievedChunk],
+    *,
+    session: AsyncSession,
+    tenant_id: UUID,
+    namespace_id: UUID,
+    query_plan: QueryPlan,
+    execution_tier: ExecutionTier,
+    freshness_profile: FreshnessProfile,
+) -> list[FusedRetrievedChunk]:
+    """Prefer newer evidence when the Enterprise query explicitly needs freshness."""
+
+    settings = get_settings()
+    retrieval_mode = getattr(settings, "retrieval_mode", "hybrid")
+    if (
+        execution_tier is not ExecutionTier.ENTERPRISE
+        or not getattr(settings, "enterprise_temporal_scoring_enabled", True)
+        or not fused_hits
+        or not _query_prefers_freshness(query_plan)
+    ):
+        return fused_hits, {
+            "applied": False,
+            "reason": "not_requested",
+            "freshness_profile": freshness_profile.value,
+        }
+
+    freshness_by_document = await _fetch_document_freshness_metadata(
+        session=session,
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        document_ids={hit.document_id for hit in fused_hits},
+    )
+    if len(freshness_by_document) < 2:
+        return fused_hits, {
+            "applied": False,
+            "reason": "insufficient_document_metadata",
+            "freshness_profile": freshness_profile.value,
+        }
+
+    timestamps = [value.timestamp() for value in freshness_by_document.values()]
+    oldest_timestamp = min(timestamps)
+    newest_timestamp = max(timestamps)
+    if newest_timestamp <= oldest_timestamp:
+        return fused_hits, {
+            "applied": False,
+            "reason": "no_temporal_separation",
+            "freshness_profile": freshness_profile.value,
+        }
+
+    boost_weight = _freshness_boost_weight(freshness_profile)
+    rescored_hits: list[FusedRetrievedChunk] = []
+    for hit in fused_hits:
+        freshness_timestamp = freshness_by_document.get(hit.document_id)
+        if freshness_timestamp is None:
+            rescored_hits.append(hit)
+            continue
+        freshness_ratio = (
+            (freshness_timestamp.timestamp() - oldest_timestamp)
+            / (newest_timestamp - oldest_timestamp)
+        )
+        rescored_hits.append(
+            replace(
+                hit,
+                fused_score=hit.fused_score + freshness_ratio * boost_weight,
+            )
+        )
+
+    logger.info(
+        "enterprise_freshness_scoring_applied",
+        freshness_profile=freshness_profile.value,
+        boosted_documents=len(freshness_by_document),
+    )
+    rescored = sorted(
+        rescored_hits,
+        key=lambda hit: (-hit.fused_score, hit.chunk_index, hit.chunk_id),
+    )
+    return rescored, {
+        "applied": True,
+        "freshness_profile": freshness_profile.value,
+        "boosted_documents": len(freshness_by_document),
+        "top_chunk_ids": [hit.chunk_id for hit in rescored[:3]],
+    }
 
 
 async def sparse_retrieve_chunks(
@@ -422,6 +590,97 @@ def _rerank_fused_hits_for_query(
     return reranked[:limit]
 
 
+async def _apply_enterprise_reranker(
+    fused_hits: list[FusedRetrievedChunk],
+    *,
+    execution_tier: ExecutionTier,
+    query_text: str,
+    limit: int,
+) -> list[FusedRetrievedChunk]:
+    """Apply the Enterprise reranker when the active tier requests it."""
+
+    if not fused_hits:
+        return [], {
+            "attempted": False,
+            "applied": False,
+            "backend": None,
+            "reason": "no_candidates",
+        }
+    if execution_tier is not ExecutionTier.ENTERPRISE:
+        return fused_hits[:limit], {
+            "attempted": False,
+            "applied": False,
+            "backend": None,
+            "reason": "non_enterprise_tier",
+        }
+
+    settings = get_settings()
+    reranker = resolve_retrieval_reranker(
+        execution_tier=execution_tier,
+        settings=settings,
+    )
+    try:
+        reranker_result = await reranker.rerank(
+            query_text=query_text,
+            hits=fused_hits[: settings.enterprise_reranker_candidate_limit],
+            limit=limit,
+        )
+    except RerankerError as exc:
+        logger.warning(
+            "enterprise_reranker_failed",
+            error=str(exc),
+        )
+        return fused_hits[:limit], {
+            "attempted": True,
+            "applied": False,
+            "backend": getattr(reranker, "backend_name", "unknown"),
+            "error": str(exc),
+        }
+
+    logger.info(
+        "enterprise_reranker_applied",
+        backend=reranker_result.backend_name,
+        applied=reranker_result.applied,
+        top_hits=[
+            {
+                "chunk_id": hit.chunk_id,
+                "score": round(hit.score, 4),
+            }
+            for hit in reranker_result.hits[:3]
+        ],
+    )
+
+    hit_by_chunk_id = {hit.chunk_id: hit for hit in fused_hits}
+    reranked_hits: list[FusedRetrievedChunk] = []
+    seen_chunk_ids: set[str] = set()
+
+    for reranked_hit in reranker_result.hits:
+        original_hit = hit_by_chunk_id.get(reranked_hit.chunk_id)
+        if original_hit is None or reranked_hit.chunk_id in seen_chunk_ids:
+            continue
+        reranked_hits.append(
+            replace(
+                original_hit,
+                fused_score=reranked_hit.score,
+            )
+        )
+        seen_chunk_ids.add(reranked_hit.chunk_id)
+
+    for hit in fused_hits:
+        if hit.chunk_id in seen_chunk_ids:
+            continue
+        reranked_hits.append(hit)
+
+    final_hits = reranked_hits[:limit]
+    return final_hits, {
+        "attempted": True,
+        "applied": reranker_result.applied,
+        "backend": reranker_result.backend_name,
+        "top_chunk_ids": [hit.chunk_id for hit in final_hits[:3]],
+        "debug": getattr(reranker_result, "debug", {}),
+    }
+
+
 async def _fetch_supporting_context_hits(
     *,
     session: AsyncSession,
@@ -602,10 +861,13 @@ async def retrieve_hybrid_candidates(
     query_text: str,
     query_plan: QueryPlan | None = None,
     limit: int | None = None,
+    execution_tier: ExecutionTier = ExecutionTier.STANDARD,
+    freshness_profile: FreshnessProfile = FreshnessProfile.BALANCED,
 ) -> RetrievalBundle:
-    """Run sparse and dense retrieval, then merge candidates with RRF."""
+    """Run configured retrieval paths, then shape candidates into fused-hit form."""
 
     settings = get_settings()
+    retrieval_mode = getattr(settings, "retrieval_mode", "hybrid")
     final_limit = limit or settings.retrieval_candidate_limit
     overfetch_limit = max(
         final_limit,
@@ -617,15 +879,16 @@ async def retrieve_hybrid_candidates(
     sparse_hits: list[RetrievedChunk] = []
     dense_hits: list[RetrievedChunk] = []
     for retrieval_query in plan.retrieval_queries:
-        sparse_hits.extend(
-            await sparse_retrieve_chunks(
-                session=session,
-                tenant_id=tenant_id,
-                namespace_id=namespace_id,
-                query_text=retrieval_query,
-                limit=overfetch_limit,
+        if retrieval_mode == "hybrid":
+            sparse_hits.extend(
+                await sparse_retrieve_chunks(
+                    session=session,
+                    tenant_id=tenant_id,
+                    namespace_id=namespace_id,
+                    query_text=retrieval_query,
+                    limit=overfetch_limit,
+                )
             )
-        )
         dense_hits.extend(
             await dense_retrieve_chunks(
                 tenant_id=tenant_id,
@@ -640,6 +903,23 @@ async def retrieve_hybrid_candidates(
         sparse_hits,
         dense_hits,
         rrf_k=settings.rrf_smoothing_constant,
+    )
+    logger.debug(
+        "retrieval_results",
+        query_text=query_text,
+        retrieval_mode=retrieval_mode,
+        sparse_count=len(sparse_hits),
+        dense_count=len(dense_hits),
+        retrieved_count=len(fused_hits),
+        retrieved_chunks=[
+            {
+                "chunk_id": hit.chunk_id,
+                "rank": index,
+                "score": hit.fused_score,
+                "text_preview": hit.text[:200],
+            }
+            for index, hit in enumerate(fused_hits[:5], start=1)
+        ],
     )
     supporting_hits = await _fetch_supporting_context_hits(
         session=session,
@@ -673,10 +953,38 @@ async def retrieve_hybrid_candidates(
     fused_hits = _rerank_fused_hits_for_query(
         fused_hits,
         query_plan=plan,
+        limit=max(final_limit, settings.enterprise_reranker_candidate_limit),
+    )
+    fused_hits, freshness_debug = await _apply_enterprise_freshness_scoring(
+        fused_hits,
+        session=session,
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        query_plan=plan,
+        execution_tier=execution_tier,
+        freshness_profile=freshness_profile,
+    )
+    fused_hits, reranker_debug = await _apply_enterprise_reranker(
+        fused_hits,
+        execution_tier=execution_tier,
+        query_text=plan.resolved_query_text,
         limit=final_limit,
     )
     return RetrievalBundle(
         sparse_hits=sparse_hits,
         dense_hits=dense_hits,
         fused_hits=fused_hits,
+        debug={
+            "execution_tier": execution_tier.value,
+            "retrieval_queries": list(plan.retrieval_queries),
+            "freshness": freshness_debug,
+            "reranker": reranker_debug,
+            "top_fused_hits": [
+                {
+                    "chunk_id": hit.chunk_id,
+                    "score": round(hit.fused_score, 4),
+                }
+                for hit in fused_hits[:3]
+            ],
+        },
     )

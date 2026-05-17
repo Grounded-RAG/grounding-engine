@@ -16,6 +16,8 @@ AppEnv = Literal["development", "test", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 GeneratorBackend = Literal["local_grounded_v1", "gemini_v1", "openai_compatible_v1"]
 EmbeddingBackend = Literal["local_hash_v1", "gemini_v1", "openai_compatible_v1"]
+RerankerBackend = Literal["disabled", "stub", "gemini_v1"]
+RetrievalMode = Literal["hybrid", "dense_only"]
 
 
 class Settings(BaseSettings):
@@ -63,8 +65,16 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     retrieval_candidate_limit: int = 8
     retrieval_overfetch_factor: int = 4
+    retrieval_mode: RetrievalMode = "dense_only"
     rrf_smoothing_constant: int = 60
     evidence_package_limit: int = 3
+    enterprise_enabled: bool = True
+    enterprise_trace_metadata_enabled: bool = True
+    enterprise_auto_routing_enabled: bool = True
+    enterprise_reranker_enabled: bool = True
+    enterprise_reranker_backend: RerankerBackend = "gemini_v1"
+    enterprise_reranker_candidate_limit: int = 24
+    enterprise_temporal_scoring_enabled: bool = True
     api_key_salt: str = "replace-in-local-env"
     s3_endpoint_url: AnyHttpUrl = "http://localhost:9000"
     s3_bucket: str = "grounded-documents"
@@ -191,6 +201,16 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_BACKEND must not be empty.")
         return normalized
 
+    @field_validator("retrieval_mode")
+    @classmethod
+    def validate_retrieval_mode(cls, value: str) -> str:
+        """Ensure retrieval mode is explicit and supported."""
+
+        normalized = value.strip().lower()
+        if normalized not in {"hybrid", "dense_only"}:
+            raise ValueError("RETRIEVAL_MODE must be either 'hybrid' or 'dense_only'.")
+        return normalized
+
     @field_validator("dense_embedding_dimensions")
     @classmethod
     def validate_dense_embedding_dimensions(cls, value: int) -> int:
@@ -206,6 +226,7 @@ class Settings(BaseSettings):
         "rrf_smoothing_constant",
         "evidence_package_limit",
         "provider_max_retries",
+        "enterprise_reranker_candidate_limit",
     )
     @classmethod
     def validate_positive_retrieval_settings(cls, value: int, info: ValidationInfo) -> int:
@@ -320,6 +341,16 @@ class Settings(BaseSettings):
                 warnings.append(
                     message + "dense retrieval will fail until provider embeddings are configured."
                 )
+        if (
+            self.enterprise_enabled
+            and self.enterprise_reranker_enabled
+            and self.enterprise_reranker_backend == "gemini_v1"
+            and not self.gemini_api_key
+        ):
+            warnings.append(
+                "Enterprise reranking is enabled with the Gemini backend, but GEMINI_API_KEY is missing; "
+                "Enterprise retrieval will stay enabled and fall back to fused retrieval ordering."
+            )
         if self.chunking_strategy == "deterministic_token_window_v1":
             warnings.append(
                 "CHUNKING_STRATEGY is using the deterministic token-window baseline. "

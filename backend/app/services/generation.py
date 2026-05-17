@@ -415,14 +415,13 @@ def _validate_open_draft(
     """Validate general grounded answers conservatively."""
 
     answer_core = _strip_answer_citations(draft.answer_text)
-    if len(answer_core.split()) > 100:
+    if len(answer_core.split()) > 350:
         return "open answer was too long"
-    if not _answer_supported_by_snippets(
-        answer_text=draft.answer_text,
-        snippets=snippets,
-        multi_chunk=True,
-        noise_terms=_FIELD_ANSWER_NOISE,
-    ):
+    answer_terms = _significant_terms(answer_core, noise_terms=_FIELD_ANSWER_NOISE)
+    snippet_terms: set[str] = set()
+    for snippet in snippets:
+        snippet_terms.update(_significant_terms(snippet, noise_terms=_FIELD_ANSWER_NOISE))
+    if len(answer_terms & snippet_terms) < min(3, len(answer_terms)):
         return "open answer was not sufficiently supported by snippets"
     return None
 
@@ -523,27 +522,19 @@ async def generate_answer_from_evidence(
         if backend.implementation == "local":
             raise
         logger.warning(
-            "generation_provider_fallback",
+            "generation_provider_failed",
             configured_backend=backend.provider_name,
-            fallback_backend="local_grounded_v1",
             reason=str(exc),
         )
+        raise GroundedGenerationError(
+            "The configured generation provider could not produce a grounded answer."
+        ) from exc
     except (GeminiGenerationError, OpenAICompatibleGenerationError) as exc:
         logger.warning(
-            "generation_provider_fallback",
+            "generation_provider_failed",
             configured_backend=backend.provider_name,
-            fallback_backend="local_grounded_v1",
             reason=str(exc),
         )
-    fallback_draft = generate_grounded_draft(
-        query_text=query_text,
-        evidence_package=evidence_package,
-    )
-    return GroundedAnswerDraft(
-        answer_text=fallback_draft.answer_text,
-        cited_evidence_ids=fallback_draft.cited_evidence_ids,
-        citation_snippets=fallback_draft.citation_snippets,
-        generator_provider=f"{fallback_draft.generator_provider}:fallback_from_{backend.provider_name}",
-        support_coverage=fallback_draft.support_coverage,
-        source_diversity=fallback_draft.source_diversity,
-    )
+        raise GroundedGenerationError(
+            "The configured generation provider could not produce a grounded answer."
+        ) from exc

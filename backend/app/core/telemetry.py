@@ -73,6 +73,25 @@ def bind_tenant_context(*, tenant_id: str, api_key_id: str | None = None) -> Non
     structlog.contextvars.bind_contextvars(**context)
 
 
+def bind_execution_context(
+    *,
+    requested_tier: str | None,
+    router_recommendation: str,
+    effective_tier: str,
+    routing_reason: str,
+    selected_mode: str | None = None,
+) -> None:
+    """Bind execution-routing context once a tier decision has been made."""
+
+    structlog.contextvars.bind_contextvars(
+        requested_tier=requested_tier,
+        router_recommendation=router_recommendation,
+        effective_tier=effective_tier,
+        routing_reason=routing_reason,
+        selected_mode=selected_mode,
+    )
+
+
 def clear_request_context() -> None:
     """Clear any request-scoped log context."""
 

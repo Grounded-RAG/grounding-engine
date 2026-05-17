@@ -6,6 +6,7 @@ __pycache__/
 .coverage
 .venv/
 venv/
+vevn/
 .env
 .env.*
 !.env.example
@@ -17,4 +18,5 @@ coverage/
 .vscode/
 *.egg-info/
 .DS_Store
-
+.claude/
+nfcorpus/

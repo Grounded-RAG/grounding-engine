@@ -17,6 +17,7 @@ from app.core.query_analysis import (
     score_text_against_query,
     tokenize_meaningful_terms,
 )
+from app.models import ExecutionTier
 from app.pipeline.contracts import EvidenceItem, EvidencePackage, FusedRetrievedChunk
 from app.services.retrieval import RetrievalBundle
 
@@ -37,6 +38,7 @@ def package_evidence(
     *,
     query_text: str | None = None,
     limit: int | None = None,
+    execution_tier: ExecutionTier = ExecutionTier.STANDARD,
 ) -> EvidencePackage:
     """Select the top fused hits and normalize them into evidence items."""
 
@@ -45,6 +47,7 @@ def package_evidence(
         retrieval_bundle,
         query_text=query_text,
         limit=requested_limit,
+        execution_tier=execution_tier,
     )
 
     selected_items = [
@@ -79,6 +82,7 @@ def _select_hits_for_query(
     *,
     query_text: str | None,
     limit: int,
+    execution_tier: ExecutionTier,
 ) -> list[FusedRetrievedChunk]:
     """Select fused hits with simpler mode-aware evidence policies."""
 
@@ -92,11 +96,23 @@ def _select_hits_for_query(
     ranked_hits = _rank_hits(retrieval_bundle.fused_hits, profile=profile)
 
     if answer_mode == "exact_lookup":
-        return _select_exact_qa_hits(ranked_hits, profile=profile, limit=limit)
+        return _select_exact_qa_hits(
+            ranked_hits,
+            profile=profile,
+            limit=limit,
+            execution_tier=execution_tier,
+        )
     if answer_mode == "list_or_recommendation":
-        return _select_structured_bundle_hits(ranked_hits, profile=profile, limit=max(2, min(limit, 4)))
+        return _select_structured_bundle_hits(
+            ranked_hits,
+            profile=profile,
+            limit=max(2, min(limit, 4)),
+            execution_tier=execution_tier,
+        )
     if answer_mode == "summary":
         return _select_summary_hits(ranked_hits, limit=limit)
+    if profile.query_kind == "definition":
+        return _select_top_hits(ranked_hits, limit=max(limit, 5))
     if any(
         (
             is_action_query(profile),
@@ -105,7 +121,12 @@ def _select_hits_for_query(
             is_count_query(profile),
         )
     ):
-        return _select_structured_bundle_hits(ranked_hits, profile=profile, limit=max(2, min(limit, 4)))
+        return _select_structured_bundle_hits(
+            ranked_hits,
+            profile=profile,
+            limit=max(2, min(limit, 4)),
+            execution_tier=execution_tier,
+        )
     return _select_top_hits(ranked_hits, limit=limit)
 
 
@@ -182,6 +203,7 @@ def _select_exact_qa_hits(
     *,
     profile,
     limit: int,
+    execution_tier: ExecutionTier,
 ) -> list[FusedRetrievedChunk]:
     """Choose the best exact-QA chunk and optionally one justified support chunk."""
 
@@ -190,25 +212,51 @@ def _select_exact_qa_hits(
 
     primary = ranked_hits[0]
     selected = [primary.hit]
-    max_hits = 2 if needs_multi_chunk_exact_support(profile) or limit > 1 else 1
+    max_hits = _exact_support_limit(
+        profile=profile,
+        limit=limit,
+        execution_tier=execution_tier,
+    )
     if max_hits == 1:
         return selected
 
     primary_terms = set(primary.terms)
     for candidate in ranked_hits[1:]:
-        if candidate.hit.document_id != primary.hit.document_id:
-            continue
         if candidate.hit.chunk_id == primary.hit.chunk_id:
             continue
         if not _exact_support_is_justified(
             primary=primary,
             candidate=candidate,
             primary_terms=primary_terms,
+            execution_tier=execution_tier,
         ):
             continue
         selected.append(candidate.hit)
-        break
-    return selected
+        primary_terms.update(candidate.terms)
+        if len(selected) >= max_hits:
+            break
+    return sorted(
+        selected,
+        key=lambda hit: (hit.chunk_index, -hit.fused_score, hit.chunk_id),
+    )
+
+
+def _exact_support_limit(
+    *,
+    profile,
+    limit: int,
+    execution_tier: ExecutionTier,
+) -> int:
+    """Return the maximum number of exact support chunks to keep."""
+
+    if execution_tier is not ExecutionTier.ENTERPRISE:
+        return 2 if needs_multi_chunk_exact_support(profile) or limit > 1 else 1
+
+    if len(profile.attribute_terms) >= 2:
+        return min(max(limit, 3), 3)
+    if needs_multi_chunk_exact_support(profile) or limit > 1:
+        return min(max(limit, 2), 3)
+    return 1
 
 
 def _exact_support_is_justified(
@@ -216,9 +264,11 @@ def _exact_support_is_justified(
     primary: _ScoredHit,
     candidate: _ScoredHit,
     primary_terms: set[str],
+    execution_tier: ExecutionTier,
 ) -> bool:
     """Return whether a second exact-QA chunk adds clear support."""
 
+    same_document = candidate.hit.document_id == primary.hit.document_id
     same_section = bool(
         primary.hit.section_slug
         and candidate.hit.section_slug
@@ -226,6 +276,19 @@ def _exact_support_is_justified(
     )
     adds_terms = bool(set(candidate.terms) - primary_terms)
 
+    if execution_tier is ExecutionTier.ENTERPRISE:
+        if same_document and candidate.strong_intent and candidate.query_score >= 6.5:
+            return True
+        if same_section and candidate.query_score >= 6.5:
+            return True
+        if same_document and adds_terms and candidate.query_score >= 7.0:
+            return True
+        if candidate.query_score >= 9.5 and adds_terms:
+            return True
+        return False
+
+    if not same_document:
+        return False
     if candidate.strong_intent and candidate.query_score >= 8.0:
         return True
     if same_section and candidate.query_score >= 7.5:
@@ -240,11 +303,19 @@ def _select_structured_bundle_hits(
     *,
     profile,
     limit: int,
+    execution_tier: ExecutionTier,
 ) -> list[FusedRetrievedChunk]:
     """Keep a tight answer-bearing cluster for list/recommendation questions."""
 
     if not ranked_hits:
         return []
+
+    if execution_tier is ExecutionTier.ENTERPRISE:
+        return _select_enterprise_structured_bundle_hits(
+            ranked_hits,
+            profile=profile,
+            limit=max(3, min(limit, 5)),
+        )
 
     primary = ranked_hits[0]
     selected: list[_ScoredHit] = [primary]
@@ -268,6 +339,122 @@ def _select_structured_bundle_hits(
         covered_terms.update(candidate.terms)
 
     return [entry.hit for entry in selected]
+
+
+def _select_enterprise_structured_bundle_hits(
+    ranked_hits: list[_ScoredHit],
+    *,
+    profile,
+    limit: int,
+) -> list[FusedRetrievedChunk]:
+    """Keep a compact but richer support cluster for Enterprise hard queries."""
+
+    primary = ranked_hits[0]
+    selected: list[_ScoredHit] = [primary]
+    covered_terms: set[str] = set(primary.terms)
+
+    if is_comparison_query(profile):
+        contrast_candidate = _first_matching_hit(
+            ranked_hits[1:],
+            predicate=lambda candidate: _comparison_support_is_relevant(
+                primary=primary,
+                candidate=candidate,
+                covered_terms=covered_terms,
+            ),
+        )
+        if contrast_candidate is not None:
+            selected.append(contrast_candidate)
+            covered_terms.update(contrast_candidate.terms)
+
+    for candidate in ranked_hits[1:]:
+        if len(selected) >= limit:
+            break
+        if any(existing.hit.chunk_id == candidate.hit.chunk_id for existing in selected):
+            continue
+        if not _enterprise_structured_support_is_relevant(
+            primary=primary,
+            candidate=candidate,
+            covered_terms=covered_terms,
+            profile=profile,
+        ):
+            continue
+        selected.append(candidate)
+        covered_terms.update(candidate.terms)
+
+    return [entry.hit for entry in selected]
+
+
+def _first_matching_hit(
+    ranked_hits: list[_ScoredHit],
+    *,
+    predicate,
+) -> _ScoredHit | None:
+    """Return the first ranked hit that satisfies one predicate."""
+
+    for candidate in ranked_hits:
+        if predicate(candidate):
+            return candidate
+    return None
+
+
+def _comparison_support_is_relevant(
+    *,
+    primary: _ScoredHit,
+    candidate: _ScoredHit,
+    covered_terms: set[str],
+) -> bool:
+    """Return whether one candidate adds a useful contrasting comparison anchor."""
+
+    different_document = candidate.hit.document_id != primary.hit.document_id
+    different_section = bool(
+        candidate.hit.document_id == primary.hit.document_id
+        and candidate.hit.section_slug
+        and primary.hit.section_slug
+        and candidate.hit.section_slug != primary.hit.section_slug
+    )
+    adds_terms = bool(set(candidate.terms) - covered_terms)
+
+    if candidate.query_score < 6.0:
+        return False
+    if different_document and adds_terms:
+        return True
+    if different_section and adds_terms:
+        return True
+    return False
+
+
+def _enterprise_structured_support_is_relevant(
+    *,
+    primary: _ScoredHit,
+    candidate: _ScoredHit,
+    covered_terms: set[str],
+    profile,
+) -> bool:
+    """Return whether one Enterprise structured support chunk is clearly useful."""
+
+    same_section = bool(
+        primary.hit.section_slug
+        and candidate.hit.section_slug
+        and primary.hit.section_slug == candidate.hit.section_slug
+    )
+    same_document = candidate.hit.document_id == primary.hit.document_id
+    adds_terms = bool(set(candidate.terms) - covered_terms)
+
+    if candidate.strong_intent and candidate.query_score >= 6.0:
+        return True
+    if same_section and candidate.query_score >= 6.0:
+        return True
+    if same_document and candidate.hit.is_list_block and candidate.query_score >= 6.0:
+        return True
+    if adds_terms and candidate.query_score >= 6.5:
+        return True
+    if is_comparison_query(profile) and _comparison_support_is_relevant(
+        primary=primary,
+        candidate=candidate,
+        covered_terms=covered_terms,
+    ):
+        return True
+    return False
 
 
 def _structured_support_is_relevant(

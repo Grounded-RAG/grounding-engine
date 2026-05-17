@@ -14,6 +14,7 @@ from app.core.gemini_generator import (
     _coerce_json_text,
     _generation_config_for_mode,
     _parse_result,
+    _repair_citation_snippets,
     _validate_result_against_evidence,
 )
 from app.core.openai_generator import OpenAICompatibleGenerationError
@@ -99,6 +100,72 @@ def test_generate_grounded_draft_prefers_query_aligned_sentence() -> None:
         "Hybrid retrieval merges sparse and dense search results. [E001]"
     )
     assert draft.citation_snippets["chunk-1"] == "Hybrid retrieval merges sparse and dense search results."
+
+
+def test_generate_grounded_draft_answers_concept_definition_question() -> None:
+    """Definition-style concept questions should render explanatory evidence, not titles."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-title", "chunk-definition"],
+        selected_evidence_ids=["chunk-title", "chunk-definition"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-title",
+                text="A continual learning survey\nDefying forgetting in classification tasks.",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-definition",
+                text=(
+                    "Masana is with Computer Vision Center, UAB. "
+                    "Continual learning is the ability of a model to learn from a stream "
+                    "of tasks while retaining useful knowledge from previous tasks. "
+                    "It works by updating the learner incrementally as new data arrives "
+                    "while using strategies that reduce catastrophic forgetting."
+                ),
+            ),
+        ],
+    )
+
+    draft = generate_grounded_draft(
+        query_text="What is continual learning? How does it work?",
+        evidence_package=evidence_package,
+    )
+
+    assert "Continual learning is the ability" in draft.answer_text
+    assert "It works by updating" in draft.answer_text
+    assert "Masana is with Computer Vision Center" not in draft.answer_text
+    assert "A continual learning survey [E001]" not in draft.answer_text
+    assert "chunk-definition" in draft.cited_evidence_ids
+    assert "chunk-title" not in draft.cited_evidence_ids
+
+
+def test_generate_grounded_draft_rejects_what_is_concept_without_definition_support() -> None:
+    """Concept questions should not accept evidence that only mentions the term."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-title", "chunk-mention"],
+        selected_evidence_ids=["chunk-title", "chunk-mention"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-title",
+                text="A continual learning survey",
+            ),
+            _evidence_item(
+                citation_id="E002",
+                chunk_id="chunk-mention",
+                text="The paper compares continual learning benchmarks and datasets.",
+            ),
+        ],
+    )
+
+    with pytest.raises(GroundedGenerationError, match="query-aligned support"):
+        generate_grounded_draft(
+            query_text="What is continual learning?",
+            evidence_package=evidence_package,
+        )
 
 
 def test_generate_grounded_draft_synthesizes_dataset_summary_from_structure() -> None:
@@ -266,7 +333,7 @@ def test_generate_grounded_draft_prefers_skills_section_over_incidental_skill_wo
     )
 
     assert draft.cited_evidence_ids[0] == "chunk-skills"
-    assert draft.answer_text.startswith("AI & Machine Learning: PyTorch")
+    assert "AI & Machine Learning: PyTorch" in draft.answer_text
     assert "PyTorch" in draft.answer_text
     assert "[E002]" in draft.answer_text
     assert "[E001]" not in draft.answer_text
@@ -638,7 +705,10 @@ def test_generate_grounded_draft_renders_count_questions_from_structured_items()
         evidence_package=evidence_package,
     )
 
-    assert draft.answer_text == "2 projects [E001]"
+    assert draft.answer_text == (
+        "The evidence shows 2 projects: The Traveler's Pocket Pal - Travel Companion; "
+        "StyleCraft - Personalized AI Writing Assistant [E001]"
+    )
 
 
 def test_generate_grounded_draft_extracts_explicit_count_from_prose_sentence() -> None:
@@ -988,6 +1058,49 @@ def test_validate_result_against_evidence_rejects_ungrounded_snippet() -> None:
         )
 
 
+def test_repair_citation_snippets_replaces_paraphrased_gemini_quote() -> None:
+    """Gemini answers should not be discarded when only the quote is paraphrased."""
+
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[
+            _evidence_item(
+                citation_id="E001",
+                chunk_id="chunk-1",
+                text=(
+                    "Continual learning, also known as lifelong learning, studies "
+                    "how to learn from an infinite stream of data."
+                ),
+            ),
+        ],
+    )
+    parsed = _parse_result(
+        {
+            "is_refusal": False,
+            "answer_mode": "open",
+            "answer_text": "Continual learning studies an infinite stream of data [E001].",
+            "cited_chunk_ids": ["chunk-1"],
+            "citation_snippets": [
+                {"chunk_id": "chunk-1", "snippet": "continual learning studies streams of data"}
+            ],
+        }
+    )
+
+    repaired = _repair_citation_snippets(
+        result=parsed,
+        evidence_package=evidence_package,
+        expected_answer_mode="open",
+    )
+
+    assert repaired.citation_snippets["chunk-1"] in evidence_package.items[0].text
+    _validate_result_against_evidence(
+        result=repaired,
+        evidence_package=evidence_package,
+        expected_answer_mode="open",
+    )
+
+
 def test_coerce_json_text_recovers_fenced_json_object() -> None:
     """Gemini JSON coercion should recover fenced JSON cleanly."""
 
@@ -1015,7 +1128,7 @@ def test_coerce_json_text_recovers_first_balanced_object_from_preface() -> None:
 
 
 def test_build_gemini_prompt_enforces_strict_refusal_and_minimal_evidence_payload() -> None:
-    """The Gemini prompt should carry the hard refusal rule and a reduced evidence payload."""
+    """The Gemini prompt should carry mode rules and a reduced evidence payload."""
 
     evidence_package = EvidencePackage(
         retrieved_chunk_ids=["chunk-1"],
@@ -1034,13 +1147,12 @@ def test_build_gemini_prompt_enforces_strict_refusal_and_minimal_evidence_payloa
         evidence_package=evidence_package,
     )
 
-    assert "I could not find the answer in the provided context." in prompt
-    assert "Never return citation IDs like E001 in cited_chunk_ids." in prompt
+    assert "MODE: exact_lookup" in prompt
     assert "answer_text MUST contain only the exact supported answer." in prompt
     assert "document_id=" not in prompt
     assert "chunk_role=" not in prompt
     assert "text=The city purchased 12 electric vans from Voltara Mobility." in prompt
-    assert "answer_mode=exact_lookup" in prompt
+    assert '"cited_chunk_ids": ["chunk_id1"]' in prompt
     assert "citation_id=" not in prompt
 
 
@@ -1064,7 +1176,7 @@ def test_build_gemini_prompt_uses_broader_mode_for_summary_queries() -> None:
         evidence_package=evidence_package,
     )
 
-    assert "answer_mode=summary" in prompt
+    assert "MODE: summary" in prompt
     assert "[section:" not in prompt
 
 
@@ -1075,7 +1187,7 @@ def test_generation_config_for_exact_lookup_is_deterministic() -> None:
         "temperature": 0,
         "topP": 0.05,
         "topK": 1,
-        "maxOutputTokens": 160,
+        "maxOutputTokens": 2048,
     }
 
 
@@ -1116,8 +1228,8 @@ async def test_generate_answer_from_evidence_delegates_to_generation_backend(mon
 
 
 @pytest.mark.asyncio()
-async def test_generate_answer_from_evidence_falls_back_from_openai_backend(monkeypatch) -> None:
-    """Provider-backed generation should fall back cleanly when the provider fails."""
+async def test_generate_answer_from_evidence_reports_openai_backend_failure(monkeypatch) -> None:
+    """Provider-backed generation should fail closed instead of using local fallback."""
 
     evidence_package = EvidencePackage(
         retrieved_chunk_ids=["chunk-1"],
@@ -1148,20 +1260,16 @@ async def test_generate_answer_from_evidence_falls_back_from_openai_backend(monk
         fake_generate_openai_compatible_draft,
     )
 
-    draft = await generate_answer_from_evidence(
-        query_text="What does grounded return?",
-        evidence_package=evidence_package,
-    )
-
-    assert draft.answer_text == (
-        "Grounded returns answers anchored in retrieved evidence. [E001]"
-    )
-    assert draft.generator_provider == "local-grounded-v1:fallback_from_openai_compatible_v1"
+    with pytest.raises(GroundedGenerationError, match="configured generation provider"):
+        await generate_answer_from_evidence(
+            query_text="What does grounded return?",
+            evidence_package=evidence_package,
+        )
 
 
 @pytest.mark.asyncio()
-async def test_generate_answer_from_evidence_falls_back_from_gemini_backend(monkeypatch) -> None:
-    """Gemini-backed generation should also fall back cleanly when unavailable."""
+async def test_generate_answer_from_evidence_reports_gemini_backend_failure(monkeypatch) -> None:
+    """Gemini-backed generation should fail closed when unavailable."""
 
     evidence_package = EvidencePackage(
         retrieved_chunk_ids=["chunk-1"],
@@ -1192,19 +1300,15 @@ async def test_generate_answer_from_evidence_falls_back_from_gemini_backend(monk
         fake_generate_gemini_draft,
     )
 
-    draft = await generate_answer_from_evidence(
-        query_text="What does grounded return?",
-        evidence_package=evidence_package,
-    )
-
-    assert draft.answer_text == (
-        "Grounded returns answers anchored in retrieved evidence. [E001]"
-    )
-    assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
+    with pytest.raises(GroundedGenerationError, match="configured generation provider"):
+        await generate_answer_from_evidence(
+            query_text="What does grounded return?",
+            evidence_package=evidence_package,
+        )
 
 
 @pytest.mark.asyncio()
-async def test_generate_answer_from_evidence_rejects_provider_banned_phrase_and_falls_back(monkeypatch) -> None:
+async def test_generate_answer_from_evidence_rejects_provider_banned_phrase(monkeypatch) -> None:
     """Weak provider phrasing should be rejected before it reaches users."""
 
     evidence_package = EvidencePackage(
@@ -1243,18 +1347,16 @@ async def test_generate_answer_from_evidence_rejects_provider_banned_phrase_and_
         fake_generate_gemini_draft,
     )
 
-    draft = await generate_answer_from_evidence(
-        query_text="Which company supplied the vans?",
-        evidence_package=evidence_package,
-    )
-
-    assert draft.answer_text == "Voltara Mobility [E001]"
-    assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
+    with pytest.raises(GroundedGenerationError, match="configured generation provider"):
+        await generate_answer_from_evidence(
+            query_text="Which company supplied the vans?",
+            evidence_package=evidence_package,
+        )
 
 
 @pytest.mark.asyncio()
 async def test_generate_answer_from_evidence_rejects_weak_provider_field_answer(monkeypatch) -> None:
-    """Provider answers that cite irrelevant field evidence should fall back to deterministic grounding."""
+    """Provider answers that cite irrelevant field evidence should fail closed."""
 
     evidence_package = EvidencePackage(
         retrieved_chunk_ids=["chunk-name", "chunk-experience"],
@@ -1302,18 +1404,16 @@ async def test_generate_answer_from_evidence_rejects_weak_provider_field_answer(
         fake_generate_gemini_draft,
     )
 
-    draft = await generate_answer_from_evidence(
-        query_text="What is the name of the person?",
-        evidence_package=evidence_package,
-    )
-
-    assert draft.answer_text == "Samrawit Gebremaryam Bahta [E001]"
-    assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
+    with pytest.raises(GroundedGenerationError, match="configured generation provider"):
+        await generate_answer_from_evidence(
+            query_text="What is the name of the person?",
+            evidence_package=evidence_package,
+        )
 
 
 @pytest.mark.asyncio()
 async def test_generate_answer_from_evidence_rejects_weak_provider_summary_answer(monkeypatch) -> None:
-    """Fragmentary provider summaries should fall back to deterministic summary synthesis."""
+    """Fragmentary provider summaries should fail closed."""
 
     evidence_package = EvidencePackage(
         retrieved_chunk_ids=["chunk-header", "chunk-sections"],
@@ -1366,13 +1466,11 @@ async def test_generate_answer_from_evidence_rejects_weak_provider_summary_answe
         fake_generate_gemini_draft,
     )
 
-    draft = await generate_answer_from_evidence(
-        query_text="What is this dataset about?",
-        evidence_package=evidence_package,
-    )
-
-    assert draft.answer_text.startswith("The dataset contains")
-    assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
+    with pytest.raises(GroundedGenerationError, match="configured generation provider"):
+        await generate_answer_from_evidence(
+            query_text="What is this dataset about?",
+            evidence_package=evidence_package,
+        )
 
 
 @pytest.mark.asyncio()
@@ -1436,7 +1534,7 @@ async def test_generate_answer_from_evidence_allows_two_chunk_provider_answer_fo
 
 @pytest.mark.asyncio()
 async def test_generate_answer_from_evidence_rejects_heading_only_provider_collection_answer(monkeypatch) -> None:
-    """Provider list answers should fall back when they mostly echo headings instead of grounded items."""
+    """Provider list answers should fail closed when they echo headings."""
 
     evidence_package = EvidencePackage(
         retrieved_chunk_ids=["chunk-paper-tools"],
@@ -1482,10 +1580,8 @@ async def test_generate_answer_from_evidence_rejects_heading_only_provider_colle
         fake_generate_gemini_draft,
     )
 
-    draft = await generate_answer_from_evidence(
-        query_text="What are the tools?",
-        evidence_package=evidence_package,
-    )
-
-    assert "What-If Tool" in draft.answer_text
-    assert draft.generator_provider == "local-grounded-v1:fallback_from_gemini_v1"
+    with pytest.raises(GroundedGenerationError, match="configured generation provider"):
+        await generate_answer_from_evidence(
+            query_text="What are the tools?",
+            evidence_package=evidence_package,
+        )

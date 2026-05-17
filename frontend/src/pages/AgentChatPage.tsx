@@ -23,6 +23,7 @@ import {
   attachDatasetToAgent,
   createAgentConversation,
   getAgent,
+  getCapabilities,
   getConversationMessages,
   getRun,
   listAgentConversations,
@@ -42,14 +43,43 @@ import {
 import type {
   AgentChatResponse,
   MessageResponse,
+  ModeCapabilityResponse,
   UserFacingMode,
 } from "@/lib/types";
 
-const MODE_OPTIONS: Array<{ label: string; value: UserFacingMode; available: boolean }> = [
-  { label: "Auto", value: "auto", available: true },
-  { label: "Instant", value: "instant", available: true },
-  { label: "Thinking", value: "thinking", available: false },
-  { label: "Verified", value: "verified", available: false },
+const FALLBACK_MODE_OPTIONS: ModeCapabilityResponse[] = [
+  {
+    mode: "auto",
+    label: "Auto",
+    enabled: true,
+    backing_tier: null,
+    description: "Recommended mode that follows the current Standard path.",
+    availability_reason: null,
+  },
+  {
+    mode: "instant",
+    label: "Instant",
+    enabled: true,
+    backing_tier: "standard",
+    description: "Fast grounded answers for everyday document questions.",
+    availability_reason: null,
+  },
+  {
+    mode: "thinking",
+    label: "Thinking",
+    enabled: true,
+    backing_tier: "enterprise",
+    description: "Deeper retrieval for harder questions.",
+    availability_reason: null,
+  },
+  {
+    mode: "verified",
+    label: "Verified",
+    enabled: false,
+    backing_tier: "critical",
+    description: "Highest-assurance path for sensitive work.",
+    availability_reason: "coming_soon",
+  },
 ];
 
 const GENERATING_COPY = [
@@ -249,6 +279,12 @@ export default function AgentChatPage() {
     enabled: Boolean(apiKey && workspaceId),
   });
 
+  const capabilitiesQuery = useQuery({
+    queryKey: ["capabilities"],
+    queryFn: () => getCapabilities(apiKey!),
+    enabled: Boolean(apiKey),
+  });
+
   const conversationsQuery = useQuery({
     queryKey: ["agent", id, "conversations"],
     queryFn: () => listAgentConversations(apiKey!, id!),
@@ -300,6 +336,31 @@ export default function AgentChatPage() {
       setSelectedMode(agentQuery.data.default_mode);
     }
   }, [agentQuery.data?.default_mode]);
+
+  const modeOptions = useMemo(() => {
+    const capabilityModes = capabilitiesQuery.data?.modes ?? FALLBACK_MODE_OPTIONS;
+    return capabilityModes.filter((mode) => mode.mode !== "verified");
+  }, [agentQuery.data?.allowed_modes, capabilitiesQuery.data?.modes]);
+
+  useEffect(() => {
+    if (modeOptions.length === 0) {
+      return;
+    }
+
+    const selectedOption = modeOptions.find((mode) => mode.mode === selectedMode);
+    if (selectedOption?.enabled) {
+      return;
+    }
+
+    const fallbackMode =
+      modeOptions.find((mode) => mode.enabled && mode.mode === agentQuery.data?.default_mode) ??
+      modeOptions.find((mode) => mode.enabled) ??
+      modeOptions[0];
+
+    if (fallbackMode) {
+      setSelectedMode(fallbackMode.mode);
+    }
+  }, [agentQuery.data?.default_mode, modeOptions, selectedMode]);
 
   useEffect(() => {
     if (attachedDatasets.length === 0) {
@@ -475,30 +536,6 @@ export default function AgentChatPage() {
     },
   });
 
-  if (agentQuery.isLoading) {
-    return <div className="h-[calc(100vh-3.5rem)] rounded-2xl border bg-card animate-pulse" />;
-  }
-
-  const agent = agentQuery.data;
-  if (!agent) {
-    return (
-      <div className="max-w-4xl">
-        <Link
-          to={workspacePath(workspaceSlug, "/agents")}
-          className="mb-4 flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Back to agents
-        </Link>
-        <div className="rounded-2xl border bg-card p-10 text-center">
-          <h1 className="mb-2 text-lg font-semibold text-foreground">Agent not found</h1>
-          <p className="text-sm text-muted-foreground">
-            This agent may have been removed or is no longer available.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   const availableDatasets = datasetsQuery.data ?? [];
   const conversations = conversationsQuery.data ?? [];
   const messages = messagesQuery.data ?? [];
@@ -561,6 +598,30 @@ export default function AgentChatPage() {
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [visibleMessages.length, localExchange?.status, selectedConversationId]);
+
+  if (agentQuery.isLoading) {
+    return <div className="h-[calc(100vh-3.5rem)] rounded-2xl border bg-card animate-pulse" />;
+  }
+
+  const agent = agentQuery.data;
+  if (!agent) {
+    return (
+      <div className="max-w-4xl">
+        <Link
+          to={workspacePath(workspaceSlug, "/agents")}
+          className="mb-4 flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" /> Back to agents
+        </Link>
+        <div className="rounded-2xl border bg-card p-10 text-center">
+          <h1 className="mb-2 text-lg font-semibold text-foreground">Agent not found</h1>
+          <p className="text-sm text-muted-foreground">
+            This agent may have been removed or is no longer available.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   function prepareSubmission(messageText: string): ChatSubmission | null {
     if (!apiKey || !id || !agentQuery.data) {
@@ -769,8 +830,8 @@ export default function AgentChatPage() {
         </div>
       </aside>
 
-      <section className="min-w-0 flex flex-col bg-background">
-        <div className="shrink-0 border-b bg-background/90 px-6 py-4 backdrop-blur">
+      <section className="min-w-0 flex flex-col bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.88))]">
+        <div className="shrink-0 border-b bg-white/80 px-6 py-4 backdrop-blur">
           <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4">
             <div className="min-w-0">
               <h2 className="truncate font-display text-xl font-semibold tracking-[-0.03em] text-foreground">
@@ -794,7 +855,7 @@ export default function AgentChatPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.06),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.6),rgba(248,250,252,0.3))]">
+        <div className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.92),rgba(248,250,252,0.72))]">
           <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-6 py-8">
             {messagesQuery.isLoading && selectedConversationId ? (
               <div className="text-sm text-muted-foreground">Loading conversation...</div>
@@ -901,11 +962,23 @@ export default function AgentChatPage() {
 
                   return (
                     <div key={message.key} className="flex justify-end animate-fade-up">
-                      <div className="max-w-2xl rounded-[28px] border border-transparent bg-foreground px-6 py-4 text-primary-foreground shadow-[0_18px_45px_rgba(15,23,42,0.14)]">
-                        <p className="whitespace-pre-line text-[15px] leading-7">{message.content}</p>
-                        <div className="mt-3 text-right text-[10px] text-primary-foreground/70">
-                          {formatRelativeOrDate(message.createdAt)}
+                      <div className="max-w-2xl">
+                        <div className="rounded-[28px] border border-accent/15 bg-[linear-gradient(135deg,rgba(16,185,129,0.12),rgba(255,255,255,0.96))] px-6 py-4 text-foreground shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
+                          <p className="whitespace-pre-line text-[15px] leading-7">{message.content}</p>
+                          <div className="mt-3 text-right text-[10px] text-muted-foreground">
+                            {formatRelativeOrDate(message.createdAt)}
+                          </div>
                         </div>
+                        {message.kind === "optimistic-user" && hasActiveRun ? (
+                          <div className="mt-2 flex items-center justify-end gap-2 pr-3 text-[11px] text-muted-foreground">
+                            <div className="flex items-center gap-1.5">
+                              <span className="chat-typing-dot" />
+                              <span className="chat-typing-dot [animation-delay:0.16s]" />
+                              <span className="chat-typing-dot [animation-delay:0.32s]" />
+                            </div>
+                            <span>Thinking</span>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   );
@@ -916,17 +989,14 @@ export default function AgentChatPage() {
           </div>
         </div>
 
-        <div className="shrink-0 border-t bg-background/95 px-6 py-4 backdrop-blur">
-          <div className="mx-auto w-full max-w-5xl rounded-[30px] border bg-card p-4 shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
+        <div className="shrink-0 border-t bg-white/88 px-6 py-4 backdrop-blur">
+          <div className="mx-auto w-full max-w-5xl rounded-[30px] border border-border/80 bg-white/96 p-4 shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
             <Textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder={hasActiveRun ? "The assistant is working on your current request..." : "Ask a grounded question..."}
-              disabled={hasActiveRun}
+              placeholder="Ask a grounded question..."
               aria-busy={hasActiveRun}
-              className={`min-h-[96px] resize-none border-0 bg-transparent px-2 py-2 text-base shadow-none focus-visible:ring-0 ${
-                hasActiveRun ? "cursor-not-allowed opacity-70" : ""
-              }`}
+              className="min-h-[96px] resize-none border-0 bg-transparent px-2 py-2 text-base shadow-none focus-visible:ring-0"
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
@@ -963,33 +1033,40 @@ export default function AgentChatPage() {
                 ) : (
                   <span className="px-1">Attach a dataset to enable grounded answers.</span>
                 )}
-                {hasActiveRun ? (
-                  <span className="inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-2 text-[11px] font-medium text-accent">
-                    <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                    Response in progress
-                  </span>
-                ) : null}
               </div>
 
               <div className="flex flex-wrap items-center justify-end gap-2">
-                {MODE_OPTIONS.map((mode) => (
-                  <button
-                    key={mode.value}
-                    type="button"
-                    onClick={() => mode.available && setSelectedMode(mode.value)}
-                    disabled={!mode.available || hasActiveRun}
-                    className={`rounded-full px-4 py-2 text-xs font-medium transition-all ${
-                      selectedMode === mode.value
-                        ? "bg-accent text-accent-foreground"
-                        : mode.available
-                          ? "border border-border bg-background text-foreground hover:bg-secondary"
-                          : "border border-border bg-background text-muted-foreground/40 cursor-not-allowed"
-                    } ${hasActiveRun && mode.available ? "opacity-60" : ""}`}
-                  >
-                    {mode.label}
-                    {!mode.available ? <span className="ml-1 text-[9px]">soon</span> : null}
-                  </button>
-                ))}
+                {modeOptions.map((mode) => {
+                  const allowedModes = new Set(agentQuery.data?.allowed_modes ?? []);
+                  const agentAllowsMode =
+                    allowedModes.size === 0 || allowedModes.has(mode.mode);
+                  const modeIsSelectable = mode.enabled && agentAllowsMode;
+                  const disabledReason = !mode.enabled
+                    ? mode.description
+                    : agentAllowsMode
+                      ? undefined
+                      : "Enable this mode for the agent before using it in chat.";
+
+                  return (
+                    <button
+                      key={mode.mode}
+                      type="button"
+                      onClick={() => modeIsSelectable && setSelectedMode(mode.mode)}
+                      disabled={!modeIsSelectable || hasActiveRun}
+                      title={disabledReason}
+                      className={`rounded-full px-4 py-2 text-xs font-medium transition-all ${
+                        selectedMode === mode.mode
+                          ? "bg-accent text-accent-foreground"
+                          : modeIsSelectable
+                            ? "border border-border bg-background text-foreground hover:bg-secondary"
+                            : "border border-border bg-background text-muted-foreground/40 cursor-not-allowed"
+                      } ${hasActiveRun && modeIsSelectable ? "opacity-60" : ""}`}
+                    >
+                      {mode.label}
+                      {!mode.enabled ? <span className="ml-1 text-[9px]">soon</span> : null}
+                    </button>
+                  );
+                })}
                 <Button
                   variant="pill-accent"
                   size="icon"
