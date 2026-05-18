@@ -45,6 +45,18 @@ _LOW_SIGNAL_CLAIM_TERMS = {
     "uses",
     "system",
 }
+_RETRY_TERM_PRIORITY = {
+    "supported",
+    "supports",
+    "export",
+    "exports",
+    "offline",
+    "online",
+    "upload",
+    "uploads",
+    "tenant",
+    "safe",
+}
 
 
 @dataclass(frozen=True)
@@ -106,6 +118,26 @@ def _claim_terms(claim_text: str) -> tuple[str, ...]:
         if token not in terms:
             terms.append(token)
     return tuple(terms)
+
+
+def _rank_retry_terms(*, claims: tuple[VerifiedClaim, ...]) -> tuple[str, ...]:
+    """Return a stable retry query focused on missing high-signal claim terms."""
+
+    ranked_terms: list[str] = []
+    for claim in claims:
+        if claim.status not in {"unsupported", "partially_supported"}:
+            continue
+        claim_terms = _claim_terms(claim.text)
+        for term in claim_terms:
+            if term in claim.missing_terms and term not in ranked_terms:
+                ranked_terms.append(term)
+        for term in claim.missing_terms:
+            if term not in ranked_terms:
+                ranked_terms.append(term)
+
+    prioritized = [term for term in ranked_terms if term in _RETRY_TERM_PRIORITY]
+    remaining = [term for term in ranked_terms if term not in _RETRY_TERM_PRIORITY]
+    return tuple(prioritized + remaining)
 
 
 def extract_claims(answer_text: str) -> tuple[str, ...]:
@@ -246,14 +278,9 @@ def verify_critical_response(
     elif unsupported_detected:
         decision = "refuse"
         reason = "UNSUPPORTED_CLAIMS"
-        retry_terms = [
-            term
-            for claim in verified_claims
-            if claim.status == "unsupported"
-            for term in claim.missing_terms
-        ]
+        retry_terms = _rank_retry_terms(claims=tuple(verified_claims))
         if retry_terms:
-            retry_query_text = " ".join(dict.fromkeys(retry_terms))
+            retry_query_text = " ".join(retry_terms)
     elif partial_detected or response.verification_status == "degraded":
         decision = "degrade"
         reason = (
@@ -261,14 +288,9 @@ def verify_critical_response(
             if response.degraded_reasons
             else "PARTIAL_SUPPORT"
         )
-        retry_terms = [
-            term
-            for claim in verified_claims
-            if claim.status == "partially_supported"
-            for term in claim.missing_terms
-        ]
+        retry_terms = _rank_retry_terms(claims=tuple(verified_claims))
         if retry_terms:
-            retry_query_text = " ".join(dict.fromkeys(retry_terms))
+            retry_query_text = " ".join(retry_terms)
     else:
         decision = "accept"
         reason = None

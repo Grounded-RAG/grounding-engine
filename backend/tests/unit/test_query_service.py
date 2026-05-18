@@ -1491,3 +1491,125 @@ async def test_execute_standard_query_persists_internal_model_retrieval_policy(m
     trace = session.added[0]
     assert trace.verifier_result["evidence_debug"]["critical_policy"]["internal_model_retrieval"]["allowed"] is True
     assert trace.verifier_result["evidence_debug"]["critical_policy"]["internal_model_retrieval"]["reason"] == "policy_enabled"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_records_internal_retrieval_recovery_when_degraded(monkeypatch) -> None:
+    """Critical degraded recovery should re-check the answer against expanded grounded evidence."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify offline exports")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {
+            "min_execution_tier": ExecutionTier.STANDARD,
+            "allow_web_fallback": False,
+            "allow_internal_model_retrieval": True,
+        },
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        return RetrievalBundle(
+            sparse_hits=[],
+            dense_hits=[],
+            fused_hits=[
+                FusedRetrievedChunk(
+                    chunk_id="chunk-1",
+                    tenant_id=tenant_context.tenant_id,
+                    namespace_id=namespace_id,
+                    document_id=uuid.uuid4(),
+                    chunk_index=0,
+                    text="Grounded supports tenant-safe uploads.",
+                    fused_score=0.98,
+                    sources=("dense",),
+                ),
+                FusedRetrievedChunk(
+                    chunk_id="chunk-2",
+                    tenant_id=tenant_context.tenant_id,
+                    namespace_id=namespace_id,
+                    document_id=uuid.uuid4(),
+                    chunk_index=1,
+                    text="Grounded supports offline exports.",
+                    fused_score=0.93,
+                    sources=("sparse",),
+                ),
+            ],
+            debug=None,
+        )
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+        del query_text, evidence_package
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": "Grounded supports tenant-safe exports [E001].",
+                "cited_evidence_ids": ["chunk-1"],
+                "citation_snippets": {"chunk-1": "Grounded supports tenant-safe uploads."},
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 0.98,
+                "source_diversity": 1,
+            },
+        )()
+
+    def fake_package_evidence(retrieval_bundle, *, query_text=None, limit=None, execution_tier=None):
+        del query_text, limit, execution_tier
+        first_hit = retrieval_bundle.fused_hits[0]
+        return EvidencePackage(
+            retrieved_chunk_ids=[hit.chunk_id for hit in retrieval_bundle.fused_hits],
+            selected_evidence_ids=[first_hit.chunk_id],
+            items=[
+                type(
+                    "EvidenceItemStub",
+                    (),
+                    {
+                        "citation_id": "E001",
+                        "chunk_id": first_hit.chunk_id,
+                        "tenant_id": first_hit.tenant_id,
+                        "namespace_id": first_hit.namespace_id,
+                        "document_id": first_hit.document_id,
+                        "chunk_index": first_hit.chunk_index,
+                        "text": first_hit.text,
+                        "score": first_hit.fused_score,
+                        "sources": first_hit.sources,
+                        "section_title": first_hit.section_title,
+                        "section_slug": first_hit.section_slug,
+                        "chunk_role": first_hit.chunk_role,
+                        "starts_with_heading": first_hit.starts_with_heading,
+                        "is_list_block": first_hit.is_list_block,
+                    },
+                )()
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.package_evidence",
+        fake_package_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    assert result.response.verification_status == "degraded"
+    assert trace.verifier_result["verification_outcome"] == "degraded"
+    assert trace.verifier_result["critical_verifier"]["recovery_paths"]["internal_model_retrieval"]["used"] is True

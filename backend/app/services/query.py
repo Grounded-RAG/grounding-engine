@@ -721,6 +721,13 @@ async def _run_critical_corrective_retry(
             "resulting_reason": critical_verifier_metadata.get("reason"),
         },
     }
+    return (
+        retrieval_bundle,
+        evidence_package,
+        response,
+        draft.generator_provider,
+        critical_verifier_metadata,
+    )
 
 
 def _apply_critical_recovery_paths(
@@ -729,6 +736,7 @@ def _apply_critical_recovery_paths(
     response: GroundedAnswerResponse,
     evidence_package,
     critical_verifier_metadata: dict[str, object],
+    retrieval_bundle: RetrievalBundle,
 ) -> tuple[GroundedAnswerResponse, object, dict[str, object], dict[str, object]]:
     """Apply bounded internal and external recovery paths for Critical mode."""
 
@@ -752,6 +760,7 @@ def _apply_critical_recovery_paths(
     internal_result = run_internal_model_retrieval(
         namespace=namespace,
         evidence_package=evidence_package,
+        fused_hits=getattr(retrieval_bundle, "fused_hits", None),
     )
     recovery_metadata["internal_model_retrieval"] = {
         "attempted": internal_result.attempted,
@@ -760,6 +769,24 @@ def _apply_critical_recovery_paths(
     }
     if internal_result.evidence_package is not None:
         updated_evidence_package = internal_result.evidence_package
+        if internal_result.used:
+            # Re-check the current response against the widened grounded evidence set.
+            updated_response, updated_metadata = _apply_critical_verification(
+                response=updated_response,
+                evidence_package=updated_evidence_package,
+            )
+            critical_verifier_metadata = {
+                **updated_metadata,
+                "bounded_correction_attempted": critical_verifier_metadata.get(
+                    "bounded_correction_attempted",
+                    False,
+                ),
+            }
+
+    updated_metadata = {
+        **critical_verifier_metadata,
+        "recovery_paths": recovery_metadata,
+    }
 
     if critical_verifier_metadata.get("decision") in {"refuse", "degrade"}:
         external_result = run_allowlisted_external_fallback(
@@ -775,18 +802,11 @@ def _apply_critical_recovery_paths(
         if external_result.response is not None and updated_response.verification_status == "degraded":
             updated_response = external_result.response
 
-    updated_metadata = {
-        **critical_verifier_metadata,
-        "recovery_paths": recovery_metadata,
-    }
+        updated_metadata = {
+            **critical_verifier_metadata,
+            "recovery_paths": recovery_metadata,
+        }
     return updated_response, updated_evidence_package, updated_metadata, recovery_metadata
-    return (
-        retrieval_bundle,
-        evidence_package,
-        response,
-        draft.generator_provider,
-        critical_verifier_metadata,
-    )
 
 
 async def _update_query_trace_timings(
@@ -1005,6 +1025,7 @@ async def execute_standard_query(
                         response=response,
                         evidence_package=evidence_package,
                         critical_verifier_metadata=critical_verifier_metadata,
+                        retrieval_bundle=retrieval_bundle,
                     )
             else:
                 critical_verifier_metadata = None

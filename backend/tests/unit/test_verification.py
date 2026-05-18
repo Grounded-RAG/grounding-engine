@@ -146,6 +146,16 @@ def test_verify_critical_response_refuses_unsupported_claims() -> None:
     assert result.retry_query_text == "offline exports"
 
 
+def test_verify_critical_response_prioritizes_missing_claim_terms_for_retry() -> None:
+    result = verify_critical_response(
+        response=_response("Grounded supports offline exports without sync."),
+        evidence_package=_evidence_package("Grounded supports tenant-safe uploads."),
+    )
+
+    assert result.decision == "refuse"
+    assert result.retry_query_text == "offline exports without sync"
+
+
 def test_verify_critical_response_degrades_partially_supported_claims() -> None:
     result = verify_critical_response(
         response=_response("Grounded supports tenant-safe exports."),
