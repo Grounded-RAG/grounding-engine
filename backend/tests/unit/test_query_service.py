@@ -1403,6 +1403,9 @@ async def test_execute_standard_query_retries_critical_support_once(monkeypatch)
     assert len(retrieval_calls) == 2
     assert retrieval_calls[1][0] == "offline exports"
     assert result.response.verification_status == "passed"
+    assert result.response.support_summary == "grounded"
+    assert result.response.degraded_reasons == []
+    assert result.response.confidence_score >= 0.5
     assert trace.verifier_result["verification_outcome"] == "accepted"
     assert trace.verifier_result["critical_verifier"]["bounded_correction_attempted"] is True
 
@@ -1612,4 +1615,6 @@ async def test_execute_standard_query_records_internal_retrieval_recovery_when_d
     trace = session.added[0]
     assert result.response.verification_status == "degraded"
     assert trace.verifier_result["verification_outcome"] == "degraded"
+    assert result.response.confidence_label == "low"
+    assert result.response.degraded_reasons
     assert trace.verifier_result["critical_verifier"]["recovery_paths"]["internal_model_retrieval"]["used"] is True

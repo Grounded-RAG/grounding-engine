@@ -628,6 +628,33 @@ def _apply_critical_verification(
     return degraded_response, metadata
 
 
+def _normalize_critical_response(*, response: GroundedAnswerResponse) -> GroundedAnswerResponse:
+    """Enforce one consistent shape for final Critical responses."""
+
+    if response.verification_status == "passed":
+        return response.model_copy(
+            update={
+                "support_summary": "grounded",
+                "degraded_reasons": [],
+                "confidence_score": min(max(response.confidence_score, 0.5), 1.0),
+            }
+        )
+
+    degraded_reasons = list(response.degraded_reasons)
+    if not degraded_reasons:
+        degraded_reasons = ["INSUFFICIENT_SUPPORT"]
+    return response.model_copy(
+        update={
+            "support_summary": (
+                "insufficient" if response.confidence_score <= 0.0 else response.support_summary
+            ),
+            "confidence_label": "low",
+            "confidence_score": min(response.confidence_score, 0.49),
+            "degraded_reasons": degraded_reasons,
+        }
+    )
+
+
 def _critical_policy_metadata(*, namespace: Namespace) -> dict[str, object]:
     """Build Critical policy metadata for external and internal recovery paths."""
 
@@ -1027,6 +1054,7 @@ async def execute_standard_query(
                         critical_verifier_metadata=critical_verifier_metadata,
                         retrieval_bundle=retrieval_bundle,
                     )
+                response = _normalize_critical_response(response=response)
             else:
                 critical_verifier_metadata = None
         except (GroundedGenerationError, ResponseShapingError) as exc:
