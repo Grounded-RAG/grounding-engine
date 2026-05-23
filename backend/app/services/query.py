@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import time
 import uuid
@@ -475,6 +477,7 @@ async def _persist_query_trace(
     conversation_id: uuid.UUID | None = None,
     selected_mode: UserFacingMode | None = None,
     run_status: str = "completed",
+    token_usage: dict[str, int] | None = None,
 ) -> QueryTrace:
     """Persist one Standard query trace for later debugging and evaluation."""
 
@@ -498,7 +501,7 @@ async def _persist_query_trace(
         effective_tier=resolved_routing.effective_tier,
         routing_reason=resolved_routing.routing_reason,
         query_redacted=query_request.query,
-        query_ciphertext=None,
+        query_ciphertext=hashlib.sha256(query_request.query.encode()).hexdigest(),
         retrieved_chunk_ids=[hit.chunk_id for hit in retrieval_bundle.fused_hits],
         selected_evidence_ids=[citation.chunk_id for citation in response.citations],
         generator_provider=generator_provider,
@@ -518,7 +521,7 @@ async def _persist_query_trace(
         degraded_reasons=list(response.degraded_reasons),
         stage_latencies_ms=stage_latencies_ms,
         total_latency_ms=total_latency_ms,
-        token_usage={
+        token_usage=token_usage or {
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
@@ -1401,6 +1404,7 @@ async def execute_standard_query(
     evidence_ms = int((time.perf_counter() - evidence_started) * 1000)
 
     answering_started = time.perf_counter()
+    draft_token_usage: dict[str, int] | None = None
     if not evidence_package.items:
         response = shape_degraded_response(
             reason="NO_GROUNDED_EVIDENCE",
@@ -1414,6 +1418,7 @@ async def execute_standard_query(
                 query_text=query_request.query,
                 evidence_package=evidence_package,
             )
+            draft_token_usage = draft.token_usage
             response = shape_grounded_response(
                 draft=draft,
                 evidence_package=evidence_package,
@@ -1545,6 +1550,7 @@ async def execute_standard_query(
         agent_id=agent_id,
         conversation_id=conversation_id,
         selected_mode=selected_mode,
+        token_usage=draft_token_usage,
     )
     trace_ms = int((time.perf_counter() - trace_started) * 1000)
 

@@ -612,6 +612,10 @@ async def generate_gemini_draft(
     support_coverage = min(len(used_items) / max(len(evidence_package.items), 1), 1.0)
     source_diversity = len({source for item in used_items for source in item.sources})
 
+    usage_meta = response_payload.get("usageMetadata", {})
+    prompt_tokens = int(usage_meta.get("promptTokenCount", 0))
+    completion_tokens = int(usage_meta.get("candidatesTokenCount", 0))
+
     return GroundedAnswerDraft(
         answer_text=parsed.answer_text,
         cited_evidence_ids=parsed.cited_chunk_ids,
@@ -619,4 +623,9 @@ async def generate_gemini_draft(
         generator_provider=f"gemini:{settings.gemini_model}",
         support_coverage=round(support_coverage, 4),
         source_diversity=source_diversity,
+        token_usage={
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
     )

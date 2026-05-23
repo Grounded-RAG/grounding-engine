@@ -342,6 +342,7 @@ async def test_execute_standard_query_uses_raw_user_question_for_generation(monk
                 "generator_provider": "local-grounded-v1",
                 "support_coverage": 1.0,
                 "source_diversity": 2,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             },
         )()
 
@@ -1143,6 +1144,7 @@ async def test_execute_standard_query_persists_critical_request_trace_metadata(m
                 "generator_provider": "local-grounded-v1",
                 "support_coverage": 0.98,
                 "source_diversity": 1,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             },
         )()
 
@@ -1209,6 +1211,7 @@ async def test_execute_standard_query_runs_critical_verifier_when_enabled(monkey
                 "generator_provider": "local-grounded-v1",
                 "support_coverage": 0.98,
                 "source_diversity": 1,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             },
         )()
 
@@ -1274,6 +1277,7 @@ async def test_execute_standard_query_degrades_partial_critical_claims(monkeypat
                 "generator_provider": "local-grounded-v1",
                 "support_coverage": 0.98,
                 "source_diversity": 1,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             },
         )()
 
@@ -1339,6 +1343,7 @@ async def test_execute_standard_query_degrades_critical_contradictions(monkeypat
                 "generator_provider": "local-grounded-v1",
                 "support_coverage": 0.98,
                 "source_diversity": 2,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             },
         )()
 
@@ -1431,6 +1436,7 @@ async def test_execute_standard_query_retries_critical_support_once(monkeypatch)
                 "generator_provider": "local-grounded-v1",
                 "support_coverage": 0.98,
                 "source_diversity": 1,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             },
         )()
 
@@ -1610,6 +1616,7 @@ async def test_execute_standard_query_records_internal_retrieval_recovery_when_d
                 "generator_provider": "local-grounded-v1",
                 "support_coverage": 0.98,
                 "source_diversity": 1,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             },
         )()
 
