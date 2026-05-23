@@ -35,6 +35,6 @@ def downgrade() -> None:
         "agents",
         "allowed_modes",
         existing_type=postgresql.JSONB(astext_type=sa.Text()),
-        server_default=sa.text("'[\"auto\", \"instant\"]'::jsonb"),
+        server_default=None,
         existing_nullable=False,
     )

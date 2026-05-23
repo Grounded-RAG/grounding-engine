@@ -172,6 +172,7 @@ async def test_graceful_degradation_on_http_failure() -> None:
     assert result.reason in {
         "allowlisted_external_fallback_no_snippets",
         "allowlisted_external_snippets_retrieved",
+        "allowlisted_external_fallback_fetch_error",
     }
 
 

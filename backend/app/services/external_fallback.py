@@ -59,12 +59,16 @@ def resolve_external_fallback_policy(*, namespace: Namespace) -> ExternalFallbac
     )
 
 
+class _FetchError(Exception):
+    """Raised when the DDGS network call fails so callers can distinguish it from empty results."""
+
+
 async def _fetch_duckduckgo_snippets(query: str) -> list[str]:
     """Fetch instant-answer snippets from the DuckDuckGo API.
 
-    Returns up to _DDGS_MAX_SNIPPETS plain-text snippets.
-    Returns an empty list on any network or parse error — the caller
-    degrades gracefully rather than raising.
+    Returns up to _DDGS_MAX_SNIPPETS plain-text snippets on success.
+    Raises _FetchError on any network or HTTP error so callers can
+    distinguish a service failure from a legitimate empty result set.
     """
     params = {
         "q": query,
@@ -79,8 +83,7 @@ async def _fetch_duckduckgo_snippets(query: str) -> list[str]:
             resp.raise_for_status()
             data = resp.json()
     except Exception as exc:
-        logger.warning("external_fallback_ddgs_failed", reason=str(exc))
-        return []
+        raise _FetchError(str(exc)) from exc
 
     snippets: list[str] = []
 
@@ -130,7 +133,21 @@ async def run_allowlisted_external_fallback(
     snippets: list[str] = []
 
     if query_text.strip():
-        snippets = await _fetch_duckduckgo_snippets(query_text.strip())
+        try:
+            snippets = await _fetch_duckduckgo_snippets(query_text.strip())
+        except _FetchError as exc:
+            logger.warning(
+                "external_fallback_ddgs_failed",
+                reason=str(exc),
+                query_preview=query_text[:80],
+            )
+            return ExternalFallbackResult(
+                attempted=True,
+                used=False,
+                reason="allowlisted_external_fallback_fetch_error",
+                response=degraded_response,
+                sources_consulted=(source_provider,),
+            )
 
     if snippets:
         combined = " ".join(snippets)
