@@ -11,7 +11,7 @@ import SettingsPage from "@/pages/SettingsPage";
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({
     apiKey: "grd_test_key",
-    auth: { email: "user@test.com" },
+    auth: { email: "user@test.com", workspace_id: "ws-1" },
   }),
 }));
 
@@ -20,6 +20,19 @@ vi.mock("@/lib/api", () => ({
   createApiKey: vi.fn(),
   revokeApiKey: vi.fn(),
   getCapabilities: vi.fn().mockResolvedValue({ modes: [] }),
+  listTeamMembers: vi.fn().mockResolvedValue([]),
+  inviteTeamMember: vi.fn(),
+  removeTeamMember: vi.fn(),
+  listAuditLogs: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 }),
+  getBillingSubscription: vi.fn().mockResolvedValue({
+    subscription_id: "sub-1",
+    plan: "free",
+    status: "active",
+    current_period_start: null,
+    current_period_end: null,
+    features: ["Up to 3 agents", "100 queries / month"],
+  }),
+  getBillingPortal: vi.fn(),
 }));
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -63,10 +76,10 @@ describe("SettingsPage", () => {
     });
   });
 
-  it("renders the Coming Soon section", async () => {
+  it("renders the Team Members section", async () => {
     renderPage();
     await waitFor(() => {
-      const matches = screen.getAllByText(/coming soon/i);
+      const matches = screen.getAllByText(/team members/i);
       expect(matches.length).toBeGreaterThan(0);
     });
   });

@@ -516,3 +516,4 @@ def verify_critical_response(
         retry_query_text=retry_query_text,
         contradiction_detected=contradiction_detected,
     )
+

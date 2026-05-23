@@ -9,17 +9,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { listWorkspaces, signInWithEmail } from "@/lib/api";
+import { initiateSso, listWorkspaces, signInWithEmail } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { workspacePath } from "@/lib/routes";
 import heroVisual from "@/assets/hero-visual.png";
 
 export default function LoginPage() {
   const [showEmailForm, setShowEmailForm] = useState(false);
+  const [showSsoForm, setShowSsoForm] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [orgSlug, setOrgSlug] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -49,6 +51,27 @@ export default function LoginPage() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to connect with that API key.";
       toast.error(message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSsoLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!orgSlug.trim()) {
+      toast.error("Enter your organization slug to continue.");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const response = await initiateSso({ organization_slug: orgSlug.trim() });
+      if (response.redirect_url) {
+        window.location.href = response.redirect_url;
+      } else {
+        toast.info(response.message);
+      }
+    } catch {
+      toast.error("SSO is not configured for this organization.");
     } finally {
       setIsSubmitting(false);
     }
@@ -101,12 +124,12 @@ export default function LoginPage() {
           </div>
 
           <div className="rounded-[28px] border bg-card shadow-sm overflow-hidden">
-            {!showEmailForm ? (
+            {!showEmailForm && !showSsoForm ? (
               <>
                 <button
                   type="button"
-                  disabled
-                  className="w-full flex items-start gap-4 p-6 text-left border-b opacity-70 cursor-not-allowed"
+                  onClick={() => setShowSsoForm(true)}
+                  className="w-full flex items-start gap-4 p-6 text-left border-b transition-colors hover:bg-secondary/30"
                 >
                   <div className="h-10 w-10 rounded-full bg-secondary flex items-center justify-center">
                     <LockKeyhole className="h-4 w-4 text-muted-foreground" />
@@ -115,16 +138,14 @@ export default function LoginPage() {
                     <div className="text-xl font-medium text-foreground">Sign In with SSO</div>
                     <div className="text-sm text-muted-foreground">Find your workspace</div>
                   </div>
-                  <Badge variant="coming" className="ml-auto text-[10px]">
-                    Coming soon
-                  </Badge>
+                  <ArrowRight className="h-4 w-4 ml-auto text-muted-foreground self-center" />
                 </button>
 
                 <div className="grid md:grid-cols-2">
                   <button
                     type="button"
-                    disabled
-                    className="flex flex-col items-start gap-4 border-b md:border-b-0 md:border-r p-6 text-left opacity-70 cursor-not-allowed"
+                    onClick={() => toast.info("Google sign-in requires GOOGLE_CLIENT_ID to be configured. Use email sign-in for now.")}
+                    className="flex flex-col items-start gap-4 border-b md:border-b-0 md:border-r p-6 text-left transition-colors hover:bg-secondary/30"
                   >
                     <svg className="h-6 w-6" viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
@@ -134,7 +155,7 @@ export default function LoginPage() {
                     </svg>
                     <div>
                       <div className="text-xl font-medium text-foreground">Sign In with Google</div>
-                      <div className="text-sm text-muted-foreground">Coming soon</div>
+                      <div className="text-sm text-muted-foreground">Requires Google OAuth setup</div>
                     </div>
                   </button>
 
@@ -153,6 +174,43 @@ export default function LoginPage() {
                   </button>
                 </div>
               </>
+            ) : showSsoForm ? (
+              <form onSubmit={handleSsoLogin} className="p-6">
+                <div className="mb-4">
+                  <Label htmlFor="org-slug" className="text-base font-medium text-foreground">
+                    Organization Slug
+                  </Label>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Enter your organization slug to find your SSO provider.
+                  </p>
+                </div>
+                <Input
+                  id="org-slug"
+                  type="text"
+                  placeholder="your-company"
+                  value={orgSlug}
+                  onChange={(e) => setOrgSlug(e.target.value)}
+                  className="h-12 rounded-2xl mb-4"
+                />
+                <div className="flex items-center gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-full"
+                    onClick={() => setShowSsoForm(false)}
+                  >
+                    Back
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="rounded-full bg-accent text-accent-foreground hover:bg-accent/90"
+                    disabled={isSubmitting || !orgSlug.trim()}
+                  >
+                    {isSubmitting ? "Connecting..." : "Continue with SSO"}
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </div>
+              </form>
             ) : (
               <form onSubmit={handleEmailLogin} className="p-6">
                 <div className="mb-4">

@@ -47,3 +47,22 @@ class EmailAuthResponse(AuthSmokeResponse):
     workspace_slug: str
     created_tenant: bool = False
     created_workspace: bool = False
+
+
+class GoogleAuthRequest(BaseModel):
+    """Google OAuth sign-in request carrying the ID token from the browser."""
+
+    id_token: str = Field(min_length=1, max_length=4096)
+
+
+class SSOInitiateRequest(BaseModel):
+    """Request to initiate an SSO/SAML flow."""
+
+    organization_slug: str = Field(min_length=1, max_length=120)
+
+
+class SSOInitiateResponse(BaseModel):
+    """Response returning the SSO redirect URL."""
+
+    redirect_url: str | None
+    message: str

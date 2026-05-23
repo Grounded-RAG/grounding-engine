@@ -213,6 +213,59 @@ export interface ApiKeyCreateResponse extends ApiKeyResponse {
   api_key: string;
 }
 
+export type WorkspaceMemberRole = "admin" | "member" | "viewer";
+export type WorkspaceMemberStatus = "pending" | "active" | "removed";
+
+export interface TeamMemberResponse {
+  member_id: string;
+  workspace_id: string;
+  email: string;
+  role: WorkspaceMemberRole;
+  status: WorkspaceMemberStatus;
+  invited_at: string;
+  joined_at: string | null;
+}
+
+export interface AuditLogResponse {
+  log_id: string;
+  workspace_id: string | null;
+  actor_key_id: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  summary: string | null;
+  created_at: string;
+}
+
+export interface AuditLogListResponse {
+  items: AuditLogResponse[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export type SubscriptionPlan = "free" | "pro" | "business" | "enterprise";
+export type BillingSubscriptionStatus = "active" | "past_due" | "canceled" | "trialing";
+
+export interface BillingSubscriptionResponse {
+  subscription_id: string;
+  plan: SubscriptionPlan;
+  status: BillingSubscriptionStatus;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  features: string[];
+}
+
+export interface BillingPortalResponse {
+  portal_url: string | null;
+  message: string;
+}
+
+export interface SSOInitiateResponse {
+  redirect_url: string | null;
+  message: string;
+}
+
 export interface ModeCapabilityResponse {
   mode: UserFacingMode;
   label: string;

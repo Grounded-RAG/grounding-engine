@@ -11,6 +11,9 @@ from app.schemas.auth import (
     EmailAuthResponse,
     EmailSignInRequest,
     EmailSignUpRequest,
+    GoogleAuthRequest,
+    SSOInitiateRequest,
+    SSOInitiateResponse,
 )
 from app.services.auth import (
     EmailSignInServiceError,
@@ -98,6 +101,40 @@ async def email_sign_in(
         workspace_slug=workspace.slug,
         created_tenant=created_tenant,
         created_workspace=created_workspace,
+    )
+
+
+@router.post("/auth/google", response_model=EmailAuthResponse)
+async def google_sign_in(
+    google_request: GoogleAuthRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> EmailAuthResponse:
+    """Sign in with a Google ID token (stub — requires GOOGLE_CLIENT_ID env var)."""
+
+    settings = get_settings()
+    if not getattr(settings, "google_client_id", None):
+        raise HTTPException(
+            status_code=503,
+            detail="Google OAuth is not configured. Set GOOGLE_CLIENT_ID to enable.",
+        )
+    raise HTTPException(
+        status_code=501,
+        detail="Google OAuth verification is not yet implemented.",
+    )
+
+
+@router.post("/auth/sso/initiate", response_model=SSOInitiateResponse)
+async def sso_initiate(
+    sso_request: SSOInitiateRequest,
+) -> SSOInitiateResponse:
+    """Return the SSO/SAML redirect URL for an organization (stub)."""
+
+    return SSOInitiateResponse(
+        redirect_url=None,
+        message=(
+            f"SSO is not yet configured for '{sso_request.organization_slug}'. "
+            "Contact your administrator to enable SAML/SSO."
+        ),
     )
 
 

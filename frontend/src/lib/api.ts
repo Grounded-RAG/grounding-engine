@@ -3,7 +3,10 @@ import type {
   AgentResponse,
   ApiKeyCreateResponse,
   ApiKeyResponse,
+  AuditLogListResponse,
   AuthSmokeResponse,
+  BillingPortalResponse,
+  BillingSubscriptionResponse,
   CapabilitiesResponse,
   ConversationResponse,
   DashboardRecentJobResponse,
@@ -15,7 +18,10 @@ import type {
   EmailAuthResponse,
   MessageResponse,
   RunResponse,
+  SSOInitiateResponse,
+  TeamMemberResponse,
   UserFacingMode,
+  WorkspaceMemberRole,
   WorkspaceResponse,
 } from "@/lib/types";
 
@@ -280,4 +286,102 @@ export function revokeApiKey(apiKey: string, keyId: string) {
   return request<ApiKeyResponse>(`/v1/api-keys/${keyId}/revoke`, apiKey, {
     method: "POST",
   });
+}
+
+// Team Members
+export function listTeamMembers(apiKey: string, workspaceId: string) {
+  return request<TeamMemberResponse[]>(`/v1/workspaces/${workspaceId}/members`, apiKey);
+}
+
+export function inviteTeamMember(
+  apiKey: string,
+  workspaceId: string,
+  payload: { email: string; role: WorkspaceMemberRole },
+) {
+  return request<TeamMemberResponse>(`/v1/workspaces/${workspaceId}/members`, apiKey, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateTeamMember(
+  apiKey: string,
+  workspaceId: string,
+  memberId: string,
+  payload: { role: WorkspaceMemberRole },
+) {
+  return request<TeamMemberResponse>(
+    `/v1/workspaces/${workspaceId}/members/${memberId}`,
+    apiKey,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function removeTeamMember(
+  apiKey: string,
+  workspaceId: string,
+  memberId: string,
+) {
+  const response = await fetch(
+    `${API_BASE_URL}/v1/workspaces/${workspaceId}/members/${memberId}`,
+    {
+      method: "DELETE",
+      headers: buildHeaders(apiKey),
+    },
+  );
+  if (!response.ok) {
+    const data = response.headers.get("content-type")?.includes("application/json")
+      ? await response.json()
+      : null;
+    const detail =
+      data && "detail" in data ? String(data.detail) : response.statusText || "Request failed";
+    throw new ApiError(response.status, detail);
+  }
+}
+
+// Audit Logs
+export function listAuditLogs(
+  apiKey: string,
+  params?: { workspace_id?: string; page?: number; page_size?: number },
+) {
+  const q = new URLSearchParams();
+  if (params?.workspace_id) q.set("workspace_id", params.workspace_id);
+  if (params?.page) q.set("page", String(params.page));
+  if (params?.page_size) q.set("page_size", String(params.page_size));
+  const query = q.toString() ? `?${q.toString()}` : "";
+  return request<AuditLogListResponse>(`/v1/audit-logs${query}`, apiKey);
+}
+
+// Billing
+export function getBillingSubscription(apiKey: string) {
+  return request<BillingSubscriptionResponse>("/v1/billing/subscription", apiKey);
+}
+
+export function getBillingPortal(apiKey: string) {
+  return request<BillingPortalResponse>("/v1/billing/portal", apiKey, { method: "POST" });
+}
+
+// SSO
+export async function initiateSso(payload: { organization_slug: string }) {
+  const response = await fetch(`${API_BASE_URL}/v1/auth/sso/initiate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseResponse<SSOInitiateResponse>(response);
+}
+
+// Google OAuth
+export async function signInWithGoogle(id_token: string) {
+  const response = await fetch(`${API_BASE_URL}/v1/auth/google`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id_token }),
+  });
+  return parseResponse<EmailAuthResponse>(response);
 }

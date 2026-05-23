@@ -104,3 +104,28 @@ class IngestionJobStatus(str, PythonEnum):
     INDEXED = "indexed"
     FAILED = "failed"
     DEAD_LETTER = "dead_letter"
+
+
+class WorkspaceMemberRole(str, PythonEnum):
+    """Roles a workspace member may hold."""
+
+    ADMIN = "admin"
+    MEMBER = "member"
+    VIEWER = "viewer"
+
+
+class WorkspaceMemberStatus(str, PythonEnum):
+    """Lifecycle states for workspace membership."""
+
+    PENDING = "pending"
+    ACTIVE = "active"
+    REMOVED = "removed"
+
+
+class BillingSubscriptionStatus(str, PythonEnum):
+    """Billing subscription lifecycle states."""
+
+    ACTIVE = "active"
+    PAST_DUE = "past_due"
+    CANCELED = "canceled"
+    TRIALING = "trialing"
