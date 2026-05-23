@@ -50,9 +50,10 @@ Enterprise should show measurable uplift on hard queries.
 - richer trace metadata
 - `Thinking` mode path
 
-### Future Critical
+### Critical
 
-Critical is not live yet, but benchmarks should leave room for it.
+Critical is now live behind `Verified`, and benchmarks should measure its
+verification and recovery behavior directly.
 
 - verifier / critic loop
 - corrective retrieval

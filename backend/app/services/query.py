@@ -317,6 +317,7 @@ def _resolve_execution_routing(
     *,
     query_request: QueryRequest,
     selected_mode: UserFacingMode | None,
+    namespace_min_execution_tier: ExecutionTier = ExecutionTier.STANDARD,
     query_plan: QueryPlan | None = None,
 ) -> ExecutionRoutingDecision:
     """Resolve which execution tier is being requested and which is currently active."""
@@ -330,6 +331,12 @@ def _resolve_execution_routing(
     elif requested_from_mode is not None:
         requested_tier = requested_from_mode
         request_source = "selected_mode"
+    elif (
+        selected_mode in {None, UserFacingMode.AUTO}
+        and namespace_min_execution_tier is ExecutionTier.CRITICAL
+    ):
+        requested_tier = ExecutionTier.CRITICAL
+        request_source = "auto_router"
     elif (
         query_plan is not None
         and selected_mode in {None, UserFacingMode.AUTO}
@@ -365,7 +372,11 @@ def _resolve_execution_routing(
     elif requested_tier is ExecutionTier.CRITICAL:
         if settings.critical_enabled:
             effective_tier = ExecutionTier.CRITICAL
-            routing_reason = "critical_requested_enabled"
+            routing_reason = (
+                "critical_auto_required_tier"
+                if request_source == "auto_router"
+                else "critical_requested_enabled"
+            )
         else:
             effective_tier = ExecutionTier.STANDARD
             routing_reason = "critical_requested_fallback_standard"
@@ -880,6 +891,7 @@ async def execute_standard_query(
         routing_decision = _resolve_execution_routing(
             query_request=query_request,
             selected_mode=selected_mode,
+            namespace_min_execution_tier=namespace.min_execution_tier,
         )
     else:
         query_plan = build_query_plan(
@@ -894,6 +906,7 @@ async def execute_standard_query(
         routing_decision = _resolve_execution_routing(
             query_request=query_request,
             selected_mode=selected_mode,
+            namespace_min_execution_tier=namespace.min_execution_tier,
             query_plan=query_plan,
         )
         query_plan = refine_query_plan_for_execution_tier(

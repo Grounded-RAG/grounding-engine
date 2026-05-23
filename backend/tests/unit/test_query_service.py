@@ -1063,6 +1063,54 @@ async def test_execute_standard_query_falls_back_cleanly_for_thinking_mode_when_
 
 
 @pytest.mark.asyncio()
+async def test_execute_standard_query_auto_routes_namespace_floor_to_critical(monkeypatch) -> None:
+    """Auto mode should honor a namespace that requires the Critical tier."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Summarize the compliance policy")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.CRITICAL},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        assert kwargs["execution_tier"] is ExecutionTier.CRITICAL
+        return _retrieval_bundle(
+            tenant_context.tenant_id,
+            namespace_id,
+            debug={"execution_tier": "critical"},
+        )
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.AUTO,
+    )
+
+    trace = session.added[0]
+    routing = trace.verifier_result["execution_routing"]
+    assert trace.requested_tier is ExecutionTier.CRITICAL
+    assert trace.router_recommendation is ExecutionTier.CRITICAL
+    assert trace.effective_tier is ExecutionTier.CRITICAL
+    assert trace.routing_reason == "critical_auto_required_tier"
+    assert routing["request_source"] == "auto_router"
+    assert trace.verifier_result["retrieval_debug"]["execution_tier"] == "critical"
+
+
+@pytest.mark.asyncio()
 async def test_execute_standard_query_persists_critical_request_trace_metadata(monkeypatch) -> None:
     """Critical requests should persist explicit fallback verification metadata."""
 
