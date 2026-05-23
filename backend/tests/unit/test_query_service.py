@@ -10,7 +10,7 @@ import pytest
 
 from app.api.deps import TenantContext
 from app.core.query_analysis import QueryPlan, QueryProfile
-from app.models import ExecutionTier, UserFacingMode
+from app.models import ExecutionTier, FreshnessProfile, UserFacingMode
 from app.pipeline.contracts import EvidencePackage, FusedRetrievedChunk, RetrievedChunk
 from app.schemas.query import QueryRequest
 from app.services.generation import GenerationBackend
@@ -202,7 +202,10 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
     namespace = type(
         "NamespaceStub",
         (),
-        {"min_execution_tier": ExecutionTier.STANDARD},
+        {
+            "min_execution_tier": ExecutionTier.STANDARD,
+            "freshness_profile": FreshnessProfile.BALANCED,
+        },
     )()
     session = FakeAsyncSession(namespace=namespace)
 
@@ -1361,11 +1364,15 @@ async def test_execute_standard_query_degrades_critical_contradictions(monkeypat
 
     trace = session.added[0]
     assert result.response.verification_status == "degraded"
+    assert "conflicts on this point" in result.response.answer
     assert result.response.support_summary == "insufficient"
     assert result.response.confidence_score == 0.0
     assert trace.verifier_result["verification_reason"] == "CONTRADICTORY_EVIDENCE"
     assert trace.verifier_result["critical_verifier"]["decision"] == "degrade"
     assert trace.verifier_result["critical_verifier"]["contradiction_detected"] is True
+    assert trace.verifier_result["critical_verifier"]["source_conflict_detected"] is True
+    assert trace.verifier_result["critical_verifier"]["conflict_policy"]["resolution_mode"] == "surface_conflict"
+    assert trace.verifier_result["evidence_debug"]["critical_policy"]["conflict_resolution"]["freshness_profile"] == "balanced"
 
 
 @pytest.mark.asyncio()

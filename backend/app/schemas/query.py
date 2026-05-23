@@ -26,6 +26,7 @@ class QueryRequest(BaseModel):
     namespace_id: UUID
     query: str = Field(min_length=1)
     requested_tier: ExecutionTier | None = None
+    prefer_async: bool = False
 
 
 class GroundedAnswerResponse(BaseModel):

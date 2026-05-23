@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext
 from app.config import get_settings
+from app.core.database import get_session_factory
 from app.core.llm_client import GroundedGenerationError
 from app.core.query_analysis import (
     ConversationContext,
@@ -190,6 +191,7 @@ def _build_verifier_trace_result(
     evidence_debug: dict[str, object] | None,
     enterprise_trace_metadata_enabled: bool,
     enterprise_enabled: bool,
+    run_status: str = "completed",
 ) -> dict[str, object]:
     """Build persisted verification metadata for current and future Critical flows."""
 
@@ -201,6 +203,7 @@ def _build_verifier_trace_result(
         "verification_applied": routing_decision.requested_tier is ExecutionTier.CRITICAL,
         "verification_outcome": verification_outcome,
         "verification_reason": degraded_reasons[0] if degraded_reasons else None,
+        "run_status": run_status,
         "verification_mode": (
             "critical_requested_fallback_standard"
             if routing_decision.requested_tier is ExecutionTier.CRITICAL
@@ -465,6 +468,7 @@ async def _persist_query_trace(
     agent_id: uuid.UUID | None = None,
     conversation_id: uuid.UUID | None = None,
     selected_mode: UserFacingMode | None = None,
+    run_status: str = "completed",
 ) -> QueryTrace:
     """Persist one Standard query trace for later debugging and evaluation."""
 
@@ -500,6 +504,7 @@ async def _persist_query_trace(
             evidence_debug=evidence_debug,
             enterprise_trace_metadata_enabled=settings.enterprise_trace_metadata_enabled,
             enterprise_enabled=settings.enterprise_enabled,
+            run_status=run_status,
         ),
         final_answer_redacted=response.answer,
         citations=[citation.model_dump(mode="json") for citation in response.citations],
@@ -666,6 +671,64 @@ def _normalize_critical_response(*, response: GroundedAnswerResponse) -> Grounde
     )
 
 
+def _critical_conflict_policy(*, namespace: Namespace) -> dict[str, object]:
+    """Return the namespace-aware conflict handling policy for Critical."""
+
+    freshness_profile = getattr(namespace, "freshness_profile", FreshnessProfile.BALANCED)
+    return {
+        "freshness_profile": freshness_profile.value,
+        "resolution_mode": (
+            "prefer_fresher_evidence_when_available"
+            if freshness_profile is FreshnessProfile.AGGRESSIVE
+            else "surface_conflict"
+        ),
+    }
+
+
+def _apply_critical_conflict_disclosure(
+    *,
+    namespace: Namespace,
+    response: GroundedAnswerResponse,
+    evidence_package,
+    critical_verifier_metadata: dict[str, object],
+) -> tuple[GroundedAnswerResponse, dict[str, object]]:
+    """Surface contradictory evidence explicitly instead of leaving a misleading answer."""
+
+    if not critical_verifier_metadata.get("contradiction_detected"):
+        return response, critical_verifier_metadata
+
+    conflicting_chunk_ids: list[str] = []
+    for claim in critical_verifier_metadata.get("claims", []):
+        if not isinstance(claim, dict):
+            continue
+        for chunk_id in claim.get("contradiction_chunk_ids", []):
+            if isinstance(chunk_id, str) and chunk_id not in conflicting_chunk_ids:
+                conflicting_chunk_ids.append(chunk_id)
+
+    conflicting_citation_ids: list[str] = []
+    for item in evidence_package.items:
+        if item.chunk_id in conflicting_chunk_ids and item.citation_id not in conflicting_citation_ids:
+            conflicting_citation_ids.append(item.citation_id)
+
+    citation_summary = ", ".join(conflicting_citation_ids) if conflicting_citation_ids else "the selected evidence"
+    conflict_policy = _critical_conflict_policy(namespace=namespace)
+    disclosed_response = response.model_copy(
+        update={
+            "answer": (
+                "The selected evidence conflicts on this point, so I cannot verify a single grounded answer. "
+                f"Review {citation_summary}."
+            ),
+        }
+    )
+    return disclosed_response, {
+        **critical_verifier_metadata,
+        "source_conflict_detected": True,
+        "conflict_policy": conflict_policy,
+        "conflicting_chunk_ids": conflicting_chunk_ids,
+        "conflicting_citation_ids": conflicting_citation_ids,
+    }
+
+
 def _critical_policy_metadata(*, namespace: Namespace) -> dict[str, object]:
     """Build Critical policy metadata for external and internal recovery paths."""
 
@@ -683,6 +746,7 @@ def _critical_policy_metadata(*, namespace: Namespace) -> dict[str, object]:
             "attempted": internal_model_retrieval.attempted,
             "reason": internal_model_retrieval.reason,
         },
+        "conflict_resolution": _critical_conflict_policy(namespace=namespace),
     }
 
 
@@ -866,6 +930,158 @@ async def _update_query_trace_timings(
             "Failed to finalize query trace timings.",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         ) from exc
+
+
+def _async_queued_response() -> GroundedAnswerResponse:
+    """Return a placeholder response for one queued Verified request."""
+
+    return GroundedAnswerResponse(
+        answer="Verified request queued. Poll the run endpoint for the completed result.",
+        citations=[],
+        confidence_score=0.0,
+        confidence_label="low",
+        support_summary="insufficient",
+        verification_status="degraded",
+        degraded_reasons=["RUN_QUEUED"],
+        generator_provider="async-verified-run-v1",
+        provider_backend="async_verified_run_v1",
+        provider_model=None,
+        provider_fallback_used=False,
+        provider_fallback_from=None,
+    )
+
+
+def _copy_trace_result(*, target: QueryTrace, source: QueryTrace, run_status: str) -> None:
+    """Copy one completed trace result into an existing async run record."""
+
+    target.namespace_id = source.namespace_id
+    target.agent_id = source.agent_id
+    target.conversation_id = source.conversation_id
+    target.selected_mode = source.selected_mode
+    target.requested_tier = source.requested_tier
+    target.router_recommendation = source.router_recommendation
+    target.effective_tier = source.effective_tier
+    target.routing_reason = source.routing_reason
+    target.query_redacted = source.query_redacted
+    target.query_ciphertext = source.query_ciphertext
+    target.retrieved_chunk_ids = list(source.retrieved_chunk_ids)
+    target.selected_evidence_ids = list(source.selected_evidence_ids)
+    target.generator_provider = source.generator_provider
+    target.verifier_result = {
+        **source.verifier_result,
+        "run_status": run_status,
+        "async_execution": True,
+    }
+    target.final_answer_redacted = source.final_answer_redacted
+    target.citations = list(source.citations)
+    target.overall_confidence = source.overall_confidence
+    target.degraded_reasons = list(source.degraded_reasons)
+    target.stage_latencies_ms = dict(source.stage_latencies_ms)
+    target.total_latency_ms = source.total_latency_ms
+    target.token_usage = dict(source.token_usage)
+
+
+async def queue_async_verified_query(
+    *,
+    session: AsyncSession,
+    tenant_context: TenantContext,
+    query_request: QueryRequest,
+) -> QueryExecutionResult:
+    """Persist one queued Verified run to be completed asynchronously."""
+
+    queued_response = _async_queued_response()
+    retrieval_bundle = RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
+    routing_decision = ExecutionRoutingDecision(
+        requested_tier=ExecutionTier.CRITICAL,
+        router_recommendation=ExecutionTier.CRITICAL,
+        effective_tier=ExecutionTier.CRITICAL,
+        routing_reason="critical_async_queued",
+        request_source="query_request",
+    )
+    trace = await _persist_query_trace(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        response=queued_response,
+        retrieval_bundle=retrieval_bundle,
+        stage_latencies_ms={
+            "retrieval_ms": 0,
+            "evidence_packaging_ms": 0,
+            "answering_ms": 0,
+        },
+        total_latency_ms=0,
+        generator_provider=queued_response.generator_provider,
+        routing_decision=routing_decision,
+        run_status="queued",
+    )
+    return QueryExecutionResult(response=queued_response, trace_id=trace.trace_id)
+
+
+async def process_async_verified_query(
+    *,
+    trace_id: uuid.UUID,
+    tenant_context: TenantContext,
+    query_request: QueryRequest,
+) -> None:
+    """Complete one queued Verified run in the background."""
+
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        trace = await session.get(QueryTrace, trace_id)
+        if trace is None:
+            return
+        trace.verifier_result = {
+            **trace.verifier_result,
+            "run_status": "running",
+            "async_execution": True,
+        }
+        await session.commit()
+
+        try:
+            result = await execute_standard_query(
+                session=session,
+                tenant_context=tenant_context,
+                query_request=query_request.model_copy(update={"prefer_async": False}),
+            )
+        except QueryServiceError as exc:
+            trace = await session.get(QueryTrace, trace_id)
+            if trace is None:
+                return
+            trace.verifier_result = {
+                **trace.verifier_result,
+                "run_status": "failed",
+                "async_execution": True,
+                "verification_reason": "ASYNC_EXECUTION_FAILED",
+                "error_detail": exc.detail,
+            }
+            trace.final_answer_redacted = "Verified request failed before a final answer was produced."
+            trace.generator_provider = "async-verified-run-v1"
+            trace.overall_confidence = 0.0
+            trace.degraded_reasons = ["ASYNC_EXECUTION_FAILED"]
+            trace.selected_evidence_ids = []
+            trace.retrieved_chunk_ids = []
+            trace.citations = []
+            trace.total_latency_ms = 0
+            trace.stage_latencies_ms = {
+                "retrieval_ms": 0,
+                "evidence_packaging_ms": 0,
+                "answering_ms": 0,
+            }
+            trace.token_usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            }
+            await session.commit()
+            return
+
+        completed_trace = await session.get(QueryTrace, result.trace_id)
+        queued_trace = await session.get(QueryTrace, trace_id)
+        if completed_trace is None or queued_trace is None:
+            return
+        _copy_trace_result(target=queued_trace, source=completed_trace, run_status="completed")
+        await session.delete(completed_trace)
+        await session.commit()
 
 
 async def execute_standard_query(
@@ -1067,6 +1283,12 @@ async def execute_standard_query(
                         critical_verifier_metadata=critical_verifier_metadata,
                         retrieval_bundle=retrieval_bundle,
                     )
+                response, critical_verifier_metadata = _apply_critical_conflict_disclosure(
+                    namespace=namespace,
+                    response=response,
+                    evidence_package=evidence_package,
+                    critical_verifier_metadata=critical_verifier_metadata,
+                )
                 response = _normalize_critical_response(response=response)
             else:
                 critical_verifier_metadata = None
