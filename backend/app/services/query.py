@@ -46,6 +46,12 @@ from app.services.response_shaping import (
     shape_grounded_response,
 )
 from app.services.retrieval import RetrievalBundle, RetrievalError, retrieve_hybrid_candidates
+from app.core.flags import (
+    is_freshness_conflict_resolution_enabled,
+    is_multi_attempt_crag_enabled,
+    max_crag_attempts,
+    min_evidence_quality_improvement,
+)
 from app.services.verification import verify_critical_response
 
 
@@ -671,17 +677,33 @@ def _normalize_critical_response(*, response: GroundedAnswerResponse) -> Grounde
     )
 
 
+_CHUNK_ROLE_AUTHORITY: dict[str, int] = {
+    "section_header": 5,
+    "section_body": 4,
+    "document_header": 3,
+    "body": 2,
+    "section_list": 1,
+    "list": 0,
+}
+
+
+def _chunk_authority(chunk_role: str, score: float) -> tuple[int, float]:
+    """Return a sortable (authority_rank, score) pair for one evidence item."""
+    return (_CHUNK_ROLE_AUTHORITY.get(chunk_role, 2), score)
+
+
 def _critical_conflict_policy(*, namespace: Namespace) -> dict[str, object]:
     """Return the namespace-aware conflict handling policy for Critical."""
-
     freshness_profile = getattr(namespace, "freshness_profile", FreshnessProfile.BALANCED)
+    resolution_mode = (
+        "prefer_fresher_evidence_when_available"
+        if freshness_profile is FreshnessProfile.AGGRESSIVE
+        else "surface_conflict"
+    )
     return {
         "freshness_profile": freshness_profile.value,
-        "resolution_mode": (
-            "prefer_fresher_evidence_when_available"
-            if freshness_profile is FreshnessProfile.AGGRESSIVE
-            else "surface_conflict"
-        ),
+        "resolution_mode": resolution_mode,
+        "source_authority_ranking_enabled": True,
     }
 
 
@@ -692,8 +714,16 @@ def _apply_critical_conflict_disclosure(
     evidence_package,
     critical_verifier_metadata: dict[str, object],
 ) -> tuple[GroundedAnswerResponse, dict[str, object]]:
-    """Surface contradictory evidence explicitly instead of leaving a misleading answer."""
+    """Resolve or surface contradictory evidence for Critical responses.
 
+    When resolution_mode is 'prefer_fresher_evidence_when_available' and
+    is_freshness_conflict_resolution_enabled() is True, this function actively
+    selects the highest-authority (by chunk_role) and highest-score conflicting
+    chunk as the authoritative source and rebuilds the answer from its content,
+    rather than simply surfacing the conflict.
+
+    In all other cases it surfaces the conflict explicitly.
+    """
     if not critical_verifier_metadata.get("contradiction_detected"):
         return response, critical_verifier_metadata
 
@@ -705,13 +735,51 @@ def _apply_critical_conflict_disclosure(
             if isinstance(chunk_id, str) and chunk_id not in conflicting_chunk_ids:
                 conflicting_chunk_ids.append(chunk_id)
 
-    conflicting_citation_ids: list[str] = []
-    for item in evidence_package.items:
-        if item.chunk_id in conflicting_chunk_ids and item.citation_id not in conflicting_citation_ids:
-            conflicting_citation_ids.append(item.citation_id)
+    conflicting_items = [
+        item for item in evidence_package.items if item.chunk_id in conflicting_chunk_ids
+    ]
+    conflicting_citation_ids = [item.citation_id for item in conflicting_items]
 
-    citation_summary = ", ".join(conflicting_citation_ids) if conflicting_citation_ids else "the selected evidence"
     conflict_policy = _critical_conflict_policy(namespace=namespace)
+    resolution_mode = conflict_policy.get("resolution_mode", "surface_conflict")
+
+    # Active resolution: pick the highest-authority conflicting chunk and use it.
+    if (
+        resolution_mode == "prefer_fresher_evidence_when_available"
+        and is_freshness_conflict_resolution_enabled()
+        and conflicting_items
+    ):
+        winning_item = max(
+            conflicting_items,
+            key=lambda item: _chunk_authority(item.chunk_role, item.score),
+        )
+        resolved_response = response.model_copy(
+            update={
+                "answer": (
+                    f"Evidence conflict detected and resolved using the highest-authority source "
+                    f"({winning_item.citation_id}, role={winning_item.chunk_role}). "
+                    f"Based on that source: {winning_item.text[:400].strip()}"
+                ),
+                "verification_status": "degraded",
+                "degraded_reasons": ["CONFLICT_RESOLVED_BY_SOURCE_AUTHORITY"],
+            }
+        )
+        return resolved_response, {
+            **critical_verifier_metadata,
+            "source_conflict_detected": True,
+            "conflict_policy": conflict_policy,
+            "conflicting_chunk_ids": conflicting_chunk_ids,
+            "conflicting_citation_ids": conflicting_citation_ids,
+            "conflict_resolution_applied": "source_authority",
+            "winning_chunk_id": winning_item.chunk_id,
+            "winning_citation_id": winning_item.citation_id,
+            "winning_chunk_role": winning_item.chunk_role,
+        }
+
+    # Default: surface the conflict explicitly.
+    citation_summary = (
+        ", ".join(conflicting_citation_ids) if conflicting_citation_ids else "the selected evidence"
+    )
     disclosed_response = response.model_copy(
         update={
             "answer": (
@@ -726,6 +794,7 @@ def _apply_critical_conflict_disclosure(
         "conflict_policy": conflict_policy,
         "conflicting_chunk_ids": conflicting_chunk_ids,
         "conflicting_citation_ids": conflicting_citation_ids,
+        "conflict_resolution_applied": "surface_conflict",
     }
 
 
@@ -750,7 +819,25 @@ def _critical_policy_metadata(*, namespace: Namespace) -> dict[str, object]:
     }
 
 
-async def _run_critical_corrective_retry(
+def _evidence_quality_score(verifier_metadata: dict[str, object]) -> float:
+    """Compute average claim support score from verifier metadata.
+
+    Returns a value in [0, 1].  Used as the quality gate for corrective retrieval:
+    a corrective attempt is only accepted when its quality score exceeds the
+    first-pass score by at least min_evidence_quality_improvement().
+    """
+    claims = verifier_metadata.get("claims", [])
+    if not claims or not isinstance(claims, list):
+        return 0.0
+    scores = [
+        float(c.get("support_score", 0.0))
+        for c in claims
+        if isinstance(c, dict)
+    ]
+    return sum(scores) / len(scores) if scores else 0.0
+
+
+async def _run_one_corrective_attempt(
     *,
     session: AsyncSession,
     tenant_context: TenantContext,
@@ -758,9 +845,9 @@ async def _run_critical_corrective_retry(
     query_request: QueryRequest,
     query_plan: QueryPlan,
     retry_query_text: str,
+    attempt_number: int,
 ) -> tuple[RetrievalBundle, object, GroundedAnswerResponse, str, dict[str, object]] | None:
-    """Run one bounded corrective retrieval attempt for Critical responses."""
-
+    """Run one corrective retrieval + re-verification pass."""
     retry_plan = replace(
         query_plan,
         resolved_query_text=f"{query_plan.resolved_query_text} {retry_query_text}".strip(),
@@ -789,56 +876,146 @@ async def _run_critical_corrective_retry(
         query_text=query_request.query,
         evidence_package=evidence_package,
     )
-    response = shape_grounded_response(
-        draft=draft,
-        evidence_package=evidence_package,
-    )
-    response = response.model_copy(
-        update={
-            "verification_status": "passed",
-            "degraded_reasons": [],
-        }
-    )
-    response, critical_verifier_metadata = _apply_critical_verification(
+    response = shape_grounded_response(draft=draft, evidence_package=evidence_package)
+    response = response.model_copy(update={"verification_status": "passed", "degraded_reasons": []})
+    response, verifier_metadata = _apply_critical_verification(
         response=response,
         evidence_package=evidence_package,
     )
-    if critical_verifier_metadata.get("decision") == "accept":
+    if verifier_metadata.get("decision") == "accept":
         response = response.model_copy(
-            update={
-                "verification_status": "passed",
-                "degraded_reasons": [],
-                "support_summary": "grounded",
-            }
+            update={"verification_status": "passed", "degraded_reasons": [], "support_summary": "grounded"}
         )
-    critical_verifier_metadata = {
-        **critical_verifier_metadata,
+    verifier_metadata = {
+        **verifier_metadata,
         "bounded_correction_attempted": True,
         "corrective_attempt": {
-            "attempt_number": 1,
+            "attempt_number": attempt_number,
             "retry_query_text": retry_query_text,
             "retrieval_query_count": len(retry_plan.retrieval_queries),
             "selected_evidence_ids": list(evidence_package.selected_evidence_ids),
-            "resulting_decision": critical_verifier_metadata.get("decision"),
-            "resulting_reason": critical_verifier_metadata.get("reason"),
+            "resulting_decision": verifier_metadata.get("decision"),
+            "resulting_reason": verifier_metadata.get("reason"),
         },
     }
-    return (
-        retrieval_bundle,
-        evidence_package,
-        response,
-        draft.generator_provider,
-        critical_verifier_metadata,
+    return retrieval_bundle, evidence_package, response, draft.generator_provider, verifier_metadata
+
+
+async def _run_critical_corrective_loop(
+    *,
+    session: AsyncSession,
+    tenant_context: TenantContext,
+    namespace: Namespace,
+    query_request: QueryRequest,
+    query_plan: QueryPlan,
+    retry_query_text: str,
+    first_pass_verifier_metadata: dict[str, object],
+) -> tuple[RetrievalBundle, object, GroundedAnswerResponse, str, dict[str, object]] | None:
+    """Run up to max_crag_attempts() corrective retrieval passes with a quality gate.
+
+    A corrective pass is only accepted when:
+    1. It returns at least one evidence item.
+    2. The average claim support score improves by at least
+       min_evidence_quality_improvement() over the first-pass score.
+    3. Or the verifier decision improves to 'accept'.
+
+    All attempts are recorded in trace metadata regardless of outcome.
+    """
+    multi_attempt = is_multi_attempt_crag_enabled()
+    max_attempts = max_crag_attempts() if multi_attempt else 1
+    quality_threshold = min_evidence_quality_improvement()
+    first_pass_quality = _evidence_quality_score(first_pass_verifier_metadata)
+
+    all_attempts: list[dict[str, object]] = []
+    current_retry_text = retry_query_text
+
+    for attempt_number in range(1, max_attempts + 1):
+        result = await _run_one_corrective_attempt(
+            session=session,
+            tenant_context=tenant_context,
+            namespace=namespace,
+            query_request=query_request,
+            query_plan=query_plan,
+            retry_query_text=current_retry_text,
+            attempt_number=attempt_number,
+        )
+        if result is None:
+            all_attempts.append({
+                "attempt_number": attempt_number,
+                "retry_query_text": current_retry_text,
+                "outcome": "no_evidence_returned",
+            })
+            break
+
+        retrieval_bundle, evidence_package, response, generator_provider, verifier_metadata = result
+        attempt_quality = _evidence_quality_score(verifier_metadata)
+        decision = verifier_metadata.get("decision")
+
+        attempt_record = {
+            "attempt_number": attempt_number,
+            "retry_query_text": current_retry_text,
+            "quality_score": attempt_quality,
+            "first_pass_quality": first_pass_quality,
+            "quality_improvement": attempt_quality - first_pass_quality,
+            "resulting_decision": decision,
+            "resulting_reason": verifier_metadata.get("reason"),
+            "selected_evidence_ids": list(evidence_package.selected_evidence_ids),
+        }
+        all_attempts.append(attempt_record)
+
+        # Accept if decision improved to 'accept' or quality improved enough.
+        quality_improved = (attempt_quality - first_pass_quality) >= quality_threshold
+        if decision == "accept" or quality_improved:
+            final_metadata = {
+                **verifier_metadata,
+                "bounded_correction_attempted": True,
+                "corrective_attempts": all_attempts,
+                "corrective_attempt": verifier_metadata.get("corrective_attempt"),
+            }
+            return retrieval_bundle, evidence_package, response, generator_provider, final_metadata
+
+        # Prepare next attempt: focus on remaining missing terms from this attempt.
+        next_retry_text = verifier_metadata.get("retry_query_text")
+        if isinstance(next_retry_text, str) and next_retry_text.strip():
+            current_retry_text = next_retry_text.strip()
+        else:
+            break
+
+    # No attempt met the quality gate.
+    return None
+
+
+# Keep old name as a thin shim so existing call sites keep working.
+async def _run_critical_corrective_retry(
+    *,
+    session: AsyncSession,
+    tenant_context: TenantContext,
+    namespace: Namespace,
+    query_request: QueryRequest,
+    query_plan: QueryPlan,
+    retry_query_text: str,
+    first_pass_verifier_metadata: dict[str, object] | None = None,
+) -> tuple[RetrievalBundle, object, GroundedAnswerResponse, str, dict[str, object]] | None:
+    """Delegate to the multi-attempt corrective loop."""
+    return await _run_critical_corrective_loop(
+        session=session,
+        tenant_context=tenant_context,
+        namespace=namespace,
+        query_request=query_request,
+        query_plan=query_plan,
+        retry_query_text=retry_query_text,
+        first_pass_verifier_metadata=first_pass_verifier_metadata or {},
     )
 
 
-def _apply_critical_recovery_paths(
+async def _apply_critical_recovery_paths(
     *,
     namespace: Namespace,
     response: GroundedAnswerResponse,
     evidence_package,
     critical_verifier_metadata: dict[str, object],
     retrieval_bundle: RetrievalBundle,
+    query_text: str = "",
 ) -> tuple[GroundedAnswerResponse, object, dict[str, object], dict[str, object]]:
     """Apply bounded internal and external recovery paths for Critical mode."""
 
@@ -891,9 +1068,10 @@ def _apply_critical_recovery_paths(
     }
 
     if critical_verifier_metadata.get("decision") in {"refuse", "degrade"}:
-        external_result = run_allowlisted_external_fallback(
+        external_result = await run_allowlisted_external_fallback(
             namespace=namespace,
             degraded_response=updated_response,
+            query_text=query_text,
         )
         recovery_metadata["external_fallback"] = {
             "attempted": external_result.attempted,
@@ -1249,7 +1427,9 @@ async def execute_standard_query(
                 retry_query_text = critical_verifier_metadata.get("retry_query_text")
                 should_retry = (
                     critical_verifier_metadata.get("decision") in {"refuse", "degrade"}
-                    and critical_verifier_metadata.get("reason") in {"UNSUPPORTED_CLAIMS", "PARTIAL_SUPPORT"}
+                    and critical_verifier_metadata.get("reason") in {
+                        "UNSUPPORTED_CLAIMS", "PARTIAL_SUPPORT", "CONTRADICTORY_EVIDENCE"
+                    }
                     and isinstance(retry_query_text, str)
                     and retry_query_text.strip()
                 )
@@ -1261,6 +1441,7 @@ async def execute_standard_query(
                         query_request=query_request,
                         query_plan=query_plan,
                         retry_query_text=retry_query_text.strip(),
+                        first_pass_verifier_metadata=critical_verifier_metadata,
                     )
                     if corrective_result is not None:
                         (
@@ -1274,14 +1455,16 @@ async def execute_standard_query(
                         critical_verifier_metadata = {
                             **critical_verifier_metadata,
                             "bounded_correction_attempted": True,
+                            "corrective_attempts_exhausted": True,
                         }
                 if response.verification_status == "degraded":
-                    response, evidence_package, critical_verifier_metadata, recovery_metadata = _apply_critical_recovery_paths(
+                    response, evidence_package, critical_verifier_metadata, recovery_metadata = await _apply_critical_recovery_paths(
                         namespace=namespace,
                         response=response,
                         evidence_package=evidence_package,
                         critical_verifier_metadata=critical_verifier_metadata,
                         retrieval_bundle=retrieval_bundle,
+                        query_text=query_request.query,
                     )
                 response, critical_verifier_metadata = _apply_critical_conflict_disclosure(
                     namespace=namespace,
