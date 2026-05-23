@@ -131,6 +131,7 @@ async def generate_openai_compatible_draft(
     *,
     query_text: str,
     evidence_package: EvidencePackage,
+    agent_instructions: str = "",
 ) -> GroundedAnswerDraft:
     """Generate a grounded draft using an OpenAI-compatible chat-completions API."""
 
@@ -138,11 +139,15 @@ async def generate_openai_compatible_draft(
     if not settings.openai_api_key:
         raise OpenAICompatibleGenerationError("OPENAI_API_KEY is not configured.")
 
+    system_content = _build_system_prompt()
+    if agent_instructions.strip():
+        system_content = f"{system_content}\n\nAgent instructions: {agent_instructions.strip()}"
+
     request_payload = {
         "model": settings.openai_model,
         "response_format": {"type": "json_object"},
         "messages": [
-            {"role": "system", "content": _build_system_prompt()},
+            {"role": "system", "content": system_content},
             {
                 "role": "user",
                 "content": _build_user_prompt(

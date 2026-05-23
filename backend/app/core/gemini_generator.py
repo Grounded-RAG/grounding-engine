@@ -491,6 +491,7 @@ async def generate_gemini_draft(
     *,
     query_text: str,
     evidence_package: EvidencePackage,
+    agent_instructions: str = "",
 ) -> GroundedAnswerDraft:
     """Generate a grounded draft using the Gemini API."""
 
@@ -520,7 +521,7 @@ async def generate_gemini_draft(
     base_url = str(settings.gemini_base_url).rstrip("/")
     url = f"{base_url}/{encoded_model}:generateContent?key={urllib.parse.quote(settings.gemini_api_key, safe='')}"
 
-    request_payload = {
+    request_payload: dict[str, object] = {
         "contents": [
             {
                 "parts": [
@@ -539,6 +540,10 @@ async def generate_gemini_draft(
             "responseSchema": _build_schema(),
         },
     }
+    if agent_instructions.strip():
+        request_payload["systemInstruction"] = {
+            "parts": [{"text": agent_instructions.strip()}]
+        }
 
     request = urllib.request.Request(
         url=url,

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext, get_tenant_context
 from app.core.database import get_db_session
+from app.core.rate_limit import query_rate_limit
 from app.models import ExecutionTier
 from app.schemas.query import GroundedAnswerResponse, QueryRequest
 from app.services.query import (
@@ -27,6 +28,7 @@ async def query_documents(
     response: Response,
     tenant_context: TenantContext = Depends(get_tenant_context),
     session: AsyncSession = Depends(get_db_session),
+    _rate_limit: None = Depends(query_rate_limit),
 ) -> GroundedAnswerResponse:
     """Run the Phase 1 Standard query path for one tenant namespace."""
 

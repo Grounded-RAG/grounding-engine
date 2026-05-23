@@ -329,7 +329,7 @@ async def test_execute_standard_query_uses_raw_user_question_for_generation(monk
             ],
         )
 
-    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
         del evidence_package
         captured["query_text"] = query_text
         return type(
@@ -1132,7 +1132,7 @@ async def test_execute_standard_query_persists_critical_request_trace_metadata(m
         assert kwargs["execution_tier"] is ExecutionTier.STANDARD
         return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
 
-    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
         del query_text, evidence_package
         return type(
             "GroundedDraftStub",
@@ -1199,7 +1199,7 @@ async def test_execute_standard_query_runs_critical_verifier_when_enabled(monkey
         assert kwargs["execution_tier"] is ExecutionTier.CRITICAL
         return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
 
-    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
         del query_text, evidence_package
         return type(
             "GroundedDraftStub",
@@ -1265,7 +1265,7 @@ async def test_execute_standard_query_degrades_partial_critical_claims(monkeypat
         assert kwargs["execution_tier"] is ExecutionTier.CRITICAL
         return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
 
-    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
         del query_text, evidence_package
         return type(
             "GroundedDraftStub",
@@ -1328,7 +1328,7 @@ async def test_execute_standard_query_degrades_critical_contradictions(monkeypat
         assert kwargs["execution_tier"] is ExecutionTier.CRITICAL
         return _conflicting_retrieval_bundle(tenant_context.tenant_id, namespace_id)
 
-    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
         del query_text, evidence_package
         return type(
             "GroundedDraftStub",
@@ -1417,7 +1417,7 @@ async def test_execute_standard_query_retries_critical_support_once(monkeypatch)
             debug=None,
         )
 
-    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
         del query_text
         text = evidence_package.items[0].text
         if "offline exports" in text:
@@ -1604,7 +1604,7 @@ async def test_execute_standard_query_records_internal_retrieval_recovery_when_d
             debug=None,
         )
 
-    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
         del query_text, evidence_package
         return type(
             "GroundedDraftStub",

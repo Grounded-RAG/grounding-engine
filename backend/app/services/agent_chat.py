@@ -145,6 +145,7 @@ async def execute_agent_chat_turn(
             agent_id=agent.agent_id,
             conversation_id=conversation.conversation_id,
             selected_mode=resolved_mode,
+            agent_instructions=agent.system_instructions or "",
         )
         assistant_message = await create_message(
             session=session,

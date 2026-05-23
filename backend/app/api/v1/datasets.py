@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import TenantContext, get_tenant_context
 from app.config import get_settings
 from app.core.database import get_db_session
+from app.core.rate_limit import default_rate_limit, ingest_rate_limit
 from app.schemas.datasets import (
     DatasetCreateRequest,
     DatasetDocumentResponse,
@@ -71,6 +72,7 @@ async def create_dataset_route(
     dataset_request: DatasetCreateRequest,
     tenant_context: TenantContext = Depends(get_tenant_context),
     session: AsyncSession = Depends(get_db_session),
+    _rate_limit: None = Depends(default_rate_limit),
 ) -> DatasetResponse:
     """Create one dataset for the authenticated tenant."""
 
@@ -238,6 +240,7 @@ async def upload_dataset_document_route(
     file: UploadFile = File(...),
     tenant_context: TenantContext = Depends(get_tenant_context),
     session: AsyncSession = Depends(get_db_session),
+    _rate_limit: None = Depends(ingest_rate_limit),
 ) -> DatasetUploadResponse:
     """Upload one source file into a dataset and start ingestion."""
 

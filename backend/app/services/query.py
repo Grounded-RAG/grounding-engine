@@ -849,6 +849,7 @@ async def _run_one_corrective_attempt(
     query_plan: QueryPlan,
     retry_query_text: str,
     attempt_number: int,
+    agent_instructions: str = "",
 ) -> tuple[RetrievalBundle, object, GroundedAnswerResponse, str, dict[str, object]] | None:
     """Run one corrective retrieval + re-verification pass."""
     retry_plan = replace(
@@ -878,6 +879,7 @@ async def _run_one_corrective_attempt(
     draft = await generate_answer_from_evidence(
         query_text=query_request.query,
         evidence_package=evidence_package,
+        agent_instructions=agent_instructions,
     )
     response = shape_grounded_response(draft=draft, evidence_package=evidence_package)
     response = response.model_copy(update={"verification_status": "passed", "degraded_reasons": []})
@@ -913,6 +915,7 @@ async def _run_critical_corrective_loop(
     query_plan: QueryPlan,
     retry_query_text: str,
     first_pass_verifier_metadata: dict[str, object],
+    agent_instructions: str = "",
 ) -> tuple[RetrievalBundle, object, GroundedAnswerResponse, str, dict[str, object]] | None:
     """Run up to max_crag_attempts() corrective retrieval passes with a quality gate.
 
@@ -941,6 +944,7 @@ async def _run_critical_corrective_loop(
             query_plan=query_plan,
             retry_query_text=current_retry_text,
             attempt_number=attempt_number,
+            agent_instructions=agent_instructions,
         )
         if result is None:
             all_attempts.append({
@@ -998,6 +1002,7 @@ async def _run_critical_corrective_retry(
     query_plan: QueryPlan,
     retry_query_text: str,
     first_pass_verifier_metadata: dict[str, object] | None = None,
+    agent_instructions: str = "",
 ) -> tuple[RetrievalBundle, object, GroundedAnswerResponse, str, dict[str, object]] | None:
     """Delegate to the multi-attempt corrective loop."""
     return await _run_critical_corrective_loop(
@@ -1008,6 +1013,7 @@ async def _run_critical_corrective_retry(
         query_plan=query_plan,
         retry_query_text=retry_query_text,
         first_pass_verifier_metadata=first_pass_verifier_metadata or {},
+        agent_instructions=agent_instructions,
     )
 
 
@@ -1273,6 +1279,7 @@ async def execute_standard_query(
     agent_id: uuid.UUID | None = None,
     conversation_id: uuid.UUID | None = None,
     selected_mode: UserFacingMode | None = None,
+    agent_instructions: str = "",
 ) -> QueryExecutionResult:
     """Run the Standard query path and persist a trace for the result."""
 
@@ -1417,6 +1424,7 @@ async def execute_standard_query(
             draft = await generate_answer_from_evidence(
                 query_text=query_request.query,
                 evidence_package=evidence_package,
+                agent_instructions=agent_instructions,
             )
             draft_token_usage = draft.token_usage
             response = shape_grounded_response(
@@ -1447,6 +1455,7 @@ async def execute_standard_query(
                         query_plan=query_plan,
                         retry_query_text=retry_query_text.strip(),
                         first_pass_verifier_metadata=critical_verifier_metadata,
+                        agent_instructions=agent_instructions,
                     )
                     if corrective_result is not None:
                         (
