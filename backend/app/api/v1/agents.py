@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext, get_tenant_context
-from app.core.database import get_db_session
+from app.core.database import get_db_session, get_session_factory
 from app.models.enums import WorkspaceMemberRole, WorkspaceMemberStatus
 from app.models.workspace_member import WorkspaceMember
 from app.schemas.agents import (
@@ -20,7 +23,7 @@ from app.schemas.agents import (
     AgentResponse,
     AgentUpdateRequest,
 )
-from app.services.agent_chat import AgentChatServiceError, execute_agent_chat_turn
+from app.services.agent_chat import AgentChatServiceError, execute_agent_chat_turn, execute_agent_chat_turn_streaming
 from app.services.audit_logs import write_audit_log
 from app.services.agents import (
     AgentServiceError,
@@ -264,3 +267,59 @@ async def chat_with_agent_route(
     response.headers["X-Run-Id"] = str(chat_response.run_id)
     response.headers["X-Trace-Id"] = str(chat_response.run_id)
     return chat_response
+
+
+@router.post("/agents/{agent_id}/chat/stream")
+async def stream_agent_chat_route(
+    agent_id: UUID,
+    chat_request: AgentChatRequest,
+    tenant_context: TenantContext = Depends(get_tenant_context),
+) -> StreamingResponse:
+    """Stream one grounded chat turn as SSE, emitting step-level progress events."""
+
+    queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+    async def on_progress(event: dict) -> None:
+        await queue.put(event)
+
+    async def run_pipeline() -> None:
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            try:
+                chat_response = await execute_agent_chat_turn_streaming(
+                    session=session,
+                    tenant_context=tenant_context,
+                    agent_id=agent_id,
+                    chat_request=chat_request,
+                    on_progress=on_progress,
+                )
+                await queue.put({
+                    "type": "answer",
+                    "data": chat_response.model_dump(mode="json"),
+                })
+            except AgentChatServiceError as exc:
+                await queue.put({"type": "error", "detail": exc.detail, "status_code": exc.status_code})
+            except Exception as exc:  # noqa: BLE001
+                await queue.put({"type": "error", "detail": str(exc), "status_code": 500})
+            finally:
+                await queue.put(None)
+
+    asyncio.create_task(run_pipeline())
+
+    async def generate():
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield f"data: {json.dumps(event)}\n\n"
+        yield "data: {\"type\": \"done\"}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

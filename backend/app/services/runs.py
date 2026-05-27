@@ -92,6 +92,7 @@ def _build_run_response(trace: QueryTrace) -> RunResponse:
         provider_fallback_from=provider_info["provider_fallback_from"],
         retrieved_chunk_ids=list(trace.retrieved_chunk_ids),
         selected_evidence_ids=list(trace.selected_evidence_ids),
+        stage_latencies_ms=dict(trace.stage_latencies_ms or {}),
         total_latency_ms=trace.total_latency_ms,
         created_at=trace.created_at,
         selected_mode=_selected_mode_for_trace(trace),

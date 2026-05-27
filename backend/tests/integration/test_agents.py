@@ -329,7 +329,7 @@ def test_agent_create_allows_thinking_mode(
     assert response.status_code == 201
     payload = response.json()
     assert payload["default_mode"] == "thinking"
-    assert payload["allowed_modes"] == ["auto", "instant", "thinking"]
+    assert payload["allowed_modes"] == ["auto", "instant", "thinking", "verified"]
 
 
 def test_agent_create_defaults_include_thinking_when_enterprise_is_live(
@@ -350,7 +350,7 @@ def test_agent_create_defaults_include_thinking_when_enterprise_is_live(
     assert response.status_code == 201
     payload = response.json()
     assert payload["default_mode"] == "auto"
-    assert payload["allowed_modes"] == ["auto", "instant", "thinking"]
+    assert payload["allowed_modes"] == ["auto", "instant", "thinking", "verified"]
 
 
 def test_agent_attach_dataset_requires_same_workspace(

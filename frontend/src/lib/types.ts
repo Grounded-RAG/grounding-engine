@@ -173,9 +173,34 @@ export interface RunResponse {
   provider_fallback_from: string | null;
   retrieved_chunk_ids: string[];
   selected_evidence_ids: string[];
+  stage_latencies_ms: Record<string, number>;
   total_latency_ms: number;
   created_at: string;
 }
+
+export type WorkflowStepId =
+  | "init"
+  | "conversation_history"
+  | "check_retrieval"
+  | "research"
+  | "generate";
+
+export type WorkflowStepStatus = "idle" | "running" | "completed";
+
+export interface WorkflowStep {
+  step: WorkflowStepId;
+  label: string;
+  status: WorkflowStepStatus;
+  durationMs?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export type ChatStreamEvent =
+  | { type: "step_started"; step: WorkflowStepId; label: string }
+  | { type: "step_completed"; step: WorkflowStepId; label: string; duration_ms: number; evidence_count?: number; message_count?: number }
+  | { type: "answer"; data: AgentChatResponse }
+  | { type: "error"; detail: string; status_code: number }
+  | { type: "done" };
 
 export interface DashboardSummaryResponse {
   dataset_count: number;

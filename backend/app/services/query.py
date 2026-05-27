@@ -7,6 +7,7 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from dataclasses import replace
 
@@ -1271,6 +1272,14 @@ async def process_async_verified_query(
         await session.commit()
 
 
+ProgressCallback = Callable[[dict], Awaitable[None]]
+
+
+async def _emit(on_progress: ProgressCallback | None, event: dict) -> None:
+    if on_progress is not None:
+        await on_progress(event)
+
+
 async def execute_standard_query(
     *,
     session: AsyncSession,
@@ -1280,6 +1289,7 @@ async def execute_standard_query(
     conversation_id: uuid.UUID | None = None,
     selected_mode: UserFacingMode | None = None,
     agent_instructions: str = "",
+    on_progress: ProgressCallback | None = None,
 ) -> QueryExecutionResult:
     """Run the Standard query path and persist a trace for the result."""
 
@@ -1291,21 +1301,36 @@ async def execute_standard_query(
     started_at = time.perf_counter()
     query_plan: QueryPlan | None = None
 
+    await _emit(on_progress, {"type": "step_started", "step": "init", "label": "Workflow Steps"})
+
+    conv_ms: int = 0
+    check_ms: int = 0
+
     if _is_smalltalk_query(query_request.query):
         routing_decision = _resolve_execution_routing(
             query_request=query_request,
             selected_mode=selected_mode,
             namespace_min_execution_tier=namespace.min_execution_tier,
         )
+        await _emit(on_progress, {"type": "step_completed", "step": "init", "label": "Workflow Steps", "duration_ms": int((time.perf_counter() - started_at) * 1000)})
     else:
+        conv_started = time.perf_counter()
+        await _emit(on_progress, {"type": "step_started", "step": "conversation_history", "label": "Create Message History"})
+        conv_ctx = await _resolve_conversation_context(
+            session=session,
+            tenant_id=tenant_context.tenant_id,
+            conversation_id=conversation_id,
+            current_query=query_request.query,
+        )
+        conv_ms = int((time.perf_counter() - conv_started) * 1000)
+        message_count = len(conv_ctx.recent_user_queries) if conv_ctx else 0
+        await _emit(on_progress, {"type": "step_completed", "step": "conversation_history", "label": "Create Message History", "duration_ms": conv_ms, "message_count": message_count})
+
+        check_started = time.perf_counter()
+        await _emit(on_progress, {"type": "step_started", "step": "check_retrieval", "label": "Check Retrieval Need"})
         query_plan = build_query_plan(
             query_request.query,
-            conversation_context=await _resolve_conversation_context(
-                session=session,
-                tenant_id=tenant_context.tenant_id,
-                conversation_id=conversation_id,
-                current_query=query_request.query,
-            ),
+            conversation_context=conv_ctx,
         )
         routing_decision = _resolve_execution_routing(
             query_request=query_request,
@@ -1318,6 +1343,9 @@ async def execute_standard_query(
             execution_tier=routing_decision.effective_tier,
         )
         _log_query_identification(query_plan=query_plan)
+        check_ms = int((time.perf_counter() - check_started) * 1000)
+        await _emit(on_progress, {"type": "step_completed", "step": "check_retrieval", "label": "Check Retrieval Need", "duration_ms": check_ms})
+        await _emit(on_progress, {"type": "step_completed", "step": "init", "label": "Workflow Steps", "duration_ms": int((time.perf_counter() - started_at) * 1000)})
 
     if not _supports_execution_tier(
         available_tier=routing_decision.effective_tier,
@@ -1338,7 +1366,9 @@ async def execute_standard_query(
 
     if query_plan is None:
         retrieval_bundle = RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
+        await _emit(on_progress, {"type": "step_started", "step": "generate", "label": "Generate"})
         response = _smalltalk_response()
+        await _emit(on_progress, {"type": "step_completed", "step": "generate", "label": "Generate", "duration_ms": 0})
         stage_latencies_ms = {
             "retrieval_ms": 0,
             "evidence_packaging_ms": 0,
@@ -1376,6 +1406,8 @@ async def execute_standard_query(
             trace_id=trace.trace_id,
         )
 
+    research_started = time.perf_counter()
+    await _emit(on_progress, {"type": "step_started", "step": "research", "label": "Research"})
     retrieval_started = time.perf_counter()
     try:
         retrieval_bundle = await retrieve_hybrid_candidates(
@@ -1409,8 +1441,17 @@ async def execute_standard_query(
         evidence_package=evidence_package,
     )
     evidence_ms = int((time.perf_counter() - evidence_started) * 1000)
+    research_ms = int((time.perf_counter() - research_started) * 1000)
+    await _emit(on_progress, {
+        "type": "step_completed",
+        "step": "research",
+        "label": "Research",
+        "duration_ms": research_ms,
+        "evidence_count": len(evidence_package.items),
+    })
 
     answering_started = time.perf_counter()
+    await _emit(on_progress, {"type": "step_started", "step": "generate", "label": "Generate"})
     draft_token_usage: dict[str, int] | None = None
     if not evidence_package.items:
         response = shape_degraded_response(
@@ -1498,8 +1539,11 @@ async def execute_standard_query(
             generator_provider = "degraded-handler-v1"
             critical_verifier_metadata = None
     answering_ms = int((time.perf_counter() - answering_started) * 1000)
+    await _emit(on_progress, {"type": "step_completed", "step": "generate", "label": "Generate", "duration_ms": answering_ms})
 
     stage_latencies_ms = {
+        "conversation_history_ms": conv_ms,
+        "check_retrieval_ms": check_ms,
         "retrieval_ms": retrieval_ms,
         "evidence_packaging_ms": evidence_ms,
         "answering_ms": answering_ms,

@@ -40,5 +40,6 @@ class RunResponse(BaseModel):
     provider_fallback_from: str | None = None
     retrieved_chunk_ids: list[str]
     selected_evidence_ids: list[str]
+    stage_latencies_ms: dict[str, int] = Field(default_factory=dict)
     total_latency_ms: int = Field(ge=0)
     created_at: datetime

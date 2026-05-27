@@ -355,6 +355,7 @@ def test_agent_chat_persists_messages_and_returns_run_headers(
         agent_id,
         conversation_id,
         selected_mode,
+        agent_instructions,
     ):
         del session, tenant_context
         assert query_request.namespace_id == seeded_agent_chat_data.dataset_id
@@ -362,6 +363,7 @@ def test_agent_chat_persists_messages_and_returns_run_headers(
         assert agent_id == seeded_agent_chat_data.single_dataset_agent_id
         assert conversation_id == seeded_agent_chat_data.single_conversation_id
         assert selected_mode.value == "auto"
+        assert agent_instructions == ""
         return QueryExecutionResult(
             response=GroundedAnswerResponse(
                 answer="Maintenance window: Friday at 22:00 UTC. [E001]",
@@ -510,12 +512,14 @@ def test_agent_chat_accepts_explicit_dataset_for_multi_dataset_agent(
         agent_id,
         conversation_id,
         selected_mode,
+        agent_instructions,
     ):
         del session, tenant_context
         assert query_request.namespace_id == seeded_agent_chat_data.secondary_dataset_id
         assert agent_id == seeded_agent_chat_data.multi_dataset_agent_id
         assert conversation_id == seeded_agent_chat_data.multi_conversation_id
         assert selected_mode.value == "instant"
+        assert agent_instructions == ""
         return QueryExecutionResult(
             response=GroundedAnswerResponse(
                 answer="Research dataset answer. [E001]",

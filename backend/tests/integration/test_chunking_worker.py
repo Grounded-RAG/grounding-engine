@@ -238,11 +238,11 @@ def test_run_chunking_job_persists_deterministic_chunk_manifest(
     manifest = json.loads(manifest_payload)
 
     assert manifest["document_id"] == str(seeded_chunking_job.document_id)
-    assert manifest["chunking_strategy"] == "deterministic_token_window_v1"
+    assert manifest["chunking_strategy"] == "structure_aware_v1"
     assert [chunk["text"] for chunk in manifest["chunks"]] == [
         "one two three four",
-        "four five six seven",
-        "seven eight nine",
+        "three four five six seven",
+        "six seven eight nine",
     ]
     assert all(chunk["token_count"] <= 4 for chunk in manifest["chunks"])
 

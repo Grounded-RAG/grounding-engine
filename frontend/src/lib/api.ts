@@ -8,6 +8,7 @@ import type {
   BillingPortalResponse,
   BillingSubscriptionResponse,
   CapabilitiesResponse,
+  ChatStreamEvent,
   ConversationResponse,
   DashboardRecentJobResponse,
   DashboardSummaryResponse,
@@ -259,6 +260,65 @@ export function sendAgentChat(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+export async function* streamAgentChat(
+  apiKey: string,
+  agentId: string,
+  payload: {
+    conversation_id: string;
+    message: string;
+    mode?: UserFacingMode;
+    dataset_id?: string;
+  },
+): AsyncGenerator<ChatStreamEvent> {
+  const response = await fetch(`${API_BASE_URL}/v1/agents/${agentId}/chat/stream`, {
+    method: "POST",
+    headers: {
+      "X-API-Key": apiKey,
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok || !response.body) {
+    const text = await response.text().catch(() => response.statusText);
+    let detail = text;
+    try {
+      detail = (JSON.parse(text) as { detail?: string }).detail ?? text;
+    } catch {
+      // use raw text
+    }
+    throw new ApiError(response.status, detail);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("data: ")) {
+          const raw = trimmed.slice(6).trim();
+          if (raw) {
+            yield JSON.parse(raw) as ChatStreamEvent;
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export function listRuns(apiKey: string, datasetId?: string | null) {
