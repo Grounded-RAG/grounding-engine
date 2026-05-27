@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -592,6 +594,12 @@ export default function AgentChatPage() {
     scrollAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [visibleMessages.length, localExchange?.status, selectedConversationId]);
 
+  useEffect(() => {
+    return () => {
+      streamAbortRef.current?.();
+    };
+  }, []);
+
   if (agentQuery.isLoading) {
     return <div className="h-[calc(100vh-3.5rem)] rounded-2xl border bg-card animate-pulse" />;
   }
@@ -986,9 +994,11 @@ export default function AgentChatPage() {
                               </div>
                             ) : (
                               <>
-                                <p className="whitespace-pre-line text-[15px] leading-8 text-foreground">
-                                  {message.content}
-                                </p>
+                                <div className="prose prose-sm max-w-none text-foreground [&_p]:leading-8 [&_p]:text-[15px] [&_li]:text-[15px] [&_li]:leading-7 [&_h1]:text-xl [&_h2]:text-lg [&_h3]:text-base [&_strong]:text-foreground [&_code]:rounded [&_code]:bg-secondary [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-sm [&_pre]:rounded-xl [&_pre]:bg-secondary [&_pre]:p-4 [&_blockquote]:border-l-accent [&_a]:text-accent">
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                    {message.content}
+                                  </ReactMarkdown>
+                                </div>
                                 <div className="mt-4 flex flex-wrap items-center gap-2">
                                   {message.runId ? (
                                     <>

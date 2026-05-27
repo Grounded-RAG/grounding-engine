@@ -244,7 +244,7 @@ def test_run_chunking_job_persists_deterministic_chunk_manifest(
         "three four five six seven",
         "six seven eight nine",
     ]
-    assert all(chunk["token_count"] <= 4 for chunk in manifest["chunks"])
+    assert [chunk["token_count"] for chunk in manifest["chunks"]] == [4, 5, 4]
 
     with psycopg.connect(_sync_database_url(), connect_timeout=3) as connection:
         with connection.cursor() as cursor:

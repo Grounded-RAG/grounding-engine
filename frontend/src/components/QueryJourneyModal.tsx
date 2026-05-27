@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { X, ZoomIn, ZoomOut, Move, Maximize2, Info } from "lucide-react";
 import type { RunResponse } from "@/lib/types";
 
@@ -138,9 +138,23 @@ export default function QueryJourneyModal({ run, onClose }: QueryJourneyModalPro
   );
   const selectedStep = steps.find((s) => s.id === selectedId) ?? null;
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="relative flex h-[600px] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border bg-background shadow-2xl">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="relative flex h-[600px] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border bg-background shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b px-6 py-4">
           <div className="flex items-center gap-2">

@@ -232,8 +232,8 @@ export default function WorkflowStepsPanel({ steps, onClose }: WorkflowStepsPane
             <StepNode step={generate} isActive={activeStep === "generate"} />
           </div>
 
-          {/* check_retrieval branch: hangs below conv_history */}
-          <div className="ml-[calc(140px+32px+140px/2-8px)] flex flex-col items-center" style={{ marginLeft: "calc(140px + 48px + 70px - 8px)" }}>
+          {/* check_retrieval branch: centered under conv_history (node width 140px + arrow 48px + half node 70px) */}
+          <div className="flex flex-col items-center" style={{ marginLeft: "calc(140px + 48px + 70px - 8px)" }}>
             <DownArrow />
             <StepNode step={checkRetrieval} isActive={activeStep === "check_retrieval"} />
           </div>
