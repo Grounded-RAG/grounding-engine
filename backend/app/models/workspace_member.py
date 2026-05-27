@@ -62,5 +62,8 @@ class WorkspaceMember(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    invitation_token_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
 
     workspace: Mapped[Workspace] = relationship("Workspace", back_populates="members")

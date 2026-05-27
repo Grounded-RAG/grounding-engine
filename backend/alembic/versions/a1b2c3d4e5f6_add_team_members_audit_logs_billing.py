@@ -28,6 +28,9 @@ def upgrade() -> None:
     workspacememberstatus = postgresql.ENUM(
         "pending", "active", "removed", name="workspacememberstatus", create_type=False
     )
+    subscriptionplan = postgresql.ENUM(
+        "free", "pro", "business", "enterprise", name="subscriptionplan", create_type=False
+    )
     billingsubscriptionstatus = postgresql.ENUM(
         "active", "past_due", "canceled", "trialing",
         name="billingsubscriptionstatus", create_type=False,
@@ -35,6 +38,9 @@ def upgrade() -> None:
 
     op.execute("CREATE TYPE workspacememberrole AS ENUM ('admin', 'member', 'viewer')")
     op.execute("CREATE TYPE workspacememberstatus AS ENUM ('pending', 'active', 'removed')")
+    op.execute(
+        "CREATE TYPE subscriptionplan AS ENUM ('free', 'pro', 'business', 'enterprise')"
+    )
     op.execute(
         "CREATE TYPE billingsubscriptionstatus AS ENUM "
         "('active', 'past_due', 'canceled', 'trialing')"
@@ -120,10 +126,7 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.UUID(), nullable=False, unique=True),
         sa.Column(
             "plan",
-            postgresql.ENUM(
-                "free", "pro", "business", "enterprise",
-                name="subscriptionplan", create_type=False,
-            ),
+            subscriptionplan,
             nullable=False,
             server_default="free",
         ),
@@ -174,5 +177,6 @@ def downgrade() -> None:
     op.drop_table("workspace_members")
 
     op.execute("DROP TYPE IF EXISTS billingsubscriptionstatus")
+    op.execute("DROP TYPE IF EXISTS subscriptionplan")
     op.execute("DROP TYPE IF EXISTS workspacememberstatus")
     op.execute("DROP TYPE IF EXISTS workspacememberrole")

@@ -5,10 +5,13 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext, get_tenant_context
 from app.core.database import get_db_session
+from app.models.enums import WorkspaceMemberRole, WorkspaceMemberStatus
+from app.models.workspace_member import WorkspaceMember
 from app.schemas.agents import (
     AgentChatRequest,
     AgentChatResponse,
@@ -18,10 +21,12 @@ from app.schemas.agents import (
     AgentUpdateRequest,
 )
 from app.services.agent_chat import AgentChatServiceError, execute_agent_chat_turn
+from app.services.audit_logs import write_audit_log
 from app.services.agents import (
     AgentServiceError,
     attach_dataset_to_agent,
     create_agent,
+    delete_agent_for_tenant,
     detach_dataset_from_agent,
     get_agent_for_tenant,
     list_agents_for_tenant,
@@ -66,6 +71,17 @@ async def create_agent_route(
         )
     except AgentServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    await write_audit_log(
+        session=session,
+        tenant_id=tenant_context.tenant_id,
+        actor_key_id=tenant_context.api_key_id,
+        workspace_id=agent.workspace_id,
+        action="agent.created",
+        resource_type="agent",
+        resource_id=str(agent.agent_id),
+        summary=f"Agent '{agent.name}' created",
+    )
 
     return _build_agent_response(agent)
 
@@ -152,6 +168,52 @@ async def attach_dataset_to_agent_route(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return _build_agent_response(agent)
+
+
+@router.delete(
+    "/agents/{agent_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_agent_route(
+    agent_id: UUID,
+    tenant_context: TenantContext = Depends(get_tenant_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    """Delete one tenant-scoped agent if the caller is a workspace admin."""
+
+    try:
+        agent = await get_agent_for_tenant(
+            session=session,
+            tenant_id=tenant_context.tenant_id,
+            agent_id=agent_id,
+        )
+    except AgentServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    member_result = await session.execute(
+        select(WorkspaceMember).where(
+            WorkspaceMember.tenant_id == tenant_context.tenant_id,
+            WorkspaceMember.workspace_id == agent.workspace_id,
+            WorkspaceMember.status == WorkspaceMemberStatus.ACTIVE,
+        )
+    )
+    member = member_result.scalar_one_or_none()
+    if member is None or member.role != WorkspaceMemberRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only workspace admins can delete agents.",
+        )
+
+    try:
+        await delete_agent_for_tenant(
+            session=session,
+            tenant_id=tenant_context.tenant_id,
+            agent_id=agent_id,
+        )
+    except AgentServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete(

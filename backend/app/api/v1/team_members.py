@@ -5,15 +5,20 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import TenantContext, get_tenant_context
+from app.api.deps import TenantContext, get_tenant_context, require_workspace_role
 from app.core.database import get_db_session
+from app.models.workspace import Workspace
+from app.models.enums import WorkspaceMemberRole
 from app.schemas.team_members import (
     TeamMemberInviteRequest,
     TeamMemberResponse,
     TeamMemberUpdateRequest,
 )
+from app.services.audit_logs import write_audit_log
+from app.services.email import send_invitation_email
 from app.services.team_members import (
     TeamMemberServiceError,
     invite_workspace_member,
@@ -51,11 +56,12 @@ async def list_members_route(
 async def invite_member_route(
     workspace_id: UUID,
     invite_request: TeamMemberInviteRequest,
+    _rbac: None = Depends(require_workspace_role(WorkspaceMemberRole.ADMIN)),
     tenant_context: TenantContext = Depends(get_tenant_context),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamMemberResponse:
     try:
-        member = await invite_workspace_member(
+        member, raw_token = await invite_workspace_member(
             session=session,
             tenant_id=tenant_context.tenant_id,
             workspace_id=workspace_id,
@@ -63,6 +69,35 @@ async def invite_member_route(
         )
     except TeamMemberServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    await write_audit_log(
+        session=session,
+        tenant_id=tenant_context.tenant_id,
+        actor_key_id=tenant_context.api_key_id,
+        workspace_id=workspace_id,
+        action="member.invited",
+        resource_type="workspace_member",
+        resource_id=str(member.member_id),
+        summary=f"Invited {member.email} as {member.role.value}",
+    )
+
+    workspace_result = await session.execute(
+        select(Workspace).where(
+            Workspace.tenant_id == tenant_context.tenant_id,
+            Workspace.workspace_id == workspace_id,
+        )
+    )
+    workspace = workspace_result.scalar_one_or_none()
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found.")
+
+    await send_invitation_email(
+        to_email=member.email,
+        workspace_name=workspace.name,
+        invited_by=tenant_context.tenant_name,
+        invitation_token=raw_token,
+    )
+
     return TeamMemberResponse.model_validate(member)
 
 
@@ -74,6 +109,7 @@ async def update_member_route(
     workspace_id: UUID,
     member_id: UUID,
     update_request: TeamMemberUpdateRequest,
+    _rbac: None = Depends(require_workspace_role(WorkspaceMemberRole.ADMIN)),
     tenant_context: TenantContext = Depends(get_tenant_context),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamMemberResponse:
@@ -98,6 +134,7 @@ async def update_member_route(
 async def remove_member_route(
     workspace_id: UUID,
     member_id: UUID,
+    _rbac: None = Depends(require_workspace_role(WorkspaceMemberRole.ADMIN)),
     tenant_context: TenantContext = Depends(get_tenant_context),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:

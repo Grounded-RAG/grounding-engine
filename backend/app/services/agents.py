@@ -456,3 +456,27 @@ async def detach_dataset_from_agent(
             "Failed to detach dataset from agent.",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         ) from exc
+
+
+async def delete_agent_for_tenant(
+    *,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    agent_id: uuid.UUID,
+) -> None:
+    """Delete one tenant-scoped agent."""
+
+    agent = await _get_agent_for_tenant(
+        session=session,
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+    )
+    await session.delete(agent)
+    try:
+        await session.commit()
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise AgentServiceError(
+            "Failed to delete agent.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ) from exc

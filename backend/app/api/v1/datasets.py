@@ -4,18 +4,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    Depends,
-    File,
-    Form,
-    HTTPException,
-    Query,
-    Response,
-    UploadFile,
-    status,
-)
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from arq import create_pool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext, get_tenant_context
@@ -40,7 +30,7 @@ from app.services.datasets import (
     update_dataset,
 )
 from app.services.documents import DocumentServiceError, create_document_upload
-from app.workers import run_standard_ingestion_pipeline_background
+from app.worker_settings import get_redis_settings
 
 
 router = APIRouter()
@@ -233,7 +223,6 @@ async def list_dataset_ingestion_jobs_route(
     status_code=status.HTTP_201_CREATED,
 )
 async def upload_dataset_document_route(
-    background_tasks: BackgroundTasks,
     response: Response,
     dataset_id: UUID,
     title: str | None = Form(default=None),
@@ -259,10 +248,10 @@ async def upload_dataset_document_route(
         response.status_code = status.HTTP_200_OK
 
     if get_settings().ingestion_autorun_enabled and result.should_schedule_ingestion:
-        background_tasks.add_task(
-            run_standard_ingestion_pipeline_background,
-            result.ingestion_job.job_id,
-        )
+        redis_pool = await create_pool(get_redis_settings())
+        await redis_pool.enqueue_job("ingest_document", str(result.ingestion_job.job_id))
+        await redis_pool.aclose()
+
 
     return DatasetUploadResponse(
         dataset_id=result.document.namespace_id,
