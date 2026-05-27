@@ -501,7 +501,7 @@ async def _persist_query_trace(
         effective_tier=resolved_routing.effective_tier,
         routing_reason=resolved_routing.routing_reason,
         query_redacted=query_request.query,
-        query_ciphertext=hashlib.sha256(query_request.query.encode()).hexdigest(),
+        query_ciphertext=hashlib.sha256(query_request.query.encode("utf-8")).digest(),
         retrieved_chunk_ids=[hit.chunk_id for hit in retrieval_bundle.fused_hits],
         selected_evidence_ids=[citation.chunk_id for citation in response.citations],
         generator_provider=generator_provider,
