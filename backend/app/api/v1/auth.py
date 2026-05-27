@@ -209,9 +209,9 @@ async def google_oauth_callback(
         api_key_id=api_key_record.key_id,
         api_key_label=api_key_record.label,
         api_key=raw_api_key,
-        workspace_id=workspace.workspace_id,
-        workspace_name=workspace.name,
-        workspace_slug=workspace.slug,
+        workspace_id=workspace.workspace_id if workspace is not None else None,
+        workspace_name=workspace.name if workspace is not None else None,
+        workspace_slug=workspace.slug if workspace is not None else None,
         created_tenant=created_tenant,
         created_workspace=created_workspace,
     )

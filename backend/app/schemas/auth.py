@@ -42,9 +42,9 @@ class EmailAuthResponse(AuthSmokeResponse):
     """Response returned after email auth succeeds."""
 
     api_key: str
-    workspace_id: UUID
-    workspace_name: str
-    workspace_slug: str
+    workspace_id: UUID | None = None
+    workspace_name: str | None = None
+    workspace_slug: str | None = None
     created_tenant: bool = False
     created_workspace: bool = False
 

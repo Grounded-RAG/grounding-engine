@@ -123,11 +123,10 @@ def check_rate_limit(
 # ---------------------------------------------------------------------------
 
 def _make_dependency(limit_key: str, max_requests: int):
-    from fastapi import Depends, HTTPException, Request, status
+    from fastapi import Depends, HTTPException, status
     from app.api.deps import TenantContext, get_tenant_context
 
     async def _dep(
-        request: Request,
         tenant_context: TenantContext = Depends(get_tenant_context),
     ) -> None:
         result = check_rate_limit(
@@ -135,7 +134,6 @@ def _make_dependency(limit_key: str, max_requests: int):
             limit_key=limit_key,
             max_requests=max_requests,
         )
-        request.state.rate_limit_remaining = result.remaining
         if not result.allowed:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,

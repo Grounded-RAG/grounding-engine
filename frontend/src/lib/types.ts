@@ -18,9 +18,9 @@ export interface AuthSmokeResponse {
 
 export interface EmailAuthResponse extends AuthSmokeResponse {
   api_key: string;
-  workspace_id: string;
-  workspace_name: string;
-  workspace_slug: string;
+  workspace_id: string | null;
+  workspace_name: string | null;
+  workspace_slug: string | null;
   created_tenant: boolean;
   created_workspace: boolean;
 }

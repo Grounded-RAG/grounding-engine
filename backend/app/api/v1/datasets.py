@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from arq import create_pool
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,7 +59,7 @@ def _build_dataset_response(dataset) -> DatasetResponse:
     status_code=status.HTTP_201_CREATED,
 )
 async def create_dataset_route(
-    dataset_request: DatasetCreateRequest,
+    dataset_request: DatasetCreateRequest = Body(...),
     tenant_context: TenantContext = Depends(get_tenant_context),
     session: AsyncSession = Depends(get_db_session),
     _rate_limit: None = Depends(default_rate_limit),

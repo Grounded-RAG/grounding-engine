@@ -363,7 +363,7 @@ async def sign_in_with_google(
     email: str,
     full_name: str | None,
     api_key_salt: str,
-) -> tuple[Tenant, Workspace, APIKey, str, bool, bool]:
+) -> tuple[Tenant, Workspace | None, APIKey, str, bool, bool]:
     """Find or create a preview tenant for a Google-authenticated user."""
 
     normalized_email = _normalize_email(email)
@@ -399,13 +399,7 @@ async def sign_in_with_google(
         created_tenant = True
 
     if created_tenant:
-        workspace = Workspace(
-            workspace_id=uuid.uuid4(),
-            tenant_id=tenant.tenant_id,
-            name="",
-            slug="",
-            description=None,
-        )
+        workspace = None
         created_workspace = True
     else:
         workspace, created_workspace = await _get_or_create_workspace(

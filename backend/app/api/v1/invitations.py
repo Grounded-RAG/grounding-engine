@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import TenantContext, get_tenant_context
 from app.core.database import get_db_session
 from app.models.enums import WorkspaceMemberStatus
+from app.models.tenant import Tenant
 from app.models.workspace_member import WorkspaceMember
 from app.schemas.team_members import TeamMemberResponse
 
@@ -30,11 +31,26 @@ async def accept_invitation_route(
 ) -> TeamMemberResponse:
     """Accept one pending workspace invitation."""
 
+    tenant_result = await session.execute(
+        select(Tenant).where(Tenant.tenant_id == tenant_context.tenant_id)
+    )
+    tenant = tenant_result.scalar_one_or_none()
+    owner_email = (
+        str((tenant.default_policy or {}).get("owner_email") or "").strip().lower()
+        if tenant is not None
+        else ""
+    )
+    if not owner_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authenticated account is missing an owner email.",
+        )
+
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     result = await session.execute(
         select(WorkspaceMember).where(
-            WorkspaceMember.tenant_id == tenant_context.tenant_id,
             WorkspaceMember.invitation_token_hash == token_hash,
+            WorkspaceMember.email == owner_email,
             WorkspaceMember.status == WorkspaceMemberStatus.PENDING,
         )
     )
