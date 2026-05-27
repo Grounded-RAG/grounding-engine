@@ -85,20 +85,24 @@ class GenerationBackend:
         *,
         query_text: str,
         evidence_package: EvidencePackage,
+        agent_instructions: str = "",
     ) -> GroundedAnswerDraft:
         if self.implementation == "gemini":
             return await generate_gemini_draft(
                 query_text=query_text,
                 evidence_package=evidence_package,
+                agent_instructions=agent_instructions,
             )
         if self.implementation == "openai_compatible":
             return await generate_openai_compatible_draft(
                 query_text=query_text,
                 evidence_package=evidence_package,
+                agent_instructions=agent_instructions,
             )
         return generate_grounded_draft(
             query_text=query_text,
             evidence_package=evidence_package,
+            agent_instructions=agent_instructions,
         )
 
 
@@ -500,6 +504,7 @@ async def generate_answer_from_evidence(
     *,
     query_text: str,
     evidence_package: EvidencePackage,
+    agent_instructions: str = "",
 ) -> GroundedAnswerDraft:
     """Generate a grounded answer draft using the current generation backend."""
 
@@ -508,6 +513,7 @@ async def generate_answer_from_evidence(
         draft = await backend.generate(
             query_text=query_text,
             evidence_package=evidence_package,
+            agent_instructions=agent_instructions,
         )
         if backend.implementation != "local":
             validation_error = _provider_validation_error(

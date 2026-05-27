@@ -329,7 +329,28 @@ def test_agent_create_allows_thinking_mode(
     assert response.status_code == 201
     payload = response.json()
     assert payload["default_mode"] == "thinking"
-    assert payload["allowed_modes"] == ["auto", "instant", "thinking"]
+    assert payload["allowed_modes"] == ["auto", "instant", "thinking", "verified"]
+
+
+def test_agent_create_defaults_include_thinking_when_enterprise_is_live(
+    agent_client: TestClient,
+    seeded_agent_data: SeededAgentData,
+) -> None:
+    """Agent creation should include Thinking by default while Enterprise is live."""
+
+    response = agent_client.post(
+        "/v1/agents",
+        headers={"X-API-Key": seeded_agent_data.raw_api_key},
+        json={
+            "workspace_id": str(seeded_agent_data.workspace_id),
+            "name": "Default Modes Agent",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["default_mode"] == "auto"
+    assert payload["allowed_modes"] == ["auto", "instant", "thinking", "verified"]
 
 
 def test_agent_attach_dataset_requires_same_workspace(

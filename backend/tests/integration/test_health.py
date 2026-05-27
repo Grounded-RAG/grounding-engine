@@ -53,6 +53,7 @@ def test_ready_health_endpoint_reports_dependency_status(
             "config": "ok",
             "database": "ok",
             "storage": "ok",
+            "vector_store": "ok",
         },
     }
 
@@ -84,5 +85,6 @@ def test_ready_health_endpoint_returns_503_when_dependency_fails(
             "config": "ok",
             "database": "error",
             "storage": "ok",
+            "vector_store": "ok",
         },
     }

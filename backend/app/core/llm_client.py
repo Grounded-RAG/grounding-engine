@@ -2112,6 +2112,7 @@ def generate_grounded_draft(
     *,
     query_text: str,
     evidence_package: EvidencePackage,
+    agent_instructions: str = "",
 ) -> GroundedAnswerDraft:
     """Generate a deterministic grounded answer draft from packaged evidence."""
 

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import TenantContext, get_tenant_context
 from app.core.database import get_db_session
 from app.schemas.api_keys import APIKeyCreateRequest, APIKeyCreateResponse, APIKeyResponse
+from app.services.audit_logs import write_audit_log
 from app.services.api_keys import (
     APIKeyServiceError,
     create_api_key,
@@ -62,6 +63,16 @@ async def create_api_key_route(
     except APIKeyServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    await write_audit_log(
+        session=session,
+        tenant_id=tenant_context.tenant_id,
+        actor_key_id=tenant_context.api_key_id,
+        action="api_key.created",
+        resource_type="api_key",
+        resource_id=str(api_key.key_id),
+        summary=f"API key '{api_key.label}' created",
+    )
+
     return APIKeyCreateResponse(
         key_id=api_key.key_id,
         label=api_key.label,
@@ -88,5 +99,15 @@ async def revoke_api_key_route(
         )
     except APIKeyServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    await write_audit_log(
+        session=session,
+        tenant_id=tenant_context.tenant_id,
+        actor_key_id=tenant_context.api_key_id,
+        action="api_key.revoked",
+        resource_type="api_key",
+        resource_id=str(key_id),
+        summary=f"API key '{api_key.label}' revoked",
+    )
 
     return _build_api_key_response(api_key)

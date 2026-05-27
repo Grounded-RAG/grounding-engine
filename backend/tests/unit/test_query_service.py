@@ -10,7 +10,7 @@ import pytest
 
 from app.api.deps import TenantContext
 from app.core.query_analysis import QueryPlan, QueryProfile
-from app.models import ExecutionTier, UserFacingMode
+from app.models import ExecutionTier, FreshnessProfile, UserFacingMode
 from app.pipeline.contracts import EvidencePackage, FusedRetrievedChunk, RetrievedChunk
 from app.schemas.query import QueryRequest
 from app.services.generation import GenerationBackend
@@ -76,6 +76,7 @@ def _settings(**overrides) -> SimpleNamespace:
         enterprise_enabled=False,
         enterprise_trace_metadata_enabled=True,
         enterprise_auto_routing_enabled=True,
+        critical_enabled=False,
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -158,6 +159,39 @@ def _retrieval_bundle(
     )
 
 
+def _conflicting_retrieval_bundle(
+    tenant_id: uuid.UUID,
+    namespace_id: uuid.UUID,
+) -> RetrievalBundle:
+    document_id = uuid.uuid4()
+    chunk_one = FusedRetrievedChunk(
+        chunk_id="chunk-1",
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        document_id=document_id,
+        chunk_index=0,
+        text="Grounded supports tenant-safe uploads.",
+        fused_score=0.95,
+        sources=("dense",),
+    )
+    chunk_two = FusedRetrievedChunk(
+        chunk_id="chunk-2",
+        tenant_id=tenant_id,
+        namespace_id=namespace_id,
+        document_id=document_id,
+        chunk_index=1,
+        text="Grounded does not support tenant-safe uploads.",
+        fused_score=0.92,
+        sources=("sparse",),
+    )
+    return RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[chunk_one, chunk_two],
+        debug=None,
+    )
+
+
 @pytest.mark.asyncio()
 async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeypatch) -> None:
     """Standard query execution should persist a trace for grounded answers."""
@@ -168,7 +202,10 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
     namespace = type(
         "NamespaceStub",
         (),
-        {"min_execution_tier": ExecutionTier.STANDARD},
+        {
+            "min_execution_tier": ExecutionTier.STANDARD,
+            "freshness_profile": FreshnessProfile.BALANCED,
+        },
     )()
     session = FakeAsyncSession(namespace=namespace)
 
@@ -219,6 +256,12 @@ async def test_execute_standard_query_persists_trace_for_grounded_answer(monkeyp
     assert trace.retrieved_chunk_ids == ["chunk-1"]
     assert trace.selected_evidence_ids == ["chunk-1"]
     assert trace.verifier_result["query_plan"]["query_kind"] == "open"
+    assert trace.verifier_result["verification_applied"] is False
+    assert trace.verifier_result["verification_outcome"] == "accepted"
+    assert trace.verifier_result["verification_mode"] == "standard_response_shaping"
+    assert trace.verifier_result["bounded_correction_attempted"] is False
+    assert trace.verifier_result["contradiction_detected"] is False
+    assert trace.verifier_result["unsupported_claims_detected"] is False
     assert trace.verifier_result["execution_routing"]["request_source"] == "default"
 
 
@@ -286,7 +329,7 @@ async def test_execute_standard_query_uses_raw_user_question_for_generation(monk
             ],
         )
 
-    async def fake_generate_answer_from_evidence(*, query_text, evidence_package):
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
         del evidence_package
         captured["query_text"] = query_text
         return type(
@@ -299,6 +342,7 @@ async def test_execute_standard_query_uses_raw_user_question_for_generation(monk
                 "generator_provider": "local-grounded-v1",
                 "support_coverage": 1.0,
                 "source_diversity": 2,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             },
         )()
 
@@ -1020,3 +1064,619 @@ async def test_execute_standard_query_falls_back_cleanly_for_thinking_mode_when_
     assert trace.effective_tier is ExecutionTier.STANDARD
     assert trace.routing_reason == "thinking_mode_fallback_standard"
     assert trace.verifier_result["execution_routing"]["request_source"] == "selected_mode"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_auto_routes_namespace_floor_to_critical(monkeypatch) -> None:
+    """Auto mode should honor a namespace that requires the Critical tier."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Summarize the compliance policy")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.CRITICAL},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        assert kwargs["execution_tier"] is ExecutionTier.CRITICAL
+        return _retrieval_bundle(
+            tenant_context.tenant_id,
+            namespace_id,
+            debug={"execution_tier": "critical"},
+        )
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.AUTO,
+    )
+
+    trace = session.added[0]
+    routing = trace.verifier_result["execution_routing"]
+    assert trace.requested_tier is ExecutionTier.CRITICAL
+    assert trace.router_recommendation is ExecutionTier.CRITICAL
+    assert trace.effective_tier is ExecutionTier.CRITICAL
+    assert trace.routing_reason == "critical_auto_required_tier"
+    assert routing["request_source"] == "auto_router"
+    assert trace.verifier_result["retrieval_debug"]["execution_tier"] == "critical"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_persists_critical_request_trace_metadata(monkeypatch) -> None:
+    """Critical requests should persist explicit fallback verification metadata."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify the policy exception")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        assert kwargs["execution_tier"] is ExecutionTier.STANDARD
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
+        del query_text, evidence_package
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": "Grounded supports tenant-safe uploads [E001].",
+                "cited_evidence_ids": ["chunk-1"],
+                "citation_snippets": {"chunk-1": "Grounded supports tenant-safe uploads."},
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 0.98,
+                "source_diversity": 1,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True),
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    assert trace.requested_tier is ExecutionTier.CRITICAL
+    assert trace.effective_tier is ExecutionTier.STANDARD
+    assert trace.routing_reason == "critical_requested_fallback_standard"
+    assert trace.verifier_result["verification_applied"] is True
+    assert trace.verifier_result["verification_outcome"] == "accepted"
+    assert trace.verifier_result["verification_mode"] == "critical_requested_fallback_standard"
+    assert trace.verifier_result["bounded_correction_attempted"] is False
+    assert trace.verifier_result["contradiction_detected"] is False
+    assert trace.verifier_result["unsupported_claims_detected"] is False
+    assert trace.verifier_result["execution_routing"]["request_source"] == "selected_mode"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_runs_critical_verifier_when_enabled(monkeypatch) -> None:
+    """Verified mode should use the first strict Critical verification pass when enabled."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify the export workflow")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        assert kwargs["execution_tier"] is ExecutionTier.CRITICAL
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
+        del query_text, evidence_package
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": "Grounded supports offline exports [E001].",
+                "cited_evidence_ids": ["chunk-1"],
+                "citation_snippets": {"chunk-1": "Grounded supports tenant-safe uploads."},
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 0.98,
+                "source_diversity": 1,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    assert trace.requested_tier is ExecutionTier.CRITICAL
+    assert trace.effective_tier is ExecutionTier.CRITICAL
+    assert trace.routing_reason == "critical_requested_enabled"
+    assert trace.verifier_result["verification_applied"] is True
+    assert trace.verifier_result["verification_outcome"] == "degraded"
+    assert trace.verifier_result["verification_reason"] == "UNSUPPORTED_CLAIMS"
+    assert trace.verifier_result["critical_verifier"]["decision"] == "refuse"
+    assert trace.verifier_result["critical_verifier"]["unsupported_claim_count"] == 1
+    assert trace.verifier_result["critical_verifier"]["unsupported_claims_detected"] is True
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_degrades_partial_critical_claims(monkeypatch) -> None:
+    """Critical mode should degrade partially supported claims without fully accepting them."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify tenant-safe exports")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        assert kwargs["execution_tier"] is ExecutionTier.CRITICAL
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
+        del query_text, evidence_package
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": "Grounded supports tenant-safe exports [E001].",
+                "cited_evidence_ids": ["chunk-1"],
+                "citation_snippets": {"chunk-1": "Grounded supports tenant-safe uploads."},
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 0.98,
+                "source_diversity": 1,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    assert result.response.verification_status == "degraded"
+    assert result.response.support_summary == "partial"
+    assert result.response.confidence_score < 0.5
+    assert trace.verifier_result["verification_reason"] == "PARTIAL_SUPPORT"
+    assert trace.verifier_result["critical_verifier"]["decision"] == "degrade"
+    assert trace.verifier_result["critical_verifier"]["partially_supported_claim_count"] == 1
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_degrades_critical_contradictions(monkeypatch) -> None:
+    """Critical mode should degrade when selected evidence conflicts materially."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify tenant-safe uploads")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        assert kwargs["execution_tier"] is ExecutionTier.CRITICAL
+        return _conflicting_retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
+        del query_text, evidence_package
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": "Grounded supports tenant-safe uploads [E001].",
+                "cited_evidence_ids": ["chunk-1", "chunk-2"],
+                "citation_snippets": {
+                    "chunk-1": "Grounded supports tenant-safe uploads.",
+                    "chunk-2": "Grounded does not support tenant-safe uploads.",
+                },
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 0.98,
+                "source_diversity": 2,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    assert result.response.verification_status == "degraded"
+    assert "conflicts on this point" in result.response.answer
+    assert result.response.support_summary == "insufficient"
+    assert result.response.confidence_score == 0.0
+    assert trace.verifier_result["verification_reason"] == "CONTRADICTORY_EVIDENCE"
+    assert trace.verifier_result["critical_verifier"]["decision"] == "degrade"
+    assert trace.verifier_result["critical_verifier"]["contradiction_detected"] is True
+    assert trace.verifier_result["critical_verifier"]["source_conflict_detected"] is True
+    assert trace.verifier_result["critical_verifier"]["conflict_policy"]["resolution_mode"] == "surface_conflict"
+    assert trace.verifier_result["evidence_debug"]["critical_policy"]["conflict_resolution"]["freshness_profile"] == "balanced"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_retries_critical_support_once(monkeypatch) -> None:
+    """Critical mode should run one bounded corrective retry when support is weak."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify offline exports")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {"min_execution_tier": ExecutionTier.STANDARD},
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+    retrieval_calls: list[tuple[str, ...]] = []
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        retrieval_calls.append(tuple(kwargs["query_plan"].retrieval_queries))
+        if len(retrieval_calls) == 1:
+            return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+        return RetrievalBundle(
+            sparse_hits=[],
+            dense_hits=[],
+            fused_hits=[
+                FusedRetrievedChunk(
+                    chunk_id="chunk-2",
+                    tenant_id=tenant_context.tenant_id,
+                    namespace_id=namespace_id,
+                    document_id=uuid.uuid4(),
+                    chunk_index=0,
+                    text="Grounded supports offline exports.",
+                    fused_score=0.97,
+                    sources=("dense",),
+                )
+            ],
+            debug=None,
+        )
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
+        del query_text
+        text = evidence_package.items[0].text
+        if "offline exports" in text:
+            answer_text = "Grounded supports offline exports [E001]."
+            chunk_id = "chunk-2"
+        else:
+            answer_text = "Grounded supports offline exports [E001]."
+            chunk_id = "chunk-1"
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": answer_text,
+                "cited_evidence_ids": [chunk_id],
+                "citation_snippets": {chunk_id: text},
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 0.98,
+                "source_diversity": 1,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    assert len(retrieval_calls) == 2
+    assert retrieval_calls[1][0] == "offline exports"
+    assert result.response.verification_status == "passed"
+    assert result.response.support_summary == "grounded"
+    assert result.response.degraded_reasons == []
+    assert result.response.confidence_score >= 0.5
+    assert trace.verifier_result["verification_outcome"] == "accepted"
+    assert trace.verifier_result["critical_verifier"]["bounded_correction_attempted"] is True
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_persists_critical_policy_metadata(monkeypatch) -> None:
+    """Critical traces should persist policy visibility for external and internal recovery."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify tenant-safe uploads")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {
+            "min_execution_tier": ExecutionTier.STANDARD,
+            "allow_web_fallback": True,
+            "allow_internal_model_retrieval": False,
+        },
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    policy = trace.verifier_result["critical_verifier"]
+    assert trace.verifier_result["evidence_debug"]["critical_policy"]["external_fallback"]["allowed"] is True
+    assert trace.verifier_result["evidence_debug"]["critical_policy"]["external_fallback"]["reason"] == "allowlisted_policy_enabled"
+    assert trace.verifier_result["evidence_debug"]["critical_policy"]["internal_model_retrieval"]["allowed"] is False
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_persists_internal_model_retrieval_policy(monkeypatch) -> None:
+    """Critical traces should show when internal model retrieval is policy-enabled."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify tenant-safe uploads")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {
+            "min_execution_tier": ExecutionTier.STANDARD,
+            "allow_web_fallback": False,
+            "allow_internal_model_retrieval": True,
+        },
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    assert trace.verifier_result["evidence_debug"]["critical_policy"]["internal_model_retrieval"]["allowed"] is True
+    assert trace.verifier_result["evidence_debug"]["critical_policy"]["internal_model_retrieval"]["reason"] == "policy_enabled"
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_records_internal_retrieval_recovery_when_degraded(monkeypatch) -> None:
+    """Critical degraded recovery should re-check the answer against expanded grounded evidence."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify offline exports")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {
+            "min_execution_tier": ExecutionTier.STANDARD,
+            "allow_web_fallback": False,
+            "allow_internal_model_retrieval": True,
+        },
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(**kwargs):
+        return RetrievalBundle(
+            sparse_hits=[],
+            dense_hits=[],
+            fused_hits=[
+                FusedRetrievedChunk(
+                    chunk_id="chunk-1",
+                    tenant_id=tenant_context.tenant_id,
+                    namespace_id=namespace_id,
+                    document_id=uuid.uuid4(),
+                    chunk_index=0,
+                    text="Grounded supports tenant-safe uploads.",
+                    fused_score=0.98,
+                    sources=("dense",),
+                ),
+                FusedRetrievedChunk(
+                    chunk_id="chunk-2",
+                    tenant_id=tenant_context.tenant_id,
+                    namespace_id=namespace_id,
+                    document_id=uuid.uuid4(),
+                    chunk_index=1,
+                    text="Grounded supports offline exports.",
+                    fused_score=0.93,
+                    sources=("sparse",),
+                ),
+            ],
+            debug=None,
+        )
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
+        del query_text, evidence_package
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": "Grounded supports tenant-safe exports [E001].",
+                "cited_evidence_ids": ["chunk-1"],
+                "citation_snippets": {"chunk-1": "Grounded supports tenant-safe uploads."},
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 0.98,
+                "source_diversity": 1,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            },
+        )()
+
+    def fake_package_evidence(retrieval_bundle, *, query_text=None, limit=None, execution_tier=None):
+        del query_text, limit, execution_tier
+        first_hit = retrieval_bundle.fused_hits[0]
+        return EvidencePackage(
+            retrieved_chunk_ids=[hit.chunk_id for hit in retrieval_bundle.fused_hits],
+            selected_evidence_ids=[first_hit.chunk_id],
+            items=[
+                type(
+                    "EvidenceItemStub",
+                    (),
+                    {
+                        "citation_id": "E001",
+                        "chunk_id": first_hit.chunk_id,
+                        "tenant_id": first_hit.tenant_id,
+                        "namespace_id": first_hit.namespace_id,
+                        "document_id": first_hit.document_id,
+                        "chunk_index": first_hit.chunk_index,
+                        "text": first_hit.text,
+                        "score": first_hit.fused_score,
+                        "sources": first_hit.sources,
+                        "section_title": first_hit.section_title,
+                        "section_slug": first_hit.section_slug,
+                        "chunk_role": first_hit.chunk_role,
+                        "starts_with_heading": first_hit.starts_with_heading,
+                        "is_list_block": first_hit.is_list_block,
+                    },
+                )()
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.package_evidence",
+        fake_package_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    result = await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+    )
+
+    trace = session.added[0]
+    assert result.response.verification_status == "degraded"
+    assert trace.verifier_result["verification_outcome"] == "degraded"
+    assert result.response.confidence_label == "low"
+    assert result.response.degraded_reasons
+    assert trace.verifier_result["critical_verifier"]["recovery_paths"]["internal_model_retrieval"]["used"] is True

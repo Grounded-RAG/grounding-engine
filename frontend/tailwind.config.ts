@@ -1,5 +1,7 @@
 import type { Config } from "tailwindcss";
 import tailwindcssAnimate from "tailwindcss-animate";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const typography = require("@tailwindcss/typography");
 
 export default {
   darkMode: ["class"],
@@ -114,5 +116,5 @@ export default {
       },
     },
   },
-  plugins: [tailwindcssAnimate],
+  plugins: [tailwindcssAnimate, typography],
 } satisfies Config;

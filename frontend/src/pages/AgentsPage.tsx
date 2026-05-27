@@ -40,6 +40,14 @@ const FALLBACK_MODE_OPTIONS: ModeCapabilityResponse[] = [
     description: "Deeper retrieval for harder questions.",
     availability_reason: null,
   },
+  {
+    mode: "verified",
+    label: "Verified",
+    enabled: true,
+    backing_tier: "critical",
+    description: "Highest-assurance path for sensitive work.",
+    availability_reason: null,
+  },
 ];
 
 export default function AgentsPage() {
@@ -74,10 +82,7 @@ export default function AgentsPage() {
   });
 
   const createModeOptions = useMemo(
-    () =>
-      (capabilitiesQuery.data?.modes ?? FALLBACK_MODE_OPTIONS).filter(
-        (mode) => mode.mode !== "verified",
-      ),
+    () => capabilitiesQuery.data?.modes ?? FALLBACK_MODE_OPTIONS,
     [capabilitiesQuery.data?.modes],
   );
 

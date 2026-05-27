@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import TenantContext, get_db_session, get_tenant_context
 from app.main import create_app
+from app.models import ExecutionTier
 from app.schemas.query import GroundedAnswerResponse
 
 
@@ -77,3 +78,75 @@ def test_query_endpoint_returns_structured_answer_and_trace_header(monkeypatch) 
     assert response.headers["X-Trace-Id"] == str(trace_id)
     assert response.json()["verification_status"] == "passed"
     assert response.json()["degraded_reasons"] == []
+
+
+def test_query_endpoint_accepts_async_verified_requests(monkeypatch) -> None:
+    """The query endpoint should expose queued Verified runs through headers."""
+
+    app = create_app()
+    tenant_context = TenantContext(
+        tenant_id=uuid.uuid4(),
+        tenant_name="tenant",
+        subscription_plan="business",  # type: ignore[arg-type]
+        max_execution_tier="critical",  # type: ignore[arg-type]
+        api_key_id=uuid.uuid4(),
+        api_key_label="test-key",
+    )
+
+    async def override_tenant_context():
+        return tenant_context
+
+    async def override_db_session():
+        yield object()
+
+    app.dependency_overrides[get_tenant_context] = override_tenant_context
+    app.dependency_overrides[get_db_session] = override_db_session
+
+    trace_id = uuid.uuid4()
+
+    async def fake_queue_async_verified_query(*, session, tenant_context, query_request):
+        del session, tenant_context
+        from app.services.query import QueryExecutionResult
+
+        assert query_request.prefer_async is True
+        assert query_request.requested_tier is ExecutionTier.CRITICAL
+        return QueryExecutionResult(
+            response=GroundedAnswerResponse(
+                answer="Verified request queued. Poll the run endpoint for the completed result.",
+                citations=[],
+                confidence_score=0.0,
+                verification_status="degraded",
+                degraded_reasons=["RUN_QUEUED"],
+                generator_provider="async-verified-run-v1",
+                provider_backend="async_verified_run_v1",
+            ),
+            trace_id=trace_id,
+        )
+
+    async def fake_process_async_verified_query(*, trace_id, tenant_context, query_request):
+        del trace_id, tenant_context, query_request
+
+    monkeypatch.setattr(
+        "app.api.v1.query.queue_async_verified_query",
+        fake_queue_async_verified_query,
+    )
+    monkeypatch.setattr(
+        "app.api.v1.query.process_async_verified_query",
+        fake_process_async_verified_query,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/query",
+            json={
+                "namespace_id": str(uuid.uuid4()),
+                "query": "Verify the policy",
+                "requested_tier": "critical",
+                "prefer_async": True,
+            },
+        )
+
+    assert response.status_code == 202
+    assert response.headers["X-Run-Id"] == str(trace_id)
+    assert response.headers["X-Trace-Id"] == str(trace_id)
+    assert response.json()["degraded_reasons"] == ["RUN_QUEUED"]

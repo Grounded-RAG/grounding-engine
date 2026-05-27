@@ -51,9 +51,9 @@ It is currently responsible for:
 
 ### Critical
 
-Critical is **not live yet**.
+Critical is **live**.
 
-It still remains the future tier for:
+It is now the highest-assurance tier for:
 
 - verifier / critic loops
 - corrective retrieval
@@ -233,14 +233,14 @@ Implemented:
 - `Auto`
 - `Instant`
 - `Thinking`
-- `Verified` visible but disabled
+- `Verified` available when Critical is enabled
 
 ### Actual backend meaning
 
-- `Auto` -> Standard by default, can route into Enterprise for eligible hard queries
+- `Auto` -> Standard by default, can route into Enterprise or Critical when eligible
 - `Instant` -> Standard
 - `Thinking` -> Enterprise
-- `Verified` -> not live yet
+- `Verified` -> Critical
 
 ### Frontend state
 
@@ -364,10 +364,10 @@ If the next person is continuing from here, the best order is:
 2. expand evaluation coverage
 3. fix any live regressions found in Standard first
 4. harden Enterprise reranker and routing behavior with benchmark evidence
-5. only then begin Critical / `Verified`
+5. continue Critical / `Verified` rollout hardening and evaluation
 
 ---
 
 ## 9. One-Sentence Summary
 
-The system now has a strong Standard baseline and a live Enterprise path behind `Thinking`; the main remaining work is rollout hardening, broader evaluation, and the future Critical/`Verified` tier.
+The system now has a strong Standard baseline, a live Enterprise path behind `Thinking`, and a live Critical path behind `Verified`; the main remaining work is rollout hardening and broader evaluation.

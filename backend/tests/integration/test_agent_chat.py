@@ -355,6 +355,7 @@ def test_agent_chat_persists_messages_and_returns_run_headers(
         agent_id,
         conversation_id,
         selected_mode,
+        agent_instructions,
     ):
         del session, tenant_context
         assert query_request.namespace_id == seeded_agent_chat_data.dataset_id
@@ -362,6 +363,7 @@ def test_agent_chat_persists_messages_and_returns_run_headers(
         assert agent_id == seeded_agent_chat_data.single_dataset_agent_id
         assert conversation_id == seeded_agent_chat_data.single_conversation_id
         assert selected_mode.value == "auto"
+        assert agent_instructions == ""
         return QueryExecutionResult(
             response=GroundedAnswerResponse(
                 answer="Maintenance window: Friday at 22:00 UTC. [E001]",
@@ -510,12 +512,14 @@ def test_agent_chat_accepts_explicit_dataset_for_multi_dataset_agent(
         agent_id,
         conversation_id,
         selected_mode,
+        agent_instructions,
     ):
         del session, tenant_context
         assert query_request.namespace_id == seeded_agent_chat_data.secondary_dataset_id
         assert agent_id == seeded_agent_chat_data.multi_dataset_agent_id
         assert conversation_id == seeded_agent_chat_data.multi_conversation_id
         assert selected_mode.value == "instant"
+        assert agent_instructions == ""
         return QueryExecutionResult(
             response=GroundedAnswerResponse(
                 answer="Research dataset answer. [E001]",
@@ -576,11 +580,11 @@ def test_agent_chat_rejects_thinking_when_agent_disallows_it(
     }
 
 
-def test_agent_chat_rejects_verified_mode_with_clear_message(
+def test_agent_chat_rejects_verified_mode_when_agent_disallows_it(
     agent_chat_client: TestClient,
     seeded_agent_chat_data: SeededAgentChatData,
 ) -> None:
-    """Verified should still fail clearly until the critical path is live."""
+    """Verified should respect each agent's allowlist now that the mode is live."""
 
     response = agent_chat_client.post(
         f"/v1/agents/{seeded_agent_chat_data.single_dataset_agent_id}/chat",
@@ -592,7 +596,7 @@ def test_agent_chat_rejects_verified_mode_with_clear_message(
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 409
     assert response.json() == {
-        "detail": "Chat mode 'verified' is not available yet."
+        "detail": "Chat mode must be one of the agent's allowed modes."
     }

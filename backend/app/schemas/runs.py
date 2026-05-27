@@ -16,6 +16,7 @@ class RunResponse(BaseModel):
     """Product-facing run record backed by one persisted query trace."""
 
     run_id: UUID
+    status: Literal["queued", "running", "completed", "failed"] = "completed"
     dataset_id: UUID | None
     agent_id: UUID | None = None
     conversation_id: UUID | None = None
@@ -39,5 +40,6 @@ class RunResponse(BaseModel):
     provider_fallback_from: str | None = None
     retrieved_chunk_ids: list[str]
     selected_evidence_ids: list[str]
+    stage_latencies_ms: dict[str, int] = Field(default_factory=dict)
     total_latency_ms: int = Field(ge=0)
     created_at: datetime

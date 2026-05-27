@@ -14,6 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.telemetry import get_logger
+
+logger = get_logger("app.documents")
+
 from app.api.deps import TenantContext
 from app.config import get_settings
 from app.core.storage import StorageError, delete_object, upload_bytes
@@ -349,7 +353,10 @@ async def create_document_upload(
         try:
             await delete_object(stored_object.key)
         except StorageError:
-            pass
+            logger.warning(
+                "Failed to delete orphaned storage object after DB conflict",
+                key=stored_object.key,
+            )
 
         existing_upload = await _get_existing_document_upload(
             session=session,
@@ -370,7 +377,10 @@ async def create_document_upload(
         try:
             await delete_object(stored_object.key)
         except StorageError:
-            pass
+            logger.warning(
+                "Failed to delete orphaned storage object during rollback",
+                key=stored_object.key,
+            )
         raise DocumentServiceError(
             "Failed to persist uploaded document metadata.",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

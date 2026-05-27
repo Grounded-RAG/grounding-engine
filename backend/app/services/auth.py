@@ -355,3 +355,66 @@ async def sign_in_with_email_password(
         api_key_salt=api_key_salt,
     )
     return tenant, workspace, api_key_record, raw_api_key, False, created_workspace
+
+
+async def sign_in_with_google(
+    *,
+    session: AsyncSession,
+    email: str,
+    full_name: str | None,
+    api_key_salt: str,
+) -> tuple[Tenant, Workspace | None, APIKey, str, bool, bool]:
+    """Find or create a preview tenant for a Google-authenticated user."""
+
+    normalized_email = _normalize_email(email)
+    tenant = await _get_tenant_by_owner_email(
+        session=session,
+        owner_email=normalized_email,
+    )
+    created_tenant = False
+
+    if tenant is None:
+        tenant = await _create_tenant_for_email(
+            session=session,
+            email=normalized_email,
+            password_hash=_hash_password(secrets.token_urlsafe(32)),
+            full_name=_normalize_optional(full_name),
+            organization_name=None,
+        )
+        tenant.default_policy = {
+            **(tenant.default_policy or {}),
+            "owner_email": normalized_email,
+            "owner_name": _normalize_optional(full_name),
+            "auth_provider": "google_oauth",
+        }
+        try:
+            await session.commit()
+        except SQLAlchemyError as exc:
+            await session.rollback()
+            raise EmailSignInServiceError(
+                "Failed to finalize Google sign-in account.",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ) from exc
+        await session.refresh(tenant)
+        created_tenant = True
+
+    if created_tenant:
+        workspace = None
+        created_workspace = True
+    else:
+        workspace, created_workspace = await _get_or_create_workspace(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            email=normalized_email,
+            full_name=_normalize_optional(full_name),
+            organization_name=tenant.name,
+            workspace_name=None,
+        )
+
+    api_key_record, raw_api_key = await _issue_session_api_key(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        email=normalized_email,
+        api_key_salt=api_key_salt,
+    )
+    return tenant, workspace, api_key_record, raw_api_key, created_tenant, created_workspace

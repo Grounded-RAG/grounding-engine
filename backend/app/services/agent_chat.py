@@ -19,7 +19,7 @@ from app.services.conversations import (
     get_conversation_for_tenant,
 )
 from app.services.messages import MessageServiceError, create_message
-from app.services.query import QueryServiceError, execute_standard_query
+from app.services.query import ProgressCallback, QueryServiceError, execute_standard_query
 
 
 class AgentChatServiceError(RuntimeError):
@@ -145,6 +145,129 @@ async def execute_agent_chat_turn(
             agent_id=agent.agent_id,
             conversation_id=conversation.conversation_id,
             selected_mode=resolved_mode,
+            agent_instructions=agent.system_instructions or "",
+        )
+        assistant_message = await create_message(
+            session=session,
+            tenant_id=tenant_context.tenant_id,
+            conversation_id=conversation.conversation_id,
+            role=MessageRole.ASSISTANT,
+            content=query_result.response.answer,
+            run_id=query_result.trace_id,
+        )
+
+        conversation = await get_conversation_for_tenant(
+            session=session,
+            tenant_id=tenant_context.tenant_id,
+            conversation_id=conversation.conversation_id,
+        )
+        conversation.last_used_mode = resolved_mode
+        await session.commit()
+        await session.refresh(conversation)
+    except MessageServiceError as exc:
+        raise AgentChatServiceError(
+            exc.detail,
+            status_code=exc.status_code,
+        ) from exc
+    except QueryServiceError as exc:
+        raise AgentChatServiceError(
+            exc.detail,
+            status_code=exc.status_code,
+        ) from exc
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise AgentChatServiceError(
+            "Failed to update conversation after chat.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ) from exc
+
+    return AgentChatResponse(
+        agent_id=agent.agent_id,
+        conversation_id=conversation.conversation_id,
+        dataset_id=resolved_dataset_id,
+        mode=resolved_mode,
+        run_id=query_result.trace_id,
+        user_message_id=user_message.message_id,
+        assistant_message_id=assistant_message.message_id,
+        answer=query_result.response.answer,
+        citations=query_result.response.citations,
+        confidence_score=query_result.response.confidence_score,
+        confidence_label=query_result.response.confidence_label,
+        support_summary=query_result.response.support_summary,
+        verification_status=query_result.response.verification_status,
+        degraded_reasons=query_result.response.degraded_reasons,
+        generator_provider=query_result.response.generator_provider,
+        provider_backend=query_result.response.provider_backend,
+        provider_model=query_result.response.provider_model,
+        provider_fallback_used=query_result.response.provider_fallback_used,
+        provider_fallback_from=query_result.response.provider_fallback_from,
+    )
+
+
+async def execute_agent_chat_turn_streaming(
+    *,
+    session: AsyncSession,
+    tenant_context: TenantContext,
+    agent_id: uuid.UUID,
+    chat_request: AgentChatRequest,
+    on_progress: ProgressCallback | None = None,
+) -> AgentChatResponse:
+    """Execute one grounded chat turn, emitting SSE progress events through on_progress."""
+
+    try:
+        agent = await get_agent_for_tenant(
+            session=session,
+            tenant_id=tenant_context.tenant_id,
+            agent_id=agent_id,
+        )
+        conversation = await get_conversation_for_tenant(
+            session=session,
+            tenant_id=tenant_context.tenant_id,
+            conversation_id=chat_request.conversation_id,
+        )
+    except (AgentServiceError, ConversationServiceError) as exc:
+        raise AgentChatServiceError(
+            exc.detail,
+            status_code=exc.status_code,
+        ) from exc
+
+    if conversation.agent_id != agent.agent_id:
+        raise AgentChatServiceError(
+            "Conversation not found for agent.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    resolved_mode = _resolve_chat_mode(
+        requested_mode=chat_request.mode,
+        conversation_mode=conversation.last_used_mode,
+        agent_allowed_modes=agent.allowed_modes,
+    )
+    resolved_dataset_id = _resolve_dataset_id(
+        requested_dataset_id=chat_request.dataset_id,
+        attached_dataset_ids=[link.dataset_id for link in agent.dataset_links],
+    )
+
+    try:
+        user_message = await create_message(
+            session=session,
+            tenant_id=tenant_context.tenant_id,
+            conversation_id=conversation.conversation_id,
+            role=MessageRole.USER,
+            content=chat_request.message,
+            created_by_api_key_id=tenant_context.api_key_id,
+        )
+        query_result = await execute_standard_query(
+            session=session,
+            tenant_context=tenant_context,
+            query_request=QueryRequest(
+                namespace_id=resolved_dataset_id,
+                query=chat_request.message,
+            ),
+            agent_id=agent.agent_id,
+            conversation_id=conversation.conversation_id,
+            selected_mode=resolved_mode,
+            agent_instructions=agent.system_instructions or "",
+            on_progress=on_progress,
         )
         assistant_message = await create_message(
             session=session,

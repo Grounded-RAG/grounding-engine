@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from app.models.conversation import Conversation
     from app.models.namespace import Namespace
     from app.models.tenant import Tenant
+    from app.models.workspace_member import WorkspaceMember
 
 
 class Workspace(Base):
@@ -106,4 +107,9 @@ class Workspace(Base):
         ),
         foreign_keys="[Conversation.tenant_id, Conversation.workspace_id]",
         overlaps="tenant,conversations,agent",
+    )
+    members: Mapped[list["WorkspaceMember"]] = relationship(
+        "WorkspaceMember",
+        back_populates="workspace",
+        cascade="all, delete-orphan",
     )

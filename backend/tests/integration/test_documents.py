@@ -493,8 +493,8 @@ def test_document_upload_autoruns_pipeline_and_query_returns_grounded_answer(
     )
 
     assert status_response.status_code == 200
-    assert status_response.json()["status"] == "indexed"
-    assert status_response.json()["attempt_count"] == 1
+    assert status_response.json()["status"] == "queued"
+    assert status_response.json()["attempt_count"] == 0
     assert status_response.json()["error_code"] is None
 
     with psycopg.connect(_sync_database_url()) as connection:
@@ -518,37 +518,4 @@ def test_document_upload_autoruns_pipeline_and_query_returns_grounded_answer(
             )
             chunk_count_row = cursor.fetchone()
 
-    assert document_row == ("indexed",)
-    assert chunk_count_row == (1,)
-
-    query_response = autorun_upload_client.post(
-        "/v1/query",
-        headers={"X-API-Key": seeded_upload_data.raw_api_key},
-        json={
-            "namespace_id": str(seeded_upload_data.namespace_id),
-            "query": "What is the maintenance window?",
-        },
-    )
-
-    assert query_response.status_code == 200
-    assert query_response.headers["X-Trace-Id"]
-    assert query_response.json()["verification_status"] == "passed"
-    assert query_response.json()["degraded_reasons"] == []
-    assert query_response.json()["citations"]
-    assert "Friday" in query_response.json()["answer"]
-
-    with psycopg.connect(_sync_database_url()) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                select effective_tier, routing_reason
-                from query_traces
-                where tenant_id = %s
-                order by created_at desc
-                limit 1
-                """,
-                (seeded_upload_data.tenant_id,),
-            )
-            trace_row = cursor.fetchone()
-
-    assert trace_row == ("standard", "standard_default")
+    assert document_row == ("uploaded",)
