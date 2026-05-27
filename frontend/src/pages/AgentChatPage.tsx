@@ -7,14 +7,20 @@ import {
   AlertCircle,
   ArrowLeft,
   Bot,
+  Check,
+  Copy,
   Database,
   FileSearch,
+  Flag,
   GitMerge,
   LoaderCircle,
   Plus,
   RefreshCw,
   Send,
+  Share2,
   Sparkles,
+  ThumbsDown,
+  ThumbsUp,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -32,6 +38,7 @@ import {
   listAgentConversations,
   listDatasets,
   streamAgentChat,
+  submitFeedback,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatRelativeOrDate, sentenceCase } from "@/lib/format";
@@ -44,6 +51,7 @@ import {
   supportSummaryText,
 } from "@/lib/trust";
 import type {
+  FeedbackSubmission,
   MessageResponse,
   ModeCapabilityResponse,
   UserFacingMode,
@@ -51,6 +59,7 @@ import type {
 } from "@/lib/types";
 import WorkflowStepsPanel from "@/components/WorkflowStepsPanel";
 import QueryJourneyModal from "@/components/QueryJourneyModal";
+import FeedbackModal from "@/components/FeedbackModal";
 
 const FALLBACK_MODE_OPTIONS: ModeCapabilityResponse[] = [
   {
@@ -177,7 +186,7 @@ function EmptyPanel({
 }) {
   return (
     <div className="gradient-subtle rounded-[32px] border border-border/70 px-8 py-12 text-center shadow-[0_24px_60px_rgba(15,23,42,0.06)]">
-      <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-[22px] bg-accent/10 text-accent shadow-[0_12px_30px_rgba(16,185,129,0.12)]">
+      <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-[22px] bg-accent/10 text-accent shadow-[0_12px_30px_rgba(59,130,246,0.14)]">
         <Icon className="h-7 w-7" />
       </div>
       <h3 className="mb-3 font-display text-3xl font-semibold tracking-[-0.03em] text-foreground">
@@ -216,6 +225,24 @@ function AssistantStatusCopy({ submittedAt }: { submittedAt: string }) {
 }
 
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      title="Copy"
+      onClick={() => {
+        void navigator.clipboard?.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+    >
+      {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
+}
+
 function isSameConversation(
   exchangeConversationId: string | null,
   selectedConversationId: string | null,
@@ -246,7 +273,11 @@ export default function AgentChatPage() {
   const [localExchange, setLocalExchange] = useState<LocalExchange | null>(null);
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
   const [showWorkflowPanel, setShowWorkflowPanel] = useState(false);
+  const [lastStreamedRunId, setLastStreamedRunId] = useState<string | null>(null);
   const [queryJourneyRunId, setQueryJourneyRunId] = useState<string | null>(null);
+  const [feedbackRunId, setFeedbackRunId] = useState<string | null>(null);
+  const [feedbackRating, setFeedbackRating] = useState<"positive" | "negative">("negative");
+  const [messageFeedback, setMessageFeedback] = useState<Record<string, "positive" | "negative">>({});
   const [isStreaming, setIsStreaming] = useState(false);
   const streamAbortRef = useRef<(() => void) | null>(null);
 
@@ -469,6 +500,7 @@ export default function AgentChatPage() {
           } else if (event.type === "answer") {
             const response = event.data;
             setActiveRunId(response.run_id);
+            setLastStreamedRunId(response.run_id);
             setSelectedConversationId(response.conversation_id);
             setLocalExchange(null);
             setDraft("");
@@ -871,7 +903,7 @@ export default function AgentChatPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.92),rgba(248,250,252,0.72))]">
+        <div className="flex-1 overflow-y-auto bg-[linear-gradient(180deg,hsl(214_32%_98%),hsl(0_0%_100%))]">
           <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-6 py-8">
             {messagesQuery.isLoading && selectedConversationId ? (
               <div className="text-sm text-muted-foreground">Loading conversation...</div>
@@ -911,7 +943,7 @@ export default function AgentChatPage() {
                           <div
                             className={`w-full rounded-[28px] border px-6 py-5 text-left shadow-sm transition-all ${
                               message.isPending
-                                ? "border-accent/20 bg-card/90 shadow-[0_18px_45px_rgba(16,185,129,0.08)]"
+                                ? "border-accent/20 bg-card/90 shadow-[0_18px_45px_rgba(59,130,246,0.08)]"
                                 : message.isError
                                   ? "border-destructive/20 bg-card"
                                   : "bg-card hover:border-accent/40"
@@ -952,16 +984,14 @@ export default function AgentChatPage() {
                                         </div>
                                       );
                                     })}
-                                    {workflowSteps.some((s) => s.status === "running") && (
-                                      <button
-                                        type="button"
-                                        onClick={() => setShowWorkflowPanel(true)}
-                                        className="mt-1 flex items-center gap-1 text-[11px] text-accent hover:underline"
-                                      >
-                                        <GitMerge className="h-3 w-3" />
-                                        View Workflow Progress
-                                      </button>
-                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowWorkflowPanel(true)}
+                                      className="mt-1 flex items-center gap-1 text-[11px] text-accent hover:underline"
+                                    >
+                                      <GitMerge className="h-3 w-3" />
+                                      View Workflow Progress
+                                    </button>
                                   </div>
                                 ) : (
                                   <AssistantStatusCopy submittedAt={message.createdAt} />
@@ -999,30 +1029,184 @@ export default function AgentChatPage() {
                                     {message.content}
                                   </ReactMarkdown>
                                 </div>
-                                <div className="mt-4 flex flex-wrap items-center gap-2">
-                                  {message.runId ? (
-                                    <>
+
+                                {/* Inline workflow steps preview — only on the latest streamed message */}
+                                {message.runId && message.runId === lastStreamedRunId && workflowSteps.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowWorkflowPanel(true)}
+                                    className="mt-4 w-full rounded-2xl border border-border/60 bg-secondary/30 px-4 py-3 text-left hover:border-accent/30 hover:bg-secondary/50 transition-all group"
+                                  >
+                                    <div className="mb-2 flex items-center justify-between">
+                                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Pipeline Execution</span>
+                                      <span className="text-[10px] text-accent opacity-0 group-hover:opacity-100 transition-opacity">View full diagram →</span>
+                                    </div>
+                                    {/* Row 1: first 3 steps */}
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      {workflowSteps.slice(0, 3).map((step, i) => (
+                                        <div key={step.step} className="flex items-center gap-1.5">
+                                          <div className="flex items-center gap-1.5 rounded-xl border border-border/80 bg-background px-2.5 py-1.5">
+                                            <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50">
+                                              <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 text-emerald-600" fill="none">
+                                                <path d="M2 6 L5 9 L10 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                                              </svg>
+                                            </div>
+                                            <span className="text-[11px] font-medium text-foreground">{step.label}</span>
+                                            {step.durationMs !== undefined && (
+                                              <span className="text-[10px] text-muted-foreground">
+                                                {step.durationMs >= 1000 ? `${(step.durationMs / 1000).toFixed(2)}s` : `${step.durationMs}ms`}
+                                              </span>
+                                            )}
+                                          </div>
+                                          {i < 2 && (
+                                            <svg width="16" height="10" viewBox="0 0 16 10" fill="none" className="shrink-0 text-muted-foreground/40">
+                                              <path d="M0 5 H12 M9 2 L13 5 L9 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                                            </svg>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                    {/* Row 2: remaining steps */}
+                                    {workflowSteps.length > 3 && (
+                                      <div className="mt-1.5 flex items-center gap-1.5 pl-6">
+                                        <svg width="10" height="16" viewBox="0 0 10 16" fill="none" className="shrink-0 text-muted-foreground/40">
+                                          <path d="M5 0 V12 M2 9 L5 13 L8 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                                        </svg>
+                                        {workflowSteps.slice(3).map((step, i) => (
+                                          <div key={step.step} className="flex items-center gap-1.5">
+                                            <div className="flex items-center gap-1.5 rounded-xl border border-border/80 bg-background px-2.5 py-1.5">
+                                              <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50">
+                                                <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 text-emerald-600" fill="none">
+                                                  <path d="M2 6 L5 9 L10 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                                                </svg>
+                                              </div>
+                                              <span className="text-[11px] font-medium text-foreground">{step.label}</span>
+                                              {step.durationMs !== undefined && (
+                                                <span className="text-[10px] text-muted-foreground">
+                                                  {step.durationMs >= 1000 ? `${(step.durationMs / 1000).toFixed(2)}s` : `${step.durationMs}ms`}
+                                                </span>
+                                              )}
+                                            </div>
+                                            {i < workflowSteps.slice(3).length - 1 && (
+                                              <svg width="16" height="10" viewBox="0 0 16 10" fill="none" className="shrink-0 text-muted-foreground/40">
+                                                <path d="M0 5 H12 M9 2 L13 5 L9 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                                              </svg>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </button>
+                                )}
+
+                                {/* Action bar */}
+                                <div className="mt-3 flex items-center justify-between">
+                                  <div className="flex items-center gap-0.5">
+                                    {/* Thumbs up */}
+                                    <button
+                                      type="button"
+                                      title="Good response"
+                                      onClick={async () => {
+                                        if (!message.runId || !apiKey) return;
+                                        const prev = messageFeedback[message.runId];
+                                        if (prev === "positive") return;
+                                        setMessageFeedback((m) => ({ ...m, [message.runId!]: "positive" }));
+                                        try {
+                                          await submitFeedback(apiKey, message.runId, { rating: "positive", reasons: [], freeform_text: null });
+                                          toast.success("Thanks for the feedback!");
+                                        } catch {
+                                          setMessageFeedback((m) => { const n = { ...m }; delete n[message.runId!]; return n; });
+                                        }
+                                      }}
+                                      className={`rounded p-1.5 transition-colors ${messageFeedback[message.runId ?? ""] === "positive" ? "text-emerald-600" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
+                                    >
+                                      <ThumbsUp className="h-3.5 w-3.5" />
+                                    </button>
+                                    {/* Thumbs down */}
+                                    <button
+                                      type="button"
+                                      title="Bad response"
+                                      onClick={() => {
+                                        if (!message.runId) return;
+                                        setFeedbackRating("negative");
+                                        setFeedbackRunId(message.runId);
+                                      }}
+                                      className={`rounded p-1.5 transition-colors ${messageFeedback[message.runId ?? ""] === "negative" ? "text-destructive" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
+                                    >
+                                      <ThumbsDown className="h-3.5 w-3.5" />
+                                    </button>
+                                    {/* Flag */}
+                                    <button
+                                      type="button"
+                                      title="Flag this response"
+                                      onClick={() => {
+                                        if (!message.runId) return;
+                                        setFeedbackRating("negative");
+                                        setFeedbackRunId(message.runId);
+                                      }}
+                                      className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                                    >
+                                      <Flag className="h-3.5 w-3.5" />
+                                    </button>
+
+                                    <div className="mx-1.5 h-4 w-px bg-border" />
+
+                                    {/* Copy */}
+                                    <CopyButton text={message.content} />
+
+                                    {/* Retry */}
+                                    <button
+                                      type="button"
+                                      title="Retry"
+                                      onClick={retryLastMessage}
+                                      disabled={hasActiveRun}
+                                      className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
+                                    >
+                                      <RefreshCw className="h-3.5 w-3.5" />
+                                    </button>
+
+                                    {/* Share */}
+                                    <button
+                                      type="button"
+                                      title="Share"
+                                      className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                                      onClick={() => {
+                                        void navigator.clipboard?.writeText(window.location.href);
+                                        toast.success("Link copied!");
+                                      }}
+                                    >
+                                      <Share2 className="h-3.5 w-3.5" />
+                                    </button>
+
+                                    <div className="mx-1.5 h-4 w-px bg-border" />
+
+                                    {/* Inspect run */}
+                                    {message.runId && (
                                       <button
                                         type="button"
                                         onClick={() => setActiveRunId(message.runId)}
-                                        className="inline-flex"
+                                        className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                                        title="Inspect run"
                                       >
-                                        <Badge variant="accent" className="text-[10px]">
-                                          <FileSearch className="mr-0.5 h-2.5 w-2.5" /> Inspect run
-                                        </Badge>
+                                        <FileSearch className="h-3.5 w-3.5" />
                                       </button>
+                                    )}
+
+                                    {/* Query Journey */}
+                                    {message.runId && (
                                       <button
                                         type="button"
+                                        title="Query Journey"
                                         onClick={() => {
                                           setActiveRunId(message.runId);
                                           setQueryJourneyRunId(message.runId);
                                         }}
-                                        className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2.5 py-1 text-[10px] text-muted-foreground hover:border-accent/40 hover:text-foreground transition-colors"
+                                        className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                                       >
-                                        <GitMerge className="h-2.5 w-2.5" /> Query Journey
+                                        <GitMerge className="h-3.5 w-3.5" />
                                       </button>
-                                    </>
-                                  ) : null}
+                                    )}
+                                  </div>
                                   <span className="text-[10px] text-muted-foreground">
                                     {formatRelativeOrDate(message.createdAt)}
                                   </span>
@@ -1038,7 +1222,7 @@ export default function AgentChatPage() {
                   return (
                     <div key={message.key} className="flex justify-end animate-fade-up">
                       <div className="max-w-2xl">
-                        <div className="rounded-[28px] border border-accent/15 bg-[linear-gradient(135deg,rgba(16,185,129,0.12),rgba(255,255,255,0.96))] px-6 py-4 text-foreground shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
+                        <div className="rounded-[28px] border border-accent/20 bg-[linear-gradient(135deg,hsl(217_91%_55%/0.08),hsl(0_0%_100%/0.96))] px-6 py-4 text-foreground shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
                           <p className="whitespace-pre-line text-[15px] leading-7">{message.content}</p>
                           <div className="mt-3 text-right text-[10px] text-muted-foreground">
                             {formatRelativeOrDate(message.createdAt)}
@@ -1158,14 +1342,6 @@ export default function AgentChatPage() {
       </section>
 
       <aside className="hidden overflow-y-auto border-l bg-card/90 xl:block">
-        {showWorkflowPanel && workflowSteps.length > 0 ? (
-          <div className="flex h-full flex-col">
-            <WorkflowStepsPanel
-              steps={workflowSteps}
-              onClose={() => setShowWorkflowPanel(false)}
-            />
-          </div>
-        ) : (
           <>
         <div className="border-b p-4">
           <div className="flex items-center justify-between">
@@ -1275,7 +1451,6 @@ export default function AgentChatPage() {
           </>
         )}
           </>
-        )}
       </aside>
 
       {queryJourneyRunId && runQuery.data && String(runQuery.data.run_id) === queryJourneyRunId ? (
@@ -1290,6 +1465,37 @@ export default function AgentChatPage() {
           </div>
         </div>
       ) : null}
+
+      {showWorkflowPanel && workflowSteps.length > 0 && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+          onClick={() => setShowWorkflowPanel(false)}
+        >
+          <div
+            className="relative flex h-[580px] w-full max-w-[860px] flex-col overflow-hidden rounded-3xl border bg-background shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <WorkflowStepsPanel
+              steps={workflowSteps}
+              onClose={() => setShowWorkflowPanel(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {feedbackRunId && (
+        <FeedbackModal
+          runId={feedbackRunId}
+          initialRating={feedbackRating}
+          onSubmit={async (feedback: FeedbackSubmission) => {
+            if (!apiKey) return;
+            await submitFeedback(apiKey, feedbackRunId, feedback);
+            setMessageFeedback((m) => ({ ...m, [feedbackRunId]: feedback.rating }));
+            toast.success("Thank you for your feedback!");
+          }}
+          onClose={() => setFeedbackRunId(null)}
+        />
+      )}
     </div>
   );
 }
