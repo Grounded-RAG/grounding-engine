@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { initiateSso, listWorkspaces, signInWithEmail } from "@/lib/api";
+import { getGoogleAuthorizationUrl, initiateSso, listWorkspaces, signInWithEmail } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { workspacePath } from "@/lib/routes";
 import heroVisual from "@/assets/hero-visual.png";
@@ -23,9 +23,23 @@ export default function LoginPage() {
   const [apiKey, setApiKey] = useState("");
   const [orgSlug, setOrgSlug] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGoogleRedirecting, setIsGoogleRedirecting] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { signInWithApiKey, setWorkspace } = useAuth();
+
+  const handleGoogleLogin = async () => {
+    setIsGoogleRedirecting(true);
+    try {
+      const redirectUri = `${window.location.origin}/auth/google/callback`;
+      const response = await getGoogleAuthorizationUrl(redirectUri);
+      window.location.href = response.authorization_url;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to start Google sign-in.";
+      toast.error(message);
+      setIsGoogleRedirecting(false);
+    }
+  };
 
   const handleApiLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,8 +158,9 @@ export default function LoginPage() {
                 <div className="grid md:grid-cols-2">
                   <button
                     type="button"
-                    onClick={() => toast.info("Google sign-in requires GOOGLE_CLIENT_ID to be configured. Use email sign-in for now.")}
+                    onClick={() => void handleGoogleLogin()}
                     className="flex flex-col items-start gap-4 border-b md:border-b-0 md:border-r p-6 text-left transition-colors hover:bg-secondary/30"
+                    disabled={isGoogleRedirecting}
                   >
                     <svg className="h-6 w-6" viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
@@ -155,7 +170,9 @@ export default function LoginPage() {
                     </svg>
                     <div>
                       <div className="text-xl font-medium text-foreground">Sign In with Google</div>
-                      <div className="text-sm text-muted-foreground">Requires Google OAuth setup</div>
+                      <div className="text-sm text-muted-foreground">
+                        {isGoogleRedirecting ? "Redirecting to Google..." : "Continue with your Google account"}
+                      </div>
                     </div>
                   </button>
 

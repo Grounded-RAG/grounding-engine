@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/lib/auth";
 import RequireAuth from "@/components/RequireAuth";
 import HomePage from "./pages/HomePage";
+import GoogleOAuthCallbackPage from "./pages/GoogleOAuthCallbackPage";
 import LoginPage from "./pages/LoginPage";
 import SignUpPage from "./pages/SignUpPage";
 import OnboardingPage from "./pages/OnboardingPage";
@@ -31,6 +32,7 @@ const App = () => (
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/auth/google/callback" element={<GoogleOAuthCallbackPage />} />
             <Route path="/sign-up" element={<SignUpPage />} />
             <Route element={<RequireAuth />}>
               <Route path="/onboarding" element={<OnboardingPage />} />

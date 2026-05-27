@@ -55,6 +55,19 @@ class GoogleAuthRequest(BaseModel):
     id_token: str = Field(min_length=1, max_length=4096)
 
 
+class GoogleOAuthStartResponse(BaseModel):
+    """Response returning the Google OAuth authorization URL."""
+
+    authorization_url: str
+
+
+class GoogleOAuthCodeRequest(BaseModel):
+    """Google OAuth callback payload carrying the authorization code."""
+
+    code: str = Field(min_length=1, max_length=4096)
+    redirect_uri: str = Field(min_length=1, max_length=2048)
+
+
 class SSOInitiateRequest(BaseModel):
     """Request to initiate an SSO/SAML flow."""
 

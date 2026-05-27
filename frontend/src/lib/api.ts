@@ -377,11 +377,18 @@ export async function initiateSso(payload: { organization_slug: string }) {
 }
 
 // Google OAuth
-export async function signInWithGoogle(id_token: string) {
-  const response = await fetch(`${API_BASE_URL}/v1/auth/google`, {
+export async function getGoogleAuthorizationUrl(redirectUri: string) {
+  const response = await fetch(
+    `${API_BASE_URL}/v1/auth/google/start?redirect_uri=${encodeURIComponent(redirectUri)}`,
+  );
+  return parseResponse<{ authorization_url: string }>(response);
+}
+
+export async function completeGoogleOAuth(code: string, redirectUri: string) {
+  const response = await fetch(`${API_BASE_URL}/v1/auth/google/callback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id_token }),
+    body: JSON.stringify({ code, redirect_uri: redirectUri }),
   });
   return parseResponse<EmailAuthResponse>(response);
 }

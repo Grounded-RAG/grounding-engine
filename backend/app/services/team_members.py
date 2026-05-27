@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+import hashlib
+import secrets
 
 from fastapi import status
 from sqlalchemy import select
@@ -47,7 +49,10 @@ async def invite_workspace_member(
     tenant_id: uuid.UUID,
     workspace_id: uuid.UUID,
     invite_request: TeamMemberInviteRequest,
-) -> WorkspaceMember:
+) -> tuple[WorkspaceMember, str]:
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
     member = WorkspaceMember(
         member_id=uuid.uuid4(),
         tenant_id=tenant_id,
@@ -55,6 +60,7 @@ async def invite_workspace_member(
         email=invite_request.email.lower(),
         role=invite_request.role,
         status=WorkspaceMemberStatus.PENDING,
+        invitation_token_hash=token_hash,
     )
     session.add(member)
     try:
@@ -72,7 +78,7 @@ async def invite_workspace_member(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         ) from exc
     await session.refresh(member)
-    return member
+    return member, raw_token
 
 
 async def update_workspace_member(
