@@ -186,7 +186,7 @@ function EmptyPanel({
 }) {
   return (
     <div className="gradient-subtle rounded-[32px] border border-border/70 px-8 py-12 text-center shadow-[0_24px_60px_rgba(15,23,42,0.06)]">
-      <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-[22px] bg-accent/10 text-accent shadow-[0_12px_30px_rgba(59,130,246,0.14)]">
+      <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-[22px] bg-accent/10 text-accent shadow-[0_12px_30px_rgba(16,185,129,0.12)]">
         <Icon className="h-7 w-7" />
       </div>
       <h3 className="mb-3 font-display text-3xl font-semibold tracking-[-0.03em] text-foreground">
@@ -903,7 +903,7 @@ export default function AgentChatPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto bg-[linear-gradient(180deg,hsl(214_32%_98%),hsl(0_0%_100%))]">
+        <div className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.92),rgba(248,250,252,0.72))]">
           <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-6 py-8">
             {messagesQuery.isLoading && selectedConversationId ? (
               <div className="text-sm text-muted-foreground">Loading conversation...</div>
@@ -943,7 +943,7 @@ export default function AgentChatPage() {
                           <div
                             className={`w-full rounded-[28px] border px-6 py-5 text-left shadow-sm transition-all ${
                               message.isPending
-                                ? "border-accent/20 bg-card/90 shadow-[0_18px_45px_rgba(59,130,246,0.08)]"
+                                ? "border-accent/20 bg-card/90 shadow-[0_18px_45px_rgba(16,185,129,0.08)]"
                                 : message.isError
                                   ? "border-destructive/20 bg-card"
                                   : "bg-card hover:border-accent/40"
@@ -1222,7 +1222,7 @@ export default function AgentChatPage() {
                   return (
                     <div key={message.key} className="flex justify-end animate-fade-up">
                       <div className="max-w-2xl">
-                        <div className="rounded-[28px] border border-accent/20 bg-[linear-gradient(135deg,hsl(217_91%_55%/0.08),hsl(0_0%_100%/0.96))] px-6 py-4 text-foreground shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
+                        <div className="rounded-[28px] border border-accent/15 bg-[linear-gradient(135deg,rgba(16,185,129,0.12),rgba(255,255,255,0.96))] px-6 py-4 text-foreground shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
                           <p className="whitespace-pre-line text-[15px] leading-7">{message.content}</p>
                           <div className="mt-3 text-right text-[10px] text-muted-foreground">
                             {formatRelativeOrDate(message.createdAt)}

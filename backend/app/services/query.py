@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import re
@@ -1409,21 +1410,28 @@ async def execute_standard_query(
     research_started = time.perf_counter()
     await _emit(on_progress, {"type": "step_started", "step": "research", "label": "Research"})
     retrieval_started = time.perf_counter()
-    try:
-        retrieval_bundle = await retrieve_hybrid_candidates(
-            session=session,
-            tenant_id=tenant_context.tenant_id,
-            namespace_id=query_request.namespace_id,
-            query_text=query_request.query,
-            query_plan=query_plan,
-            execution_tier=routing_decision.effective_tier,
-            freshness_profile=getattr(
-                namespace,
-                "freshness_profile",
-                FreshnessProfile.BALANCED,
-            ),
-        )
-    except RetrievalError:
+    _retrieval_bundle: RetrievalBundle | None = None
+    _retrieval_error = False
+    for _attempt in range(2):
+        try:
+            _retrieval_bundle = await retrieve_hybrid_candidates(
+                session=session,
+                tenant_id=tenant_context.tenant_id,
+                namespace_id=query_request.namespace_id,
+                query_text=query_request.query,
+                query_plan=query_plan,
+                execution_tier=routing_decision.effective_tier,
+                freshness_profile=getattr(namespace, "freshness_profile", FreshnessProfile.BALANCED),
+            )
+            _retrieval_error = False
+            break
+        except RetrievalError:
+            _retrieval_error = True
+            if _attempt == 0:
+                logger.warning("retrieval_failed_retrying", query=query_request.query)
+                await asyncio.sleep(0.4)
+
+    if _retrieval_error:
         retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
         research_ms = int((time.perf_counter() - research_started) * 1000)
         await _emit(on_progress, {
@@ -1484,10 +1492,11 @@ async def execute_standard_query(
         return QueryExecutionResult(response=_degraded, trace_id=_trace.trace_id)
 
     retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
+    retrieval_bundle = _retrieval_bundle  # type: ignore[assignment]
 
     evidence_started = time.perf_counter()
     evidence_package = package_evidence(
-        retrieval_bundle,
+        retrieval_bundle,  # type: ignore[arg-type]
         query_text=query_plan.resolved_query_text,
         execution_tier=routing_decision.effective_tier,
     )
