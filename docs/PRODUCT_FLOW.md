@@ -19,10 +19,9 @@ It also clarifies how user-facing **modes** relate to internal execution
 
 This document should be read together with:
 
-- `docs/SOLUTION_ARCHITECTURE.md`
 - `docs/SYSTEM_DESIGN.md`
-- `docs/IMPLEMENTATION_PLAN.md`
-- `docs/STANDARD_TIER_PHASE1.md`
+- `docs/SWAGGER_TEST_FLOW.md`
+- `docs/BENCHMARKING_README.md`
 
 ---
 
@@ -445,14 +444,11 @@ It also supports the first product-shell backend:
 - conversations
 - messages
 - runs
-- dashboard
+- dashboard API
 - API keys
 
-That makes it a strong foundation for the fuller frontend and later-tier work.
-
-The concrete backend-first delivery plan for that product shell is documented in:
-
-- `docs/PHASE_1_5_BACKEND_PLAN.md`
+That makes it a strong backend foundation for API clients and the separate
+client application.
 
 ---
 
