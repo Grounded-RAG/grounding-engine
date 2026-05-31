@@ -18,9 +18,9 @@ export interface AuthSmokeResponse {
 
 export interface EmailAuthResponse extends AuthSmokeResponse {
   api_key: string;
-  workspace_id: string;
-  workspace_name: string;
-  workspace_slug: string;
+  workspace_id: string | null;
+  workspace_name: string | null;
+  workspace_slug: string | null;
   created_tenant: boolean;
   created_workspace: boolean;
 }
@@ -173,9 +173,51 @@ export interface RunResponse {
   provider_fallback_from: string | null;
   retrieved_chunk_ids: string[];
   selected_evidence_ids: string[];
+  stage_latencies_ms: Record<string, number>;
   total_latency_ms: number;
+  feedback_rating: "positive" | "negative" | null;
+  feedback_reasons: string[];
+  feedback_text: string | null;
   created_at: string;
 }
+
+export type FeedbackReason =
+  | "FAILS_TO_ANSWER"
+  | "HALLUCINATION"
+  | "IRRELEVANT_INFORMATION"
+  | "WRONG_CITATIONS"
+  | "PROSE_ERRORS"
+  | "OTHER";
+
+export interface FeedbackSubmission {
+  rating: "positive" | "negative";
+  reasons: FeedbackReason[];
+  freeform_text: string | null;
+}
+
+export type WorkflowStepId =
+  | "init"
+  | "conversation_history"
+  | "check_retrieval"
+  | "research"
+  | "generate";
+
+export type WorkflowStepStatus = "idle" | "running" | "completed";
+
+export interface WorkflowStep {
+  step: WorkflowStepId;
+  label: string;
+  status: WorkflowStepStatus;
+  durationMs?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export type ChatStreamEvent =
+  | { type: "step_started"; step: WorkflowStepId; label: string }
+  | { type: "step_completed"; step: WorkflowStepId; label: string; duration_ms: number; evidence_count?: number; message_count?: number }
+  | { type: "answer"; data: AgentChatResponse }
+  | { type: "error"; detail: string; status_code: number }
+  | { type: "done" };
 
 export interface DashboardSummaryResponse {
   dataset_count: number;
@@ -211,6 +253,59 @@ export interface ApiKeyResponse {
 
 export interface ApiKeyCreateResponse extends ApiKeyResponse {
   api_key: string;
+}
+
+export type WorkspaceMemberRole = "admin" | "member" | "viewer";
+export type WorkspaceMemberStatus = "pending" | "active" | "removed";
+
+export interface TeamMemberResponse {
+  member_id: string;
+  workspace_id: string;
+  email: string;
+  role: WorkspaceMemberRole;
+  status: WorkspaceMemberStatus;
+  invited_at: string;
+  joined_at: string | null;
+}
+
+export interface AuditLogResponse {
+  log_id: string;
+  workspace_id: string | null;
+  actor_key_id: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  summary: string | null;
+  created_at: string;
+}
+
+export interface AuditLogListResponse {
+  items: AuditLogResponse[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export type SubscriptionPlan = "free" | "pro" | "business" | "enterprise";
+export type BillingSubscriptionStatus = "active" | "past_due" | "canceled" | "trialing";
+
+export interface BillingSubscriptionResponse {
+  subscription_id: string;
+  plan: SubscriptionPlan;
+  status: BillingSubscriptionStatus;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  features: string[];
+}
+
+export interface BillingPortalResponse {
+  portal_url: string | null;
+  message: string;
+}
+
+export interface SSOInitiateResponse {
+  redirect_url: string | null;
+  message: string;
 }
 
 export interface ModeCapabilityResponse {

@@ -18,6 +18,8 @@ from app.core.database import get_db_session
 from app.core.security import hash_api_key
 from app.core.telemetry import bind_tenant_context
 from app.models import APIKey, ExecutionTier, SubscriptionPlan
+from app.models.enums import WorkspaceMemberRole, WorkspaceMemberStatus
+from app.models.workspace_member import WorkspaceMember
 
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -109,3 +111,40 @@ async def get_tenant_context(
         api_key_id=api_key_record.key_id,
         api_key_label=api_key_record.label,
     )
+
+
+_ROLE_RANK = {
+    WorkspaceMemberRole.VIEWER: 0,
+    WorkspaceMemberRole.MEMBER: 1,
+    WorkspaceMemberRole.ADMIN: 2,
+}
+
+
+def require_workspace_role(minimum_role: WorkspaceMemberRole):
+    """Return a dependency that enforces one minimum active workspace role."""
+
+    async def _check(
+        workspace_id: UUID,
+        ctx: TenantContext = Depends(get_tenant_context),
+        session: AsyncSession = Depends(get_db_session),
+    ) -> None:
+        result = await session.execute(
+            select(WorkspaceMember).where(
+                WorkspaceMember.tenant_id == ctx.tenant_id,
+                WorkspaceMember.workspace_id == workspace_id,
+                WorkspaceMember.status == WorkspaceMemberStatus.ACTIVE,
+            )
+        )
+        member = result.scalar_one_or_none()
+        if member is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not an active member of this workspace.",
+            )
+        if _ROLE_RANK.get(member.role, -1) < _ROLE_RANK[minimum_role]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"This action requires the '{minimum_role.value}' role or higher.",
+            )
+
+    return _check

@@ -38,8 +38,12 @@ def test_ready_health_endpoint_reports_dependency_status(
     async def storage_ready() -> bool:
         return True
 
+    def qdrant_ready() -> bool:
+        return True
+
     monkeypatch.setattr(health_module, "ping_database", database_ready)
     monkeypatch.setattr(health_module, "ensure_storage_ready", storage_ready)
+    monkeypatch.setattr(health_module, "ping_qdrant", qdrant_ready)
 
     response = client.get("/health/ready")
 
@@ -53,6 +57,7 @@ def test_ready_health_endpoint_reports_dependency_status(
             "config": "ok",
             "database": "ok",
             "storage": "ok",
+            "vector_store": "ok",
         },
     }
 
@@ -69,8 +74,12 @@ def test_ready_health_endpoint_returns_503_when_dependency_fails(
     async def storage_ready() -> bool:
         return True
 
+    def qdrant_ready() -> bool:
+        return True
+
     monkeypatch.setattr(health_module, "ping_database", database_not_ready)
     monkeypatch.setattr(health_module, "ensure_storage_ready", storage_ready)
+    monkeypatch.setattr(health_module, "ping_qdrant", qdrant_ready)
 
     response = client.get("/health/ready")
 
@@ -84,5 +93,6 @@ def test_ready_health_endpoint_returns_503_when_dependency_fails(
             "config": "ok",
             "database": "error",
             "storage": "ok",
+            "vector_store": "ok",
         },
     }

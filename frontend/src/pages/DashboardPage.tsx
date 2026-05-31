@@ -57,10 +57,10 @@ const FALLBACK_MODE_OPTIONS: ModeCapabilityResponse[] = [
   {
     mode: "verified",
     label: "Verified",
-    enabled: false,
+    enabled: true,
     backing_tier: "critical",
     description: "Highest-assurance path for sensitive work.",
-    availability_reason: "coming_soon",
+    availability_reason: null,
   },
 ];
 

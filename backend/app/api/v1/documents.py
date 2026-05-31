@@ -4,22 +4,15 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    Depends,
-    File,
-    Form,
-    HTTPException,
-    Response,
-    UploadFile,
-    status,
-)
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from arq import create_pool
 
 from app.api.deps import TenantContext, get_tenant_context
 from app.config import get_settings
 from app.core.database import get_db_session
+from app.models import Namespace
 from app.schemas.documents import (
     DocumentReindexResponse,
     DocumentUploadResponse,
@@ -31,7 +24,8 @@ from app.services.documents import (
     get_ingestion_job_for_tenant,
     reindex_document_for_tenant,
 )
-from app.workers import run_standard_ingestion_pipeline_background
+from app.services.audit_logs import write_audit_log
+from app.worker_settings import get_redis_settings
 
 router = APIRouter()
 
@@ -42,7 +36,6 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
 )
 async def upload_document(
-    background_tasks: BackgroundTasks,
     response: Response,
     namespace_id: UUID = Form(...),
     title: str | None = Form(default=None),
@@ -67,10 +60,29 @@ async def upload_document(
         response.status_code = status.HTTP_200_OK
 
     if get_settings().ingestion_autorun_enabled and result.should_schedule_ingestion:
-        background_tasks.add_task(
-            run_standard_ingestion_pipeline_background,
-            result.ingestion_job.job_id,
+        redis_pool = await create_pool(get_redis_settings())
+        await redis_pool.enqueue_job("ingest_document", str(result.ingestion_job.job_id))
+        await redis_pool.aclose()
+
+    namespace_result = await session.execute(
+        select(Namespace).where(
+            Namespace.tenant_id == tenant_context.tenant_id,
+            Namespace.namespace_id == namespace_id,
         )
+    )
+    namespace = namespace_result.scalar_one_or_none()
+    workspace_id = namespace.workspace_id if namespace is not None else None
+
+    await write_audit_log(
+        session=session,
+        tenant_id=tenant_context.tenant_id,
+        actor_key_id=tenant_context.api_key_id,
+        workspace_id=workspace_id,
+        action="document.uploaded",
+        resource_type="document",
+        resource_id=str(result.document.doc_id),
+        summary=f"Document '{result.filename}' uploaded",
+    )
 
     return DocumentUploadResponse(
         document_id=result.document.doc_id,
@@ -124,7 +136,6 @@ async def get_ingestion_job_status(
     response_model=DocumentReindexResponse,
 )
 async def reindex_document_route(
-    background_tasks: BackgroundTasks,
     document_id: UUID,
     tenant_context: TenantContext = Depends(get_tenant_context),
     session: AsyncSession = Depends(get_db_session),
@@ -141,10 +152,9 @@ async def reindex_document_route(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     if get_settings().ingestion_autorun_enabled and result.should_schedule_ingestion:
-        background_tasks.add_task(
-            run_standard_ingestion_pipeline_background,
-            result.ingestion_job.job_id,
-        )
+        redis_pool = await create_pool(get_redis_settings())
+        await redis_pool.enqueue_job("ingest_document", str(result.ingestion_job.job_id))
+        await redis_pool.aclose()
 
     return DocumentReindexResponse(
         document_id=result.document.doc_id,

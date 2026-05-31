@@ -42,8 +42,40 @@ class EmailAuthResponse(AuthSmokeResponse):
     """Response returned after email auth succeeds."""
 
     api_key: str
-    workspace_id: UUID
-    workspace_name: str
-    workspace_slug: str
+    workspace_id: UUID | None = None
+    workspace_name: str | None = None
+    workspace_slug: str | None = None
     created_tenant: bool = False
     created_workspace: bool = False
+
+
+class GoogleAuthRequest(BaseModel):
+    """Google OAuth sign-in request carrying the ID token from the browser."""
+
+    id_token: str = Field(min_length=1, max_length=4096)
+
+
+class GoogleOAuthStartResponse(BaseModel):
+    """Response returning the Google OAuth authorization URL."""
+
+    authorization_url: str
+
+
+class GoogleOAuthCodeRequest(BaseModel):
+    """Google OAuth callback payload carrying the authorization code."""
+
+    code: str = Field(min_length=1, max_length=4096)
+    redirect_uri: str = Field(min_length=1, max_length=2048)
+
+
+class SSOInitiateRequest(BaseModel):
+    """Request to initiate an SSO/SAML flow."""
+
+    organization_slug: str = Field(min_length=1, max_length=120)
+
+
+class SSOInitiateResponse(BaseModel):
+    """Response returning the SSO redirect URL."""
+
+    redirect_url: str | None
+    message: str

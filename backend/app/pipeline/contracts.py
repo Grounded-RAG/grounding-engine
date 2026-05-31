@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 from uuid import UUID
 
@@ -228,3 +228,6 @@ class GroundedAnswerDraft:
     generator_provider: str
     support_coverage: float = 0.0
     source_diversity: int = 0
+    token_usage: dict[str, int] = field(
+        default_factory=lambda: {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    )

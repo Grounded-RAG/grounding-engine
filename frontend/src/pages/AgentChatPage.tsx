@@ -1,17 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   ArrowLeft,
   Bot,
+  Check,
+  Copy,
   Database,
   FileSearch,
+  Flag,
+  GitMerge,
   LoaderCircle,
   Plus,
   RefreshCw,
   Send,
+  Share2,
   Sparkles,
+  ThumbsDown,
+  ThumbsUp,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -28,7 +37,8 @@ import {
   getRun,
   listAgentConversations,
   listDatasets,
-  sendAgentChat,
+  streamAgentChat,
+  submitFeedback,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatRelativeOrDate, sentenceCase } from "@/lib/format";
@@ -41,11 +51,15 @@ import {
   supportSummaryText,
 } from "@/lib/trust";
 import type {
-  AgentChatResponse,
+  FeedbackSubmission,
   MessageResponse,
   ModeCapabilityResponse,
   UserFacingMode,
+  WorkflowStep,
 } from "@/lib/types";
+import WorkflowStepsPanel from "@/components/WorkflowStepsPanel";
+import QueryJourneyModal from "@/components/QueryJourneyModal";
+import FeedbackModal from "@/components/FeedbackModal";
 
 const FALLBACK_MODE_OPTIONS: ModeCapabilityResponse[] = [
   {
@@ -75,10 +89,10 @@ const FALLBACK_MODE_OPTIONS: ModeCapabilityResponse[] = [
   {
     mode: "verified",
     label: "Verified",
-    enabled: false,
+    enabled: true,
     backing_tier: "critical",
     description: "Highest-assurance path for sensitive work.",
-    availability_reason: "coming_soon",
+    availability_reason: null,
   },
 ];
 
@@ -112,15 +126,6 @@ interface ChatSubmission {
   mode: UserFacingMode;
   datasetId?: string;
   submittedAt: string;
-}
-
-interface ChatMutationResult {
-  response: AgentChatResponse;
-  conversationId: string;
-}
-
-interface ChatMutationError extends Error {
-  conversationId?: string | null;
 }
 
 type VisibleChatMessage =
@@ -219,23 +224,23 @@ function AssistantStatusCopy({ submittedAt }: { submittedAt: string }) {
   return <span className="text-sm text-muted-foreground">{GENERATING_COPY[cycleIndex]}</span>;
 }
 
-function buildMessageCacheEntry(
-  messageId: string,
-  conversationId: string,
-  role: "user" | "assistant",
-  content: string,
-  createdAt: string,
-  runId: string | null,
-): MessageResponse {
-  return {
-    message_id: messageId,
-    conversation_id: conversationId,
-    created_by_api_key_id: null,
-    run_id: runId,
-    role,
-    content,
-    created_at: createdAt,
-  };
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      title="Copy"
+      onClick={() => {
+        void navigator.clipboard?.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+    >
+      {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
 }
 
 function isSameConversation(
@@ -266,6 +271,15 @@ export default function AgentChatPage() {
   const [datasetToAttachId, setDatasetToAttachId] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [localExchange, setLocalExchange] = useState<LocalExchange | null>(null);
+  const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
+  const [showWorkflowPanel, setShowWorkflowPanel] = useState(false);
+  const [lastStreamedRunId, setLastStreamedRunId] = useState<string | null>(null);
+  const [queryJourneyRunId, setQueryJourneyRunId] = useState<string | null>(null);
+  const [feedbackRunId, setFeedbackRunId] = useState<string | null>(null);
+  const [feedbackRating, setFeedbackRating] = useState<"positive" | "negative">("negative");
+  const [messageFeedback, setMessageFeedback] = useState<Record<string, "positive" | "negative">>({});
+  const [isStreaming, setIsStreaming] = useState(false);
+  const streamAbortRef = useRef<(() => void) | null>(null);
 
   const agentQuery = useQuery({
     queryKey: ["agent", id],
@@ -339,7 +353,7 @@ export default function AgentChatPage() {
 
   const modeOptions = useMemo(() => {
     const capabilityModes = capabilitiesQuery.data?.modes ?? FALLBACK_MODE_OPTIONS;
-    return capabilityModes.filter((mode) => mode.mode !== "verified");
+    return capabilityModes;
   }, [agentQuery.data?.allowed_modes, capabilitiesQuery.data?.modes]);
 
   useEffect(() => {
@@ -435,111 +449,124 @@ export default function AgentChatPage() {
     },
   });
 
-  const chatMutation = useMutation<ChatMutationResult, ChatMutationError, ChatSubmission>({
-    mutationFn: async (submission) => {
-      if (!apiKey || !id || !agentQuery.data) {
-        throw new Error("Agent chat is unavailable until the agent is loaded.");
-      }
 
-      let conversationId = submission.conversationId;
-      if (!conversationId) {
-        const newConversation = await createAgentConversation(apiKey, id, {
-          title: submission.conversationTitle,
-          mode: submission.mode,
-        });
-        conversationId = newConversation.conversation_id;
-      }
+  const runStreamingChat = useCallback(
+    async (submission: ChatSubmission & { resolvedConversationId: string }) => {
+      if (!apiKey || !id) return;
+
+      setIsStreaming(true);
+      setWorkflowSteps([]);
+      setShowWorkflowPanel(true);
+
+      let aborted = false;
+      streamAbortRef.current = () => { aborted = true; };
 
       try {
-        const response = await sendAgentChat(apiKey, id, {
-          conversation_id: conversationId,
+        const gen = streamAgentChat(apiKey, id, {
+          conversation_id: submission.resolvedConversationId,
           message: submission.message,
           mode: submission.mode,
           dataset_id: submission.datasetId,
         });
-        return { response, conversationId };
-      } catch (error) {
-        const wrapped =
-          error instanceof Error ? (error as ChatMutationError) : (new Error("Unable to send the message.") as ChatMutationError);
-        wrapped.conversationId = conversationId;
-        throw wrapped;
-      }
-    },
-    onMutate: (submission) => {
-      setLocalExchange({
-        ...submission,
-        status: "pending",
-      });
-    },
-    onSuccess: ({ response, conversationId }, submission) => {
-      setDraft("");
-      setActiveRunId(response.run_id);
-      setSelectedConversationId(conversationId);
-      setLocalExchange(null);
 
-      queryClient.setQueryData<MessageResponse[]>(
-        ["conversation", response.conversation_id, "messages"],
-        (current = []) => {
-          const existingIds = new Set(current.map((message) => message.message_id));
-          const nextMessages = [...current];
+        for await (const event of gen) {
+          if (aborted) break;
 
-          if (!existingIds.has(response.user_message_id)) {
-            nextMessages.push(
-              buildMessageCacheEntry(
-                response.user_message_id,
-                response.conversation_id,
-                "user",
-                submission.message,
-                submission.submittedAt,
-                null,
+          if (event.type === "step_started") {
+            setWorkflowSteps((prev) => {
+              if (prev.find((s) => s.step === event.step)) {
+                return prev.map((s) =>
+                  s.step === event.step ? { ...s, status: "running" } : s,
+                );
+              }
+              return [...prev, { step: event.step, label: event.label, status: "running" }];
+            });
+          } else if (event.type === "step_completed") {
+            setWorkflowSteps((prev) =>
+              prev.map((s) =>
+                s.step === event.step
+                  ? {
+                      ...s,
+                      status: "completed",
+                      durationMs: event.duration_ms,
+                      metadata: {
+                        ...(event.evidence_count !== undefined ? { evidence_count: event.evidence_count } : {}),
+                        ...(event.message_count !== undefined ? { message_count: event.message_count } : {}),
+                      },
+                    }
+                  : s,
               ),
             );
-          }
+          } else if (event.type === "answer") {
+            const response = event.data;
+            setActiveRunId(response.run_id);
+            setLastStreamedRunId(response.run_id);
+            setSelectedConversationId(response.conversation_id);
+            setLocalExchange(null);
+            setDraft("");
 
-          if (!existingIds.has(response.assistant_message_id)) {
-            nextMessages.push(
-              buildMessageCacheEntry(
-                response.assistant_message_id,
-                response.conversation_id,
-                "assistant",
-                response.answer,
-                new Date().toISOString(),
-                response.run_id,
-              ),
+            queryClient.setQueryData<MessageResponse[]>(
+              ["conversation", response.conversation_id, "messages"],
+              (current = []) => {
+                const existingIds = new Set(current.map((m) => m.message_id));
+                const next = [...current];
+                if (!existingIds.has(response.user_message_id)) {
+                  next.push({
+                    message_id: response.user_message_id,
+                    conversation_id: response.conversation_id,
+                    created_by_api_key_id: null,
+                    run_id: null,
+                    role: "user",
+                    content: submission.message,
+                    created_at: submission.submittedAt,
+                  });
+                }
+                if (!existingIds.has(response.assistant_message_id)) {
+                  next.push({
+                    message_id: response.assistant_message_id,
+                    conversation_id: response.conversation_id,
+                    created_by_api_key_id: null,
+                    run_id: response.run_id,
+                    role: "assistant",
+                    content: response.answer,
+                    created_at: new Date().toISOString(),
+                  });
+                }
+                return next;
+              },
             );
+
+            void queryClient.invalidateQueries({ queryKey: ["agent", id, "conversations"] });
+            void queryClient.invalidateQueries({ queryKey: ["conversation", response.conversation_id, "messages"] });
+            void queryClient.invalidateQueries({ queryKey: ["runs"] });
+            void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+          } else if (event.type === "error") {
+            setLocalExchange((prev) =>
+              prev ? { ...prev, status: "error", errorMessage: event.detail } : null,
+            );
+            toast.error(event.detail);
           }
-
-          return nextMessages;
-        },
-      );
-
-      void queryClient.invalidateQueries({ queryKey: ["agent", id, "conversations"] });
-      void queryClient.invalidateQueries({ queryKey: ["conversation", response.conversation_id, "messages"] });
-      void queryClient.invalidateQueries({ queryKey: ["runs"] });
-      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-    },
-    onError: (error, submission) => {
-      setLocalExchange((current) => ({
-        ...(current ?? submission),
-        conversationId: error.conversationId ?? submission.conversationId,
-        status: "error",
-        errorMessage: error.message || "Unable to send the message.",
-      }));
-
-      if (error.conversationId) {
-        setSelectedConversationId(error.conversationId);
-        void queryClient.invalidateQueries({ queryKey: ["agent", id, "conversations"] });
+        }
+      } catch (err) {
+        if (!aborted) {
+          const msg = err instanceof Error ? err.message : "Unable to send the message.";
+          setLocalExchange((prev) =>
+            prev ? { ...prev, status: "error", errorMessage: msg } : null,
+          );
+          toast.error(msg);
+        }
+      } finally {
+        streamAbortRef.current = null;
+        setIsStreaming(false);
       }
-
-      const message = error instanceof Error ? error.message : "Unable to send the message.";
-      toast.error(message);
     },
-  });
+    [apiKey, id, queryClient],
+  );
 
   const availableDatasets = datasetsQuery.data ?? [];
   const conversations = conversationsQuery.data ?? [];
   const messages = messagesQuery.data ?? [];
-  const hasActiveRun = localExchange?.status === "pending" || chatMutation.isPending;
+  const hasActiveRun = localExchange?.status === "pending" || isStreaming;
   const run = runQuery.data;
   const activeConversation =
     conversations.find((conversation) => conversation.conversation_id === selectedConversationId) ?? null;
@@ -598,6 +625,12 @@ export default function AgentChatPage() {
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [visibleMessages.length, localExchange?.status, selectedConversationId]);
+
+  useEffect(() => {
+    return () => {
+      streamAbortRef.current?.();
+    };
+  }, []);
 
   if (agentQuery.isLoading) {
     return <div className="h-[calc(100vh-3.5rem)] rounded-2xl border bg-card animate-pulse" />;
@@ -669,16 +702,30 @@ export default function AgentChatPage() {
 
   function submitMessage(messageText: string) {
     const submission = prepareSubmission(messageText);
-    if (!submission) {
-      return;
-    }
+    if (!submission) return;
 
     setDraft("");
-    chatMutation.mutate(submission);
+
+    if (!submission.conversationId) {
+      createConversationMutation.mutate(submission.conversationTitle, {
+        onSuccess: (conversation) => {
+          const resolvedSubmission = { ...submission, conversationId: conversation.conversation_id };
+          setLocalExchange({ ...resolvedSubmission, status: "pending" });
+          void runStreamingChat({ ...resolvedSubmission, resolvedConversationId: conversation.conversation_id });
+        },
+        onError: (error) => {
+          const msg = error instanceof Error ? error.message : "Unable to create conversation.";
+          toast.error(msg);
+        },
+      });
+    } else {
+      setLocalExchange({ ...submission, status: "pending" });
+      void runStreamingChat({ ...submission, resolvedConversationId: submission.conversationId });
+    }
   }
 
   function retryLastMessage() {
-    if (!localExchange || localExchange.status !== "error") {
+    if (!localExchange || localExchange.status !== "error" || !localExchange.conversationId) {
       return;
     }
 
@@ -693,7 +740,8 @@ export default function AgentChatPage() {
       submittedAt: new Date().toISOString(),
     };
 
-    chatMutation.mutate(retrySubmission);
+    setLocalExchange({ ...retrySubmission, status: "pending" });
+    void runStreamingChat({ ...retrySubmission, resolvedConversationId: localExchange.conversationId });
   }
 
   return (
@@ -902,9 +950,52 @@ export default function AgentChatPage() {
                             }`}
                           >
                             {message.isPending ? (
-                              <div className="space-y-4">
+                              <div className="space-y-3">
                                 <TypingIndicator />
-                                <AssistantStatusCopy submittedAt={message.createdAt} />
+                                {workflowSteps.length > 0 ? (
+                                  <div className="mt-3 space-y-2">
+                                    {workflowSteps.map((step) => {
+                                      const isRunning = step.status === "running";
+                                      const isCompleted = step.status === "completed";
+                                      return (
+                                        <div key={step.step} className="flex items-center gap-2 text-xs">
+                                          {isRunning ? (
+                                            <LoaderCircle className="h-3.5 w-3.5 animate-spin text-blue-400 shrink-0" />
+                                          ) : isCompleted ? (
+                                            <svg viewBox="0 0 12 12" className="h-3.5 w-3.5 shrink-0 text-emerald-500" fill="none">
+                                              <path d="M2 6 L5 9 L10 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                                            </svg>
+                                          ) : (
+                                            <div className="h-3.5 w-3.5 shrink-0 rounded-full border border-border" />
+                                          )}
+                                          <span className={isRunning ? "text-foreground font-medium" : isCompleted ? "text-muted-foreground" : "text-muted-foreground/50"}>
+                                            {step.label}
+                                            {step.step === "research" && isCompleted && step.metadata?.evidence_count !== undefined && (
+                                              <span className="ml-1 text-muted-foreground">
+                                                — {String(step.metadata.evidence_count)} piece{Number(step.metadata.evidence_count) !== 1 ? "s" : ""} of evidence
+                                              </span>
+                                            )}
+                                          </span>
+                                          {isCompleted && step.durationMs !== undefined && (
+                                            <span className="ml-auto text-[10px] text-muted-foreground/60">
+                                              {step.durationMs >= 1000 ? `${(step.durationMs / 1000).toFixed(2)}s` : `${step.durationMs}ms`}
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowWorkflowPanel(true)}
+                                      className="mt-1 flex items-center gap-1 text-[11px] text-accent hover:underline"
+                                    >
+                                      <GitMerge className="h-3 w-3" />
+                                      View Workflow Progress
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <AssistantStatusCopy submittedAt={message.createdAt} />
+                                )}
                               </div>
                             ) : message.isError ? (
                               <div className="space-y-4">
@@ -933,21 +1024,189 @@ export default function AgentChatPage() {
                               </div>
                             ) : (
                               <>
-                                <p className="whitespace-pre-line text-[15px] leading-8 text-foreground">
-                                  {message.content}
-                                </p>
-                                <div className="mt-4 flex flex-wrap items-center gap-2">
-                                  {message.runId ? (
+                                <div className="prose prose-sm max-w-none text-foreground [&_p]:leading-8 [&_p]:text-[15px] [&_li]:text-[15px] [&_li]:leading-7 [&_h1]:text-xl [&_h2]:text-lg [&_h3]:text-base [&_strong]:text-foreground [&_code]:rounded [&_code]:bg-secondary [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-sm [&_pre]:rounded-xl [&_pre]:bg-secondary [&_pre]:p-4 [&_blockquote]:border-l-accent [&_a]:text-accent">
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                    {message.content}
+                                  </ReactMarkdown>
+                                </div>
+
+                                {/* Inline workflow steps preview — only on the latest streamed message */}
+                                {message.runId && message.runId === lastStreamedRunId && workflowSteps.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowWorkflowPanel(true)}
+                                    className="mt-4 w-full rounded-2xl border border-border/60 bg-secondary/30 px-4 py-3 text-left hover:border-accent/30 hover:bg-secondary/50 transition-all group"
+                                  >
+                                    <div className="mb-2 flex items-center justify-between">
+                                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Pipeline Execution</span>
+                                      <span className="text-[10px] text-accent opacity-0 group-hover:opacity-100 transition-opacity">View full diagram →</span>
+                                    </div>
+                                    {/* Row 1: first 3 steps */}
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      {workflowSteps.slice(0, 3).map((step, i) => (
+                                        <div key={step.step} className="flex items-center gap-1.5">
+                                          <div className="flex items-center gap-1.5 rounded-xl border border-border/80 bg-background px-2.5 py-1.5">
+                                            <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50">
+                                              <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 text-emerald-600" fill="none">
+                                                <path d="M2 6 L5 9 L10 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                                              </svg>
+                                            </div>
+                                            <span className="text-[11px] font-medium text-foreground">{step.label}</span>
+                                            {step.durationMs !== undefined && (
+                                              <span className="text-[10px] text-muted-foreground">
+                                                {step.durationMs >= 1000 ? `${(step.durationMs / 1000).toFixed(2)}s` : `${step.durationMs}ms`}
+                                              </span>
+                                            )}
+                                          </div>
+                                          {i < 2 && (
+                                            <svg width="16" height="10" viewBox="0 0 16 10" fill="none" className="shrink-0 text-muted-foreground/40">
+                                              <path d="M0 5 H12 M9 2 L13 5 L9 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                                            </svg>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                    {/* Row 2: remaining steps */}
+                                    {workflowSteps.length > 3 && (
+                                      <div className="mt-1.5 flex items-center gap-1.5 pl-6">
+                                        <svg width="10" height="16" viewBox="0 0 10 16" fill="none" className="shrink-0 text-muted-foreground/40">
+                                          <path d="M5 0 V12 M2 9 L5 13 L8 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                                        </svg>
+                                        {workflowSteps.slice(3).map((step, i) => (
+                                          <div key={step.step} className="flex items-center gap-1.5">
+                                            <div className="flex items-center gap-1.5 rounded-xl border border-border/80 bg-background px-2.5 py-1.5">
+                                              <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50">
+                                                <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 text-emerald-600" fill="none">
+                                                  <path d="M2 6 L5 9 L10 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                                                </svg>
+                                              </div>
+                                              <span className="text-[11px] font-medium text-foreground">{step.label}</span>
+                                              {step.durationMs !== undefined && (
+                                                <span className="text-[10px] text-muted-foreground">
+                                                  {step.durationMs >= 1000 ? `${(step.durationMs / 1000).toFixed(2)}s` : `${step.durationMs}ms`}
+                                                </span>
+                                              )}
+                                            </div>
+                                            {i < workflowSteps.slice(3).length - 1 && (
+                                              <svg width="16" height="10" viewBox="0 0 16 10" fill="none" className="shrink-0 text-muted-foreground/40">
+                                                <path d="M0 5 H12 M9 2 L13 5 L9 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                                              </svg>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </button>
+                                )}
+
+                                {/* Action bar */}
+                                <div className="mt-3 flex items-center justify-between">
+                                  <div className="flex items-center gap-0.5">
+                                    {/* Thumbs up */}
                                     <button
                                       type="button"
-                                      onClick={() => setActiveRunId(message.runId)}
-                                      className="inline-flex"
+                                      title="Good response"
+                                      onClick={async () => {
+                                        if (!message.runId || !apiKey) return;
+                                        const prev = messageFeedback[message.runId];
+                                        if (prev === "positive") return;
+                                        setMessageFeedback((m) => ({ ...m, [message.runId!]: "positive" }));
+                                        try {
+                                          await submitFeedback(apiKey, message.runId, { rating: "positive", reasons: [], freeform_text: null });
+                                          toast.success("Thanks for the feedback!");
+                                        } catch {
+                                          setMessageFeedback((m) => { const n = { ...m }; delete n[message.runId!]; return n; });
+                                        }
+                                      }}
+                                      className={`rounded p-1.5 transition-colors ${messageFeedback[message.runId ?? ""] === "positive" ? "text-emerald-600" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
                                     >
-                                      <Badge variant="accent" className="text-[10px]">
-                                        <FileSearch className="mr-0.5 h-2.5 w-2.5" /> Inspect run
-                                      </Badge>
+                                      <ThumbsUp className="h-3.5 w-3.5" />
                                     </button>
-                                  ) : null}
+                                    {/* Thumbs down */}
+                                    <button
+                                      type="button"
+                                      title="Bad response"
+                                      onClick={() => {
+                                        if (!message.runId) return;
+                                        setFeedbackRating("negative");
+                                        setFeedbackRunId(message.runId);
+                                      }}
+                                      className={`rounded p-1.5 transition-colors ${messageFeedback[message.runId ?? ""] === "negative" ? "text-destructive" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
+                                    >
+                                      <ThumbsDown className="h-3.5 w-3.5" />
+                                    </button>
+                                    {/* Flag */}
+                                    <button
+                                      type="button"
+                                      title="Flag this response"
+                                      onClick={() => {
+                                        if (!message.runId) return;
+                                        setFeedbackRating("negative");
+                                        setFeedbackRunId(message.runId);
+                                      }}
+                                      className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                                    >
+                                      <Flag className="h-3.5 w-3.5" />
+                                    </button>
+
+                                    <div className="mx-1.5 h-4 w-px bg-border" />
+
+                                    {/* Copy */}
+                                    <CopyButton text={message.content} />
+
+                                    {/* Retry */}
+                                    <button
+                                      type="button"
+                                      title="Retry"
+                                      onClick={retryLastMessage}
+                                      disabled={hasActiveRun}
+                                      className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
+                                    >
+                                      <RefreshCw className="h-3.5 w-3.5" />
+                                    </button>
+
+                                    {/* Share */}
+                                    <button
+                                      type="button"
+                                      title="Share"
+                                      className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                                      onClick={() => {
+                                        void navigator.clipboard?.writeText(window.location.href);
+                                        toast.success("Link copied!");
+                                      }}
+                                    >
+                                      <Share2 className="h-3.5 w-3.5" />
+                                    </button>
+
+                                    <div className="mx-1.5 h-4 w-px bg-border" />
+
+                                    {/* Inspect run */}
+                                    {message.runId && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setActiveRunId(message.runId)}
+                                        className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                                        title="Inspect run"
+                                      >
+                                        <FileSearch className="h-3.5 w-3.5" />
+                                      </button>
+                                    )}
+
+                                    {/* Query Journey */}
+                                    {message.runId && (
+                                      <button
+                                        type="button"
+                                        title="Query Journey"
+                                        onClick={() => {
+                                          setActiveRunId(message.runId);
+                                          setQueryJourneyRunId(message.runId);
+                                        }}
+                                        className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                                      >
+                                        <GitMerge className="h-3.5 w-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
                                   <span className="text-[10px] text-muted-foreground">
                                     {formatRelativeOrDate(message.createdAt)}
                                   </span>
@@ -1083,8 +1342,20 @@ export default function AgentChatPage() {
       </section>
 
       <aside className="hidden overflow-y-auto border-l bg-card/90 xl:block">
+          <>
         <div className="border-b p-4">
-          <h3 className="text-sm font-semibold text-foreground">Answer Inspector</h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-foreground">Answer Inspector</h3>
+            {workflowSteps.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowWorkflowPanel(true)}
+                className="flex items-center gap-1 rounded-full border border-border px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground"
+              >
+                <GitMerge className="h-3 w-3" /> Workflow
+              </button>
+            )}
+          </div>
         </div>
 
         {!run ? (
@@ -1179,7 +1450,52 @@ export default function AgentChatPage() {
             </div>
           </>
         )}
+          </>
       </aside>
+
+      {queryJourneyRunId && runQuery.data && String(runQuery.data.run_id) === queryJourneyRunId ? (
+        <QueryJourneyModal
+          run={runQuery.data}
+          onClose={() => setQueryJourneyRunId(null)}
+        />
+      ) : queryJourneyRunId ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="flex h-24 w-48 items-center justify-center rounded-2xl border bg-background shadow-lg">
+            <LoaderCircle className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        </div>
+      ) : null}
+
+      {showWorkflowPanel && workflowSteps.length > 0 && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+          onClick={() => setShowWorkflowPanel(false)}
+        >
+          <div
+            className="relative flex h-[580px] w-full max-w-[860px] flex-col overflow-hidden rounded-3xl border bg-background shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <WorkflowStepsPanel
+              steps={workflowSteps}
+              onClose={() => setShowWorkflowPanel(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {feedbackRunId && (
+        <FeedbackModal
+          runId={feedbackRunId}
+          initialRating={feedbackRating}
+          onSubmit={async (feedback: FeedbackSubmission) => {
+            if (!apiKey) return;
+            await submitFeedback(apiKey, feedbackRunId, feedback);
+            setMessageFeedback((m) => ({ ...m, [feedbackRunId]: feedback.rating }));
+            toast.success("Thank you for your feedback!");
+          }}
+          onClose={() => setFeedbackRunId(null)}
+        />
+      )}
     </div>
   );
 }

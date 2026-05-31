@@ -131,6 +131,7 @@ async def generate_openai_compatible_draft(
     *,
     query_text: str,
     evidence_package: EvidencePackage,
+    agent_instructions: str = "",
 ) -> GroundedAnswerDraft:
     """Generate a grounded draft using an OpenAI-compatible chat-completions API."""
 
@@ -138,11 +139,15 @@ async def generate_openai_compatible_draft(
     if not settings.openai_api_key:
         raise OpenAICompatibleGenerationError("OPENAI_API_KEY is not configured.")
 
+    system_content = _build_system_prompt()
+    if agent_instructions.strip():
+        system_content = f"{system_content}\n\nAgent instructions: {agent_instructions.strip()}"
+
     request_payload = {
         "model": settings.openai_model,
         "response_format": {"type": "json_object"},
         "messages": [
-            {"role": "system", "content": _build_system_prompt()},
+            {"role": "system", "content": system_content},
             {
                 "role": "user",
                 "content": _build_user_prompt(
@@ -207,6 +212,10 @@ async def generate_openai_compatible_draft(
     )
     source_diversity = len({source for item in used_items for source in item.sources})
 
+    usage = response_payload.get("usage", {})
+    prompt_tokens = int(usage.get("prompt_tokens", 0))
+    completion_tokens = int(usage.get("completion_tokens", 0))
+
     return GroundedAnswerDraft(
         answer_text=parsed.answer_text,
         cited_evidence_ids=parsed.cited_evidence_ids,
@@ -214,4 +223,9 @@ async def generate_openai_compatible_draft(
         generator_provider=f"openai-compatible:{settings.openai_model}",
         support_coverage=round(support_coverage, 4),
         source_diversity=source_diversity,
+        token_usage={
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": int(usage.get("total_tokens", prompt_tokens + completion_tokens)),
+        },
     )

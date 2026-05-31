@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     alembic_database_url: str = (
         "postgresql+psycopg://grounded:grounded@localhost:5433/grounded"
     )
+    redis_url: str = "redis://localhost:6379/0"
     document_upload_max_bytes: int = 25 * 1024 * 1024
     ingestion_autorun_enabled: bool = True
     chunking_strategy: ChunkingStrategy = "deterministic_token_window_v1"
@@ -75,7 +76,12 @@ class Settings(BaseSettings):
     enterprise_reranker_backend: RerankerBackend = "gemini_v1"
     enterprise_reranker_candidate_limit: int = 24
     enterprise_temporal_scoring_enabled: bool = True
+    critical_enabled: bool = False
     api_key_salt: str = "replace-in-local-env"
+    resend_api_key: str = ""
+    frontend_url: str = "http://localhost:5173"
+    google_client_id: str = ""
+    google_client_secret: str = ""
     s3_endpoint_url: AnyHttpUrl = "http://localhost:9000"
     s3_bucket: str = "grounded-documents"
     s3_access_key: str = "minioadmin"

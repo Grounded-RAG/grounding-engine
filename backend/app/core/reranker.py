@@ -112,7 +112,7 @@ class StubEnterpriseReranker:
         ]
         return RerankerResult(
             backend_name=self.backend_name,
-            applied=True,
+            applied=False,
             hits=scored_hits,
             debug={"strategy": "pass_through"},
         )

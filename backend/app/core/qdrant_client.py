@@ -32,6 +32,15 @@ def reset_qdrant_client() -> None:
     get_qdrant_client.cache_clear()
 
 
+def ping_qdrant() -> bool:
+    """Return True if Qdrant is reachable, False otherwise."""
+    try:
+        get_qdrant_client().get_collections()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def ensure_qdrant_collection(*, vector_size: int) -> None:
     """Create the configured Qdrant collection if it does not exist."""
 

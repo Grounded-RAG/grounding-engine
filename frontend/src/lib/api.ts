@@ -3,8 +3,12 @@ import type {
   AgentResponse,
   ApiKeyCreateResponse,
   ApiKeyResponse,
+  AuditLogListResponse,
   AuthSmokeResponse,
+  BillingPortalResponse,
+  BillingSubscriptionResponse,
   CapabilitiesResponse,
+  ChatStreamEvent,
   ConversationResponse,
   DashboardRecentJobResponse,
   DashboardSummaryResponse,
@@ -14,8 +18,12 @@ import type {
   DatasetUploadResponse,
   EmailAuthResponse,
   MessageResponse,
+  FeedbackSubmission,
   RunResponse,
+  SSOInitiateResponse,
+  TeamMemberResponse,
   UserFacingMode,
+  WorkspaceMemberRole,
   WorkspaceResponse,
 } from "@/lib/types";
 
@@ -255,6 +263,65 @@ export function sendAgentChat(
   });
 }
 
+export async function* streamAgentChat(
+  apiKey: string,
+  agentId: string,
+  payload: {
+    conversation_id: string;
+    message: string;
+    mode?: UserFacingMode;
+    dataset_id?: string;
+  },
+): AsyncGenerator<ChatStreamEvent> {
+  const response = await fetch(`${API_BASE_URL}/v1/agents/${agentId}/chat/stream`, {
+    method: "POST",
+    headers: {
+      "X-API-Key": apiKey,
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok || !response.body) {
+    const text = await response.text().catch(() => response.statusText);
+    let detail = text;
+    try {
+      detail = (JSON.parse(text) as { detail?: string }).detail ?? text;
+    } catch {
+      // use raw text
+    }
+    throw new ApiError(response.status, detail);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("data: ")) {
+          const raw = trimmed.slice(6).trim();
+          if (raw) {
+            yield JSON.parse(raw) as ChatStreamEvent;
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export function listRuns(apiKey: string, datasetId?: string | null) {
   const query = datasetId ? `?dataset_id=${encodeURIComponent(datasetId)}` : "";
   return request<RunResponse[]>(`/v1/runs${query}`, apiKey);
@@ -262,6 +329,14 @@ export function listRuns(apiKey: string, datasetId?: string | null) {
 
 export function getRun(apiKey: string, runId: string) {
   return request<RunResponse>(`/v1/runs/${runId}`, apiKey);
+}
+
+export function submitFeedback(apiKey: string, runId: string, feedback: FeedbackSubmission) {
+  return request<RunResponse>(`/v1/runs/${runId}/feedback`, apiKey, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(feedback),
+  });
 }
 
 export function listApiKeys(apiKey: string) {
@@ -280,4 +355,109 @@ export function revokeApiKey(apiKey: string, keyId: string) {
   return request<ApiKeyResponse>(`/v1/api-keys/${keyId}/revoke`, apiKey, {
     method: "POST",
   });
+}
+
+// Team Members
+export function listTeamMembers(apiKey: string, workspaceId: string) {
+  return request<TeamMemberResponse[]>(`/v1/workspaces/${workspaceId}/members`, apiKey);
+}
+
+export function inviteTeamMember(
+  apiKey: string,
+  workspaceId: string,
+  payload: { email: string; role: WorkspaceMemberRole },
+) {
+  return request<TeamMemberResponse>(`/v1/workspaces/${workspaceId}/members`, apiKey, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateTeamMember(
+  apiKey: string,
+  workspaceId: string,
+  memberId: string,
+  payload: { role: WorkspaceMemberRole },
+) {
+  return request<TeamMemberResponse>(
+    `/v1/workspaces/${workspaceId}/members/${memberId}`,
+    apiKey,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function removeTeamMember(
+  apiKey: string,
+  workspaceId: string,
+  memberId: string,
+) {
+  const response = await fetch(
+    `${API_BASE_URL}/v1/workspaces/${workspaceId}/members/${memberId}`,
+    {
+      method: "DELETE",
+      headers: buildHeaders(apiKey),
+    },
+  );
+  if (!response.ok) {
+    const data = response.headers.get("content-type")?.includes("application/json")
+      ? await response.json()
+      : null;
+    const detail =
+      data && "detail" in data ? String(data.detail) : response.statusText || "Request failed";
+    throw new ApiError(response.status, detail);
+  }
+}
+
+// Audit Logs
+export function listAuditLogs(
+  apiKey: string,
+  params?: { workspace_id?: string; page?: number; page_size?: number },
+) {
+  const q = new URLSearchParams();
+  if (params?.workspace_id) q.set("workspace_id", params.workspace_id);
+  if (params?.page) q.set("page", String(params.page));
+  if (params?.page_size) q.set("page_size", String(params.page_size));
+  const query = q.toString() ? `?${q.toString()}` : "";
+  return request<AuditLogListResponse>(`/v1/audit-logs${query}`, apiKey);
+}
+
+// Billing
+export function getBillingSubscription(apiKey: string) {
+  return request<BillingSubscriptionResponse>("/v1/billing/subscription", apiKey);
+}
+
+export function getBillingPortal(apiKey: string) {
+  return request<BillingPortalResponse>("/v1/billing/portal", apiKey, { method: "POST" });
+}
+
+// SSO
+export async function initiateSso(payload: { organization_slug: string }) {
+  const response = await fetch(`${API_BASE_URL}/v1/auth/sso/initiate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseResponse<SSOInitiateResponse>(response);
+}
+
+// Google OAuth
+export async function getGoogleAuthorizationUrl(redirectUri: string) {
+  const response = await fetch(
+    `${API_BASE_URL}/v1/auth/google/start?redirect_uri=${encodeURIComponent(redirectUri)}`,
+  );
+  return parseResponse<{ authorization_url: string }>(response);
+}
+
+export async function completeGoogleOAuth(code: string, redirectUri: string) {
+  const response = await fetch(`${API_BASE_URL}/v1/auth/google/callback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, redirect_uri: redirectUri }),
+  });
+  return parseResponse<EmailAuthResponse>(response);
 }

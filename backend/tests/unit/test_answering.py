@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from app.pipeline.contracts import EvidenceItem, EvidencePackage
+from app.pipeline.contracts import EvidenceItem, EvidencePackage, GroundedAnswerDraft
 from app.services.answering import answer_from_evidence
 
 
@@ -24,8 +24,24 @@ def _evidence_item(*, citation_id: str, chunk_id: str, text: str, score: float) 
     )
 
 @pytest.mark.asyncio()
-async def test_answer_from_evidence_returns_grounded_response() -> None:
+async def test_answer_from_evidence_returns_grounded_response(monkeypatch: pytest.MonkeyPatch) -> None:
     """Answer orchestration should return a passed grounded response when evidence exists."""
+
+    async def fake_generate_answer_from_evidence(*, query_text: str, evidence_package: EvidencePackage):
+        del query_text, evidence_package
+        return GroundedAnswerDraft(
+            answer_text="Grounded returns cited answers.",
+            cited_evidence_ids=["chunk-1"],
+            citation_snippets={"chunk-1": "Grounded returns cited answers."},
+            generator_provider="test-generator-v1",
+            support_coverage=0.92,
+            source_diversity=1,
+        )
+
+    monkeypatch.setattr(
+        "app.services.answering.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
 
     package = EvidencePackage(
         retrieved_chunk_ids=["chunk-1"],
