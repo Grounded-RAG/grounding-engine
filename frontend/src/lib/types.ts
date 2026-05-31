@@ -175,7 +175,24 @@ export interface RunResponse {
   selected_evidence_ids: string[];
   stage_latencies_ms: Record<string, number>;
   total_latency_ms: number;
+  feedback_rating: "positive" | "negative" | null;
+  feedback_reasons: string[];
+  feedback_text: string | null;
   created_at: string;
+}
+
+export type FeedbackReason =
+  | "FAILS_TO_ANSWER"
+  | "HALLUCINATION"
+  | "IRRELEVANT_INFORMATION"
+  | "WRONG_CITATIONS"
+  | "PROSE_ERRORS"
+  | "OTHER";
+
+export interface FeedbackSubmission {
+  rating: "positive" | "negative";
+  reasons: FeedbackReason[];
+  freeform_text: string | null;
 }
 
 export type WorkflowStepId =

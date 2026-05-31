@@ -27,7 +27,7 @@ function buildSteps(run: RunResponse): StepInfo[] {
   if (convMs > 0) {
     steps.push({
       id: "conversation_history",
-      label: "CreateMessageHistory",
+      label: "Load Context",
       latencyMs: convMs,
       status: "success",
       tags: ["fast", "low"],
@@ -38,10 +38,10 @@ function buildSteps(run: RunResponse): StepInfo[] {
   if (checkMs > 0) {
     steps.push({
       id: "check_retrieval",
-      label: "IsRetrievalNeeded",
+      label: "Analyze Query",
       latencyMs: checkMs,
       status: "success",
-      tags: ["fast", "low", "verification"],
+      tags: ["fast", "low", "routing"],
       timePercent: Math.round((checkMs / total) * 100),
     });
   }
@@ -49,7 +49,7 @@ function buildSteps(run: RunResponse): StepInfo[] {
   if (researchMs > 0) {
     steps.push({
       id: "research",
-      label: "SearchIndex",
+      label: "Retrieve Evidence",
       latencyMs: researchMs,
       status: "success",
       tags: ["retrieval", run.effective_tier],
@@ -60,7 +60,7 @@ function buildSteps(run: RunResponse): StepInfo[] {
   if (answerMs > 0) {
     steps.push({
       id: "generate",
-      label: "RenderPrompt",
+      label: "Generate Answer",
       latencyMs: answerMs,
       status: "success",
       tags: ["generation", run.effective_tier],

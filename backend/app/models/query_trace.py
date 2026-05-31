@@ -120,6 +120,9 @@ class QueryTrace(Base):
     stage_latencies_ms: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     total_latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     token_usage: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    feedback_rating: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    feedback_reasons: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    feedback_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

@@ -509,38 +509,49 @@ async def generate_answer_from_evidence(
     """Generate a grounded answer draft using the current generation backend."""
 
     backend = resolve_generation_backend()
-    try:
-        draft = await backend.generate(
-            query_text=query_text,
-            evidence_package=evidence_package,
-            agent_instructions=agent_instructions,
-        )
-        if backend.implementation != "local":
-            validation_error = _provider_validation_error(
+    _last_exc: Exception | None = None
+
+    for _attempt in range(2):
+        try:
+            draft = await backend.generate(
                 query_text=query_text,
                 evidence_package=evidence_package,
-                draft=draft,
+                agent_instructions=agent_instructions,
             )
-            if validation_error is not None:
-                raise GroundedGenerationError(validation_error)
-        return draft
-    except GroundedGenerationError as exc:
-        if backend.implementation == "local":
-            raise
-        logger.warning(
-            "generation_provider_failed",
-            configured_backend=backend.provider_name,
-            reason=str(exc),
-        )
-        raise GroundedGenerationError(
-            "The configured generation provider could not produce a grounded answer."
-        ) from exc
-    except (GeminiGenerationError, OpenAICompatibleGenerationError) as exc:
-        logger.warning(
-            "generation_provider_failed",
-            configured_backend=backend.provider_name,
-            reason=str(exc),
-        )
-        raise GroundedGenerationError(
-            "The configured generation provider could not produce a grounded answer."
-        ) from exc
+            if backend.implementation != "local":
+                validation_error = _provider_validation_error(
+                    query_text=query_text,
+                    evidence_package=evidence_package,
+                    draft=draft,
+                )
+                if validation_error is not None:
+                    _last_exc = GroundedGenerationError(validation_error)
+                    logger.warning(
+                        "generation_validation_failed_will_retry",
+                        attempt=_attempt,
+                        reason=validation_error,
+                    )
+                    continue
+            return draft
+        except GroundedGenerationError as exc:
+            if backend.implementation == "local":
+                raise
+            _last_exc = exc
+            logger.warning(
+                "generation_provider_failed",
+                attempt=_attempt,
+                configured_backend=backend.provider_name,
+                reason=str(exc),
+            )
+        except (GeminiGenerationError, OpenAICompatibleGenerationError) as exc:
+            _last_exc = exc
+            logger.warning(
+                "generation_provider_failed",
+                attempt=_attempt,
+                configured_backend=backend.provider_name,
+                reason=str(exc),
+            )
+
+    raise GroundedGenerationError(
+        "The configured generation provider could not produce a grounded answer."
+    ) from _last_exc

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import re
@@ -1409,30 +1410,93 @@ async def execute_standard_query(
     research_started = time.perf_counter()
     await _emit(on_progress, {"type": "step_started", "step": "research", "label": "Research"})
     retrieval_started = time.perf_counter()
-    try:
-        retrieval_bundle = await retrieve_hybrid_candidates(
-            session=session,
-            tenant_id=tenant_context.tenant_id,
-            namespace_id=query_request.namespace_id,
-            query_text=query_request.query,
-            query_plan=query_plan,
+    _retrieval_bundle: RetrievalBundle | None = None
+    _retrieval_error = False
+    for _attempt in range(2):
+        try:
+            _retrieval_bundle = await retrieve_hybrid_candidates(
+                session=session,
+                tenant_id=tenant_context.tenant_id,
+                namespace_id=query_request.namespace_id,
+                query_text=query_request.query,
+                query_plan=query_plan,
+                execution_tier=routing_decision.effective_tier,
+                freshness_profile=getattr(namespace, "freshness_profile", FreshnessProfile.BALANCED),
+            )
+            _retrieval_error = False
+            break
+        except RetrievalError:
+            _retrieval_error = True
+            if _attempt == 0:
+                logger.warning("retrieval_failed_retrying", query=query_request.query)
+                await asyncio.sleep(0.4)
+
+    if _retrieval_error:
+        retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
+        research_ms = int((time.perf_counter() - research_started) * 1000)
+        await _emit(on_progress, {
+            "type": "step_completed",
+            "step": "research",
+            "label": "Research",
+            "duration_ms": research_ms,
+            "evidence_count": 0,
+        })
+        await _emit(on_progress, {"type": "step_started", "step": "generate", "label": "Generate"})
+        _empty_bundle = RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
+        _empty_evidence = package_evidence(
+            _empty_bundle,
+            query_text=query_plan.resolved_query_text,
             execution_tier=routing_decision.effective_tier,
-            freshness_profile=getattr(
-                namespace,
-                "freshness_profile",
-                FreshnessProfile.BALANCED,
-            ),
         )
-    except RetrievalError as exc:
-        raise QueryServiceError(
-            "Failed to retrieve grounded evidence for the query.",
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        ) from exc
+        _degraded = shape_degraded_response(
+            reason="RETRIEVAL_ERROR",
+            answer_text="I was unable to search for grounded evidence for this query. Please try again.",
+        )
+        _retrieval_lats: dict[str, int] = {
+            "conversation_history_ms": conv_ms,
+            "check_retrieval_ms": check_ms,
+            "retrieval_ms": retrieval_ms,
+            "evidence_packaging_ms": 0,
+            "answering_ms": 0,
+        }
+        await _emit(on_progress, {"type": "step_completed", "step": "generate", "label": "Generate", "duration_ms": 0})
+        _dbg = _evidence_debug_summary(
+            selected_evidence_ids=_empty_evidence.selected_evidence_ids,
+            evidence_package=_empty_evidence,
+        )
+        _trace_t0 = time.perf_counter()
+        _trace = await _persist_query_trace(
+            session=session,
+            tenant_context=tenant_context,
+            query_request=query_request,
+            response=_degraded,
+            retrieval_bundle=_empty_bundle,
+            stage_latencies_ms=_retrieval_lats,
+            total_latency_ms=int((time.perf_counter() - started_at) * 1000),
+            generator_provider="degraded-handler-v1",
+            query_plan=query_plan,
+            evidence_debug=_dbg,
+            routing_decision=routing_decision,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            selected_mode=selected_mode,
+            token_usage=None,
+        )
+        _trace_ms = int((time.perf_counter() - _trace_t0) * 1000)
+        await _update_query_trace_timings(
+            session=session,
+            trace=_trace,
+            stage_latencies_ms={**_retrieval_lats, "trace_persistence_ms": _trace_ms},
+            total_latency_ms=int((time.perf_counter() - started_at) * 1000),
+        )
+        return QueryExecutionResult(response=_degraded, trace_id=_trace.trace_id)
+
     retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
+    retrieval_bundle = _retrieval_bundle  # type: ignore[assignment]
 
     evidence_started = time.perf_counter()
     evidence_package = package_evidence(
-        retrieval_bundle,
+        retrieval_bundle,  # type: ignore[arg-type]
         query_text=query_plan.resolved_query_text,
         execution_tier=routing_decision.effective_tier,
     )

@@ -18,6 +18,7 @@ import type {
   DatasetUploadResponse,
   EmailAuthResponse,
   MessageResponse,
+  FeedbackSubmission,
   RunResponse,
   SSOInitiateResponse,
   TeamMemberResponse,
@@ -328,6 +329,14 @@ export function listRuns(apiKey: string, datasetId?: string | null) {
 
 export function getRun(apiKey: string, runId: string) {
   return request<RunResponse>(`/v1/runs/${runId}`, apiKey);
+}
+
+export function submitFeedback(apiKey: string, runId: string, feedback: FeedbackSubmission) {
+  return request<RunResponse>(`/v1/runs/${runId}/feedback`, apiKey, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(feedback),
+  });
 }
 
 export function listApiKeys(apiKey: string) {

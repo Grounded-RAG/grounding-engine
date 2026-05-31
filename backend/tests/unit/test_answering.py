@@ -30,9 +30,12 @@ async def test_answer_from_evidence_returns_grounded_response(monkeypatch: pytes
     async def fake_generate_answer_from_evidence(*, query_text: str, evidence_package: EvidencePackage):
         del query_text, evidence_package
         return GroundedAnswerDraft(
-            answer="Grounded returns cited answers.",
-            cited_chunk_ids=["chunk-1"],
-            confidence=0.92,
+            answer_text="Grounded returns cited answers.",
+            cited_evidence_ids=["chunk-1"],
+            citation_snippets={"chunk-1": "Grounded returns cited answers."},
+            generator_provider="test-generator-v1",
+            support_coverage=0.92,
+            source_diversity=1,
         )
 
     monkeypatch.setattr(
