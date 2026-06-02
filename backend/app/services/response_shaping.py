@@ -113,9 +113,7 @@ def shape_grounded_response(
     )
     support_signal = min(max(draft.support_coverage, 0.0), 1.0)
     degraded_reasons: list[str] = []
-    verification_status = "passed"
     if confidence_score < 0.25:
-        verification_status = "degraded"
         degraded_reasons.append("LOW_CONFIDENCE_SUPPORT")
     elif confidence_score < 0.5:
         degraded_reasons.append("PARTIAL_EVIDENCE")
@@ -125,6 +123,8 @@ def shape_grounded_response(
         and support_signal < 0.82
     ):
         degraded_reasons.append("AMBIGUOUS_SUPPORT")
+    # Invariant: degraded_reasons is non-empty => verification_status == "degraded".
+    verification_status = "degraded" if degraded_reasons else "passed"
     confidence_label = confidence_label_for_score(confidence_score)
     support_summary = support_summary_for_response(
         confidence_score=confidence_score,

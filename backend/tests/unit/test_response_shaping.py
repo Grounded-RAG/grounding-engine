@@ -245,7 +245,7 @@ def test_shape_grounded_response_marks_partial_support_without_full_degradation(
 
     response = shape_grounded_response(draft=draft, evidence_package=package)
 
-    assert response.verification_status == "passed"
+    assert response.verification_status == "degraded"
     assert response.support_summary == "partial"
     assert response.degraded_reasons == ["PARTIAL_EVIDENCE"]
     assert response.confidence_label in {"low", "medium"}
@@ -288,6 +288,74 @@ def test_shape_grounded_response_marks_ambiguous_support_for_multi_citation_answ
 
     response = shape_grounded_response(draft=draft, evidence_package=package)
 
-    assert response.verification_status == "passed"
+    assert response.verification_status == "degraded"
     assert response.support_summary == "partial"
     assert response.degraded_reasons == ["AMBIGUOUS_SUPPORT"]
+
+
+@pytest.mark.parametrize(
+    "support_coverage,source_diversity,expected_reason",
+    [
+        (0.6, 1, "PARTIAL_EVIDENCE"),
+        (0.72, 2, "AMBIGUOUS_SUPPORT"),
+    ],
+)
+def test_verification_status_consistent_with_degraded_reasons(
+    support_coverage: float, source_diversity: int, expected_reason: str
+) -> None:
+    """A non-empty ``degraded_reasons`` list must imply
+    ``verification_status == "degraded"``. Without this invariant,
+    downstream UIs cannot tell a passed response from a degraded one
+    purely from the reasons list, and the two fields contradict.
+    """
+
+    item = _evidence_item(
+        citation_id="E001",
+        chunk_id="chunk-1",
+        text="The policy retains employee records for seven years after closure.",
+        score=0.02 if source_diversity == 1 else 0.03,
+    )
+    cited = [item]
+    snippet_map = {
+        "chunk-1": "The policy retains employee records for seven years after closure."
+    }
+    answer = (
+        "The policy retains employee records for seven years after closure. [E001]"
+    )
+    if source_diversity >= 2:
+        second = _evidence_item(
+            citation_id="E002",
+            chunk_id="chunk-2",
+            text="Access logs are deleted after thirty days unless a legal hold applies.",
+            score=0.025,
+        )
+        cited.append(second)
+        snippet_map["chunk-2"] = (
+            "Access logs are deleted after thirty days unless a legal hold applies."
+        )
+        answer = (
+            "The policy retains employee records for seven years after closure, while "
+            "access logs are deleted after thirty days unless a legal hold applies. "
+            "[E001] [E002]"
+        )
+
+    package = EvidencePackage(
+        retrieved_chunk_ids=[i.chunk_id for i in cited],
+        selected_evidence_ids=[i.chunk_id for i in cited],
+        items=cited,
+    )
+    draft = GroundedAnswerDraft(
+        answer_text=answer,
+        cited_evidence_ids=[i.chunk_id for i in cited],
+        citation_snippets=snippet_map,
+        generator_provider="local-grounded-v1",
+        support_coverage=support_coverage,
+        source_diversity=source_diversity,
+    )
+
+    response = shape_grounded_response(draft=draft, evidence_package=package)
+
+    assert response.degraded_reasons == [expected_reason]
+    assert response.verification_status == "degraded", (
+        "verification_status must be 'degraded' whenever degraded_reasons is non-empty"
+    )
