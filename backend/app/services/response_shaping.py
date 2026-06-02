@@ -56,7 +56,11 @@ def _calculate_confidence(
         + 0.15 * diversity_signal,
         1.0,
     )
-    if len(cited_items) >= 2 and support_signal >= 0.95 and diversity_signal >= 1.0:
+    if (
+        len(cited_items) >= 2
+        and support_signal >= 0.95
+        and diversity_signal >= 0.95
+    ):
         calibrated = min(calibrated + 0.05, 1.0)
     if len(cited_items) == 1 and support_signal < 0.7:
         calibrated = max(calibrated - 0.08, 0.0)

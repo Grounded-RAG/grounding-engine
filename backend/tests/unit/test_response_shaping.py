@@ -9,6 +9,7 @@ import pytest
 from app.pipeline.contracts import EvidenceItem, EvidencePackage, GroundedAnswerDraft
 from app.services.response_shaping import (
     ResponseShapingError,
+    _calculate_confidence,
     shape_degraded_response,
     shape_grounded_response,
 )
@@ -358,4 +359,69 @@ def test_verification_status_consistent_with_degraded_reasons(
     assert response.degraded_reasons == [expected_reason]
     assert response.verification_status == "degraded", (
         "verification_status must be 'degraded' whenever degraded_reasons is non-empty"
+    )
+
+
+def test_calculate_confidence_diversity_bonus_uses_095_threshold() -> None:
+    """The +0.05 high-diversity bonus must apply when diversity_signal is at
+    least 0.95 (not only when it is exactly 1.0). For an integer
+    ``source_diversity`` the practical range is 0.0 / 0.5 / 1.0, so the
+    0.95 threshold is effectively the same as 1.0 today, but pinning the
+    explicit threshold prevents future regressions if a non-integer
+    ``source_diversity`` is ever supported.
+
+    Regression for the diversity-threshold bug: the old condition
+    ``diversity_signal >= 1.0`` was so strict it left no headroom for any
+    non-integer diversity in the (0.5, 1.0) range to qualify.
+    """
+
+    cited_items = [
+        _evidence_item(
+            citation_id="E001",
+            chunk_id="chunk-1",
+            text="Grounded supports tenant-safe uploads.",
+            score=0.95,
+        ),
+        _evidence_item(
+            citation_id="E002",
+            chunk_id="chunk-2",
+            text="It also tracks ingestion job status.",
+            score=0.95,
+        ),
+    ]
+    draft_high_diversity = _draft(
+        answer_text="Grounded supports tenant-safe uploads. [E001] It also tracks ingestion job status. [E002]",
+        support_coverage=0.95,
+        source_diversity=2,
+    )
+    draft_low_diversity = _draft(
+        answer_text="Grounded supports tenant-safe uploads. [E001] It also tracks ingestion job status. [E002]",
+        support_coverage=0.95,
+        source_diversity=1,
+    )
+
+    high = _calculate_confidence(cited_items=cited_items, draft=draft_high_diversity)
+    low = _calculate_confidence(cited_items=cited_items, draft=draft_low_diversity)
+
+    # High-diversity case must include the +0.05 bonus; low-diversity must not.
+    # The gap is the 0.15*(1.0-0.5) weight difference (0.075) plus the bonus (0.05).
+    assert high - low == pytest.approx(0.125, abs=1e-4), (
+        "expected +0.05 diversity bonus plus the 0.15*(1.0-0.5) component "
+        "to widen the gap by ~0.125 between source_diversity=2 and =1"
+    )
+    assert high >= 0.95, "high-diversity confidence should reach the bonus band"
+    assert low < 0.95, "low-diversity confidence must stay below the bonus band"
+
+
+def _draft(*, answer_text: str, support_coverage: float, source_diversity: int) -> GroundedAnswerDraft:
+    return GroundedAnswerDraft(
+        answer_text=answer_text,
+        cited_evidence_ids=["chunk-1", "chunk-2"],
+        citation_snippets={
+            "chunk-1": "Grounded supports tenant-safe uploads.",
+            "chunk-2": "It also tracks ingestion job status.",
+        },
+        generator_provider="local-grounded-v1",
+        support_coverage=support_coverage,
+        source_diversity=source_diversity,
     )
