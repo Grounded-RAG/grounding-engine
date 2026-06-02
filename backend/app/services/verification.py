@@ -16,6 +16,29 @@ _WHITESPACE_PATTERN = re.compile(r"\s+")
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 _WORD_BOUNDARY_PATTERN_CACHE: dict[str, re.Pattern[str]] = {}
 
+# Abbreviations that must stay attached to the following word(s) when they
+# end a sentence fragment. These are tokens that *require* a continuation
+# (a name for a title, a clarification for "i.e.", etc.) so a stray split
+# on the period produces a broken claim. Initials like "U.S." are NOT
+# in this set because they are a complete term and split correctly.
+_FORCED_CONTINUATION_ABBREVIATIONS = frozenset(
+    {
+        "dr",
+        "mr",
+        "ms",
+        "mrs",
+        "prof",
+        "sr",
+        "jr",
+        "st",
+        "rev",
+        "e.g",
+        "i.e",
+        "a.m",
+        "p.m",
+    }
+)
+
 # Negation words for contradiction detection.
 _NEGATION_TERMS = {"not", "no", "never", "without", "cannot", "cant", "doesnt", "isnt", "wont", "hasnt", "havent", "didnt", "arent", "wasnt", "werent"}
 
@@ -152,17 +175,47 @@ def _rank_retry_terms(*, claims: tuple[VerifiedClaim, ...]) -> tuple[str, ...]:
     return tuple(prioritized + remaining)
 
 
+def _ends_with_forced_continuation(sentence: str) -> bool:
+    """Return True if `sentence` ends with a known abbreviation that requires
+    a continuation (e.g. ``Dr.`` expects a name, ``i.e.`` expects a clause).
+    """
+    stripped = sentence.rstrip()
+    if not stripped or not stripped.endswith("."):
+        return False
+    last_token = stripped.split()[-1]
+    return last_token.rstrip(".").lower() in _FORCED_CONTINUATION_ABBREVIATIONS
+
+
+def _split_sentences_preserving_abbreviations(text: str) -> list[str]:
+    """Split `text` on sentence-final punctuation while keeping known
+    abbreviations attached to the following fragment. This avoids the
+    common false split of ``Dr. Smith said X.`` into ``['Dr.', 'Smith said X.']``.
+    """
+    raw = [s.strip() for s in _SENTENCE_SPLIT_PATTERN.split(text) if s.strip()]
+    if not raw:
+        return [text.strip()] if text.strip() else []
+
+    merged: list[str] = []
+    buffer: str | None = None
+    for sentence in raw:
+        candidate = f"{buffer} {sentence}".strip() if buffer is not None else sentence
+        if _ends_with_forced_continuation(candidate):
+            buffer = candidate
+            continue
+        merged.append(candidate)
+        buffer = None
+    if buffer is not None:
+        merged.append(buffer)
+    return merged
+
+
 def extract_claims(answer_text: str) -> tuple[str, ...]:
     """Split one answer into simple auditable claims."""
     normalized = re.sub(r"\s*\[[A-Z]\d+\]", "", answer_text).strip()
     if not normalized:
         return ()
 
-    claims = [
-        sentence.strip()
-        for sentence in _SENTENCE_SPLIT_PATTERN.split(normalized)
-        if sentence.strip()
-    ]
+    claims = _split_sentences_preserving_abbreviations(normalized)
     return tuple(claims or [normalized])
 
 

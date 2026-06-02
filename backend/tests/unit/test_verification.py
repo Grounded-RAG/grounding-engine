@@ -120,6 +120,32 @@ def test_extract_claims_splits_sentences() -> None:
     assert claims == ("Grounded supports uploads.", "It cites evidence.")
 
 
+def test_extract_claims_preserves_common_abbreviations() -> None:
+    """The sentence splitter must not fragment titles like 'Dr.' or 'e.g.'."""
+
+    claims = extract_claims(
+        "Dr. Smith led the rollout. The team adopted the policy."
+    )
+    assert claims == (
+        "Dr. Smith led the rollout.",
+        "The team adopted the policy.",
+    )
+
+
+def test_extract_claims_handles_initials_and_incitations() -> None:
+    """The splitter should not split inside U.S., U.K., i.e., etc."""
+
+    claims = extract_claims(
+        "Grounded is built in the U.S. It is deployed widely. "
+        "The product, i.e. the engine, ships weekly."
+    )
+    assert claims == (
+        "Grounded is built in the U.S.",
+        "It is deployed widely.",
+        "The product, i.e. the engine, ships weekly.",
+    )
+
+
 def test_verify_critical_response_accepts_supported_claims() -> None:
     result = verify_critical_response(
         response=_response("Grounded supports tenant-safe uploads."),
