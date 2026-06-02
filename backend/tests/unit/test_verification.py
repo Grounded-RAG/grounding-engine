@@ -205,3 +205,23 @@ def test_verify_critical_response_degrades_contradictory_evidence() -> None:
     assert result.decision == "degrade"
     assert result.reason == "CONTRADICTORY_EVIDENCE"
     assert result.contradiction_detected is True
+
+
+def test_verify_critical_response_detects_morph_only_negation_contradiction() -> None:
+    """When the only claim term that matches the evidence does so via
+    morphological root (e.g. ``exports`` -> ``export``) and a negation
+    is adjacent to that position, the contradiction must still be detected.
+
+    Regression for the negation-proximity bug: ``evidence_norm.find(term)``
+    returns -1 for morph-only matches, the code substituted ``9999`` for
+    the position, and the proximity test (``< 40`` chars) silently failed.
+    """
+
+    result = verify_critical_response(
+        response=_response("Exports happen every morning."),
+        evidence_package=_evidence_package("We do not export at all."),
+    )
+
+    assert result.decision == "degrade"
+    assert result.reason == "CONTRADICTORY_EVIDENCE"
+    assert result.contradiction_detected is True

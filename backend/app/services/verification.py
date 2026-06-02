@@ -130,6 +130,24 @@ def _term_in_text(term: str, text: str) -> bool:
     return False
 
 
+def _find_term_position(term: str, text: str) -> int:
+    """Return the first character position of *term* in *text* as a whole
+    word, falling back to the morphological root. Returns -1 if neither is
+    present. The morph fallback is required for the negation-proximity
+    check: ``str.find`` returns -1 for morph-only matches and would
+    otherwise force the proximity comparison to use a sentinel value.
+    """
+    match = _word_boundary_pattern(term).search(text)
+    if match is not None:
+        return match.start()
+    root = _morph_root(term)
+    if root != term and len(root) >= 3:
+        match = _word_boundary_pattern(root).search(text)
+        if match is not None:
+            return match.start()
+    return -1
+
+
 def _extract_bigrams(terms: tuple[str, ...]) -> tuple[str, ...]:
     """Return consecutive 2-word phrases from a term sequence."""
     return tuple(f"{terms[i]} {terms[i + 1]}" for i in range(len(terms) - 1))
@@ -365,9 +383,11 @@ def _assess_claim_against_evidence_semantic(
             and bool(matched_terms)
             and claim_has_negation != evidence_has_negation
             # Require the negation to be "near" a matched term (within 40 chars).
+            # Use the morph-aware position lookup so morph-only matches are not
+            # silently dropped from the proximity test.
             and any(
                 any(
-                    abs(m.start() - (evidence_norm.find(term) if evidence_norm.find(term) != -1 else 9999)) < 40
+                    abs(m.start() - _find_term_position(term, evidence_norm)) < 40
                     for term in matched_terms
                 )
                 for neg in _NEGATION_TERMS
