@@ -225,3 +225,93 @@ def test_verify_critical_response_detects_morph_only_negation_contradiction() ->
     assert result.decision == "degrade"
     assert result.reason == "CONTRADICTORY_EVIDENCE"
     assert result.contradiction_detected is True
+
+
+def test_verify_critical_response_unions_matched_terms_across_chunks() -> None:
+    """A claim whose terms are spread across multiple chunks (no single
+    chunk fully supports it) should still be accepted when every term
+    appears somewhere in the evidence.
+
+    Regression for the CRAG missing-terms bug: the per-chunk assessment
+    picked the best single chunk and used only its missing terms, so a
+    claim that was supported in aggregate (but no chunk alone) was
+    refused and retried for terms that were already covered.
+    """
+
+    document_id = uuid.uuid4()
+    evidence_package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1", "chunk-2", "chunk-3"],
+        selected_evidence_ids=["chunk-1", "chunk-2", "chunk-3"],
+        items=[
+            type(
+                "EvidenceItemStub",
+                (),
+                {
+                    "citation_id": "E001",
+                    "chunk_id": "chunk-1",
+                    "tenant_id": uuid.uuid4(),
+                    "namespace_id": uuid.uuid4(),
+                    "document_id": document_id,
+                    "chunk_index": 0,
+                    "text": "Acme builds the platform.",
+                    "score": 0.9,
+                    "sources": ("dense",),
+                    "section_title": "Overview",
+                    "section_slug": "overview",
+                    "chunk_role": "body",
+                    "starts_with_heading": False,
+                    "is_list_block": False,
+                },
+            )(),
+            type(
+                "EvidenceItemStub",
+                (),
+                {
+                    "citation_id": "E002",
+                    "chunk_id": "chunk-2",
+                    "tenant_id": uuid.uuid4(),
+                    "namespace_id": uuid.uuid4(),
+                    "document_id": document_id,
+                    "chunk_index": 1,
+                    "text": "The platform exports data every week.",
+                    "score": 0.88,
+                    "sources": ("sparse",),
+                    "section_title": "Pipelines",
+                    "section_slug": "pipelines",
+                    "chunk_role": "body",
+                    "starts_with_heading": False,
+                    "is_list_block": False,
+                },
+            )(),
+            type(
+                "EvidenceItemStub",
+                (),
+                {
+                    "citation_id": "E003",
+                    "chunk_id": "chunk-3",
+                    "tenant_id": uuid.uuid4(),
+                    "namespace_id": uuid.uuid4(),
+                    "document_id": document_id,
+                    "chunk_index": 2,
+                    "text": "Widgets are stored in a secure vault.",
+                    "score": 0.85,
+                    "sources": ("dense", "sparse"),
+                    "section_title": "Storage",
+                    "section_slug": "storage",
+                    "chunk_role": "body",
+                    "starts_with_heading": False,
+                    "is_list_block": False,
+                },
+            )(),
+        ],
+    )
+
+    result = verify_critical_response(
+        response=_response("Acme exports widgets."),
+        evidence_package=evidence_package,
+    )
+
+    assert result.decision == "accept"
+    assert result.supported_claim_count == 1
+    assert result.unsupported_claim_count == 0
+    assert result.retry_query_text in (None, "")

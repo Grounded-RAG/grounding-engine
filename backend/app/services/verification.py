@@ -332,32 +332,28 @@ def _assess_claim_against_evidence_semantic(
     - Antonym-pair contradiction catches semantic polarity flips.
     - Numeric contradiction catches value mismatches in the same context.
     - Negation-proximity check: negation only counts when it is near matched terms.
+    - CRAG union: matched terms are unioned across all chunks so a claim whose
+      terms are spread across multiple chunks is not wrongly refused.
     """
     terms = _claim_terms(claim)
     bigrams = _extract_bigrams(terms)
     claim_norm = _normalize_text(claim)
     claim_has_negation = _contains_negation(claim_norm)
 
-    best = _EvidenceAssessment(
-        chunk_id="",
-        matched_terms=(),
-        missing_terms=terms,
-        support_score=1.0 if not terms else 0.0,
-        contradicts_claim=False,
-    )
+    best_score = -1.0
+    best_chunk_id = ""
+    best_contradicts = False
+    union_matched: set[str] = set()
+    union_bigram_matches = 0
     contradiction_chunk_ids: list[str] = []
 
     for chunk_id, evidence_text in evidence_text_by_chunk.items():
         if not terms:
             score = 1.0
             matched_terms: tuple[str, ...] = ()
-            missing_terms: tuple[str, ...] = ()
         else:
             matched_terms = tuple(
                 term for term in terms if _term_in_text(term, evidence_text)
-            )
-            missing_terms = tuple(
-                term for term in terms if term not in matched_terms
             )
             base_score = len(matched_terms) / len(terms)
 
@@ -397,22 +393,53 @@ def _assess_claim_against_evidence_semantic(
         )
         contradicts = antonym_contradicts or negation_contradicts
 
-        assessment = _EvidenceAssessment(
-            chunk_id=chunk_id,
-            matched_terms=matched_terms,
-            missing_terms=missing_terms,
-            support_score=score,
-            contradicts_claim=contradicts,
-        )
-
         if contradicts:
             contradiction_chunk_ids.append(chunk_id)
 
-        if assessment.support_score > best.support_score:
-            best = assessment
-        elif assessment.support_score == best.support_score:
-            if best.contradicts_claim and not assessment.contradicts_claim:
-                best = assessment
+        # Track union semantics for the global score and retry query.
+        union_matched.update(matched_terms)
+        union_bigram_matches += sum(1 for bg in bigrams if bg in evidence_text)
+
+        # Best chunk is the highest-scoring single chunk; kept for provenance
+        # (the persisted_chunk_ids trace) and to prefer non-contradicting chunks.
+        if score > best_score or (
+            score == best_score and best_contradicts and not contradicts
+        ):
+            best_score = score
+            best_chunk_id = chunk_id
+            best_contradicts = contradicts
+
+    if not evidence_text_by_chunk:
+        return _EvidenceAssessment(
+            chunk_id="",
+            matched_terms=(),
+            missing_terms=terms,
+            support_score=1.0 if not terms else 0.0,
+            contradicts_claim=False,
+        ), ()
+
+    # CRAG union: a term is "matched" if it appears in any chunk. The chunk_id
+    # of the highest-scoring chunk is preserved for trace purposes.
+    if not terms:
+        union_score = 1.0
+        global_missing: tuple[str, ...] = ()
+    else:
+        global_missing = tuple(term for term in terms if term not in union_matched)
+        base_score = len(union_matched) / len(terms)
+        bigram_bonus = (
+            (union_bigram_matches / max(len(bigrams), 1)) * 0.15
+            if bigrams
+            else 0.0
+        )
+        union_score = min(1.0, base_score + bigram_bonus)
+
+    best = _EvidenceAssessment(
+        chunk_id=best_chunk_id,
+        matched_terms=tuple(union_matched),
+        missing_terms=global_missing,
+        support_score=union_score,
+        contradicts_claim=best_contradicts,
+    )
 
     return best, tuple(dict.fromkeys(contradiction_chunk_ids))
 
@@ -422,45 +449,66 @@ def _assess_claim_against_evidence_lexical(
     claim: str,
     evidence_text_by_chunk: dict[str, str],
 ) -> tuple[_EvidenceAssessment, tuple[str, ...]]:
-    """Legacy lexical assessment kept for A/B comparison and fallback."""
+    """Legacy lexical assessment kept for A/B comparison and fallback.
+
+    Uses CRAG union semantics: a term is considered matched if it appears
+    in any chunk. The best single chunk id is preserved for provenance.
+    """
     terms = _claim_terms(claim)
     claim_has_negation = _contains_negation(_normalize_text(claim))
-    best = _EvidenceAssessment(
-        chunk_id="",
-        matched_terms=(),
-        missing_terms=terms,
-        support_score=1.0 if not terms else 0.0,
-        contradicts_claim=False,
-    )
+
+    best_score = -1.0
+    best_chunk_id = ""
+    best_contradicts = False
+    union_matched: set[str] = set()
     contradiction_chunk_ids: list[str] = []
 
     for chunk_id, evidence_text in evidence_text_by_chunk.items():
         if not terms:
             score = 1.0
             matched_terms: tuple[str, ...] = ()
-            missing_terms: tuple[str, ...] = ()
         else:
             matched_terms = tuple(term for term in terms if term in evidence_text)
-            missing_terms = tuple(term for term in terms if term not in matched_terms)
             score = len(matched_terms) / len(terms)
 
         evidence_has_negation = _contains_negation(evidence_text)
         contradicts = bool(terms) and bool(matched_terms) and claim_has_negation != evidence_has_negation
 
-        assessment = _EvidenceAssessment(
-            chunk_id=chunk_id,
-            matched_terms=matched_terms,
-            missing_terms=missing_terms,
-            support_score=score,
-            contradicts_claim=contradicts,
-        )
         if contradicts:
             contradiction_chunk_ids.append(chunk_id)
-        if assessment.support_score > best.support_score:
-            best = assessment
-        elif assessment.support_score == best.support_score:
-            if best.contradicts_claim and not assessment.contradicts_claim:
-                best = assessment
+
+        union_matched.update(matched_terms)
+
+        if score > best_score or (
+            score == best_score and best_contradicts and not contradicts
+        ):
+            best_score = score
+            best_chunk_id = chunk_id
+            best_contradicts = contradicts
+
+    if not evidence_text_by_chunk:
+        return _EvidenceAssessment(
+            chunk_id="",
+            matched_terms=(),
+            missing_terms=terms,
+            support_score=1.0 if not terms else 0.0,
+            contradicts_claim=False,
+        ), ()
+
+    if not terms:
+        global_score = 1.0
+        global_missing: tuple[str, ...] = ()
+    else:
+        global_missing = tuple(term for term in terms if term not in union_matched)
+        global_score = len(union_matched) / len(terms)
+
+    best = _EvidenceAssessment(
+        chunk_id=best_chunk_id,
+        matched_terms=tuple(union_matched),
+        missing_terms=global_missing,
+        support_score=global_score,
+        contradicts_claim=best_contradicts,
+    )
 
     return best, tuple(dict.fromkeys(contradiction_chunk_ids))
 
