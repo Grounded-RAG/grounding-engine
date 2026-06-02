@@ -874,6 +874,7 @@ async def _run_one_corrective_attempt(
         retrieval_bundle,
         query_text=retry_plan.resolved_query_text,
         execution_tier=ExecutionTier.CRITICAL,
+        package_id=f"crag{attempt_number}",
     )
     if not evidence_package.items:
         return None

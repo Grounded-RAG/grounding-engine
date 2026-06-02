@@ -18,6 +18,7 @@ class CitationResponse(BaseModel):
     document_id: UUID
     chunk_index: int = Field(ge=0)
     quote: str = Field(min_length=1)
+    quote_source: Literal["provider", "fallback", "snippet"] = "provider"
 
 
 class QueryRequest(BaseModel):

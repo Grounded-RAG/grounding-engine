@@ -62,12 +62,44 @@ def test_package_evidence_selects_top_fused_hits() -> None:
         ],
     )
 
-    package = package_evidence(bundle, limit=2)
+    package = package_evidence(bundle, limit=2, package_id="abcdefgh")
 
     assert package.retrieved_chunk_ids == ["chunk-2", "chunk-1", "chunk-3"]
     assert package.selected_evidence_ids == ["chunk-2", "chunk-1"]
-    assert [item.citation_id for item in package.items] == ["E001", "E002"]
+    assert [item.citation_id for item in package.items] == ["Eabcd001", "Eabcd002"]
     assert [item.chunk_id for item in package.items] == ["chunk-2", "chunk-1"]
+
+
+def test_package_evidence_default_package_id_avoids_collision_across_calls() -> None:
+    """Two back-to-back default calls must produce disjoint citation_id
+    sequences. The CRAG retry path calls ``package_evidence`` again on
+    the same retrieval; without a per-call ``package_id`` the second
+    call re-issued ``E001..E00N`` and the answer's [E001] marker
+    ambiguously resolved to two different chunks.
+
+    Regression for the citation-id collision bug: before the fix,
+    ``citation_id=f"E{index:03d}"`` was deterministic on index alone,
+    so two packages could not be told apart.
+    """
+
+    bundle = RetrievalBundle(
+        sparse_hits=[],
+        dense_hits=[],
+        fused_hits=[
+            _fused_hit(chunk_id="chunk-1", chunk_index=0, score=0.9),
+            _fused_hit(chunk_id="chunk-2", chunk_index=1, score=0.8),
+        ],
+    )
+
+    first = package_evidence(bundle, limit=2)
+    second = package_evidence(bundle, limit=2)
+
+    first_ids = [item.citation_id for item in first.items]
+    second_ids = [item.citation_id for item in second.items]
+    assert first_ids and second_ids
+    assert set(first_ids).isdisjoint(set(second_ids)), (
+        f"default package_id collided: {first_ids=} {second_ids=}"
+    )
 
 
 def test_package_evidence_reranks_hits_by_query_answerability() -> None:
@@ -217,10 +249,10 @@ def test_package_evidence_renders_stable_prompt_context() -> None:
         ],
     )
 
-    package = package_evidence(bundle, limit=1)
+    package = package_evidence(bundle, limit=1, package_id="abcdefgh")
     context = package.to_prompt_context()
 
-    assert "[E001] chunk_id=chunk-9" in context
+    assert "[Eabcd001] chunk_id=chunk-9" in context
     assert "chunk_index=3" in context
     assert "sources=dense,sparse" in context
     assert "chunk_role=body" in context

@@ -297,8 +297,8 @@ async def test_execute_standard_query_uses_raw_user_question_for_generation(monk
     async def fake_retrieve_hybrid_candidates(**kwargs):
         return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
 
-    def fake_package_evidence(retrieval_bundle, *, query_text=None, limit=None, execution_tier=None):
-        del retrieval_bundle, limit
+    def fake_package_evidence(retrieval_bundle, *, query_text=None, limit=None, execution_tier=None, package_id=None):
+        del retrieval_bundle, limit, package_id
         assert query_text is not None
         assert "language" in query_text.casefold()
         assert execution_tier is ExecutionTier.STANDARD
@@ -1620,8 +1620,8 @@ async def test_execute_standard_query_records_internal_retrieval_recovery_when_d
             },
         )()
 
-    def fake_package_evidence(retrieval_bundle, *, query_text=None, limit=None, execution_tier=None):
-        del query_text, limit, execution_tier
+    def fake_package_evidence(retrieval_bundle, *, query_text=None, limit=None, execution_tier=None, package_id=None):
+        del query_text, limit, execution_tier, package_id
         first_hit = retrieval_bundle.fused_hits[0]
         return EvidencePackage(
             retrieved_chunk_ids=[hit.chunk_id for hit in retrieval_bundle.fused_hits],

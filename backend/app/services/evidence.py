@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from uuid import uuid4
 
 from app.config import get_settings
 from app.core.query_analysis import (
@@ -20,6 +22,8 @@ from app.core.query_analysis import (
 from app.models import ExecutionTier
 from app.pipeline.contracts import EvidenceItem, EvidencePackage, FusedRetrievedChunk
 from app.services.retrieval import RetrievalBundle
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -39,9 +43,19 @@ def package_evidence(
     query_text: str | None = None,
     limit: int | None = None,
     execution_tier: ExecutionTier = ExecutionTier.STANDARD,
+    package_id: str | None = None,
 ) -> EvidencePackage:
-    """Select the top fused hits and normalize them into evidence items."""
+    """Select the top fused hits and normalize them into evidence items.
 
+    ``package_id`` scopes the generated ``citation_id`` values to one call.
+    The default (``None``) generates a fresh ``uuid4().hex[:8]`` per call,
+    so two back-to-back calls never produce overlapping ``E001..E00N``
+    sequences — important for CRAG retries that re-package the same
+    retrieval. Callers that want deterministic ids (e.g. tests) can pass
+    an explicit ``package_id``.
+    """
+
+    resolved_package_id = package_id or uuid4().hex[:8]
     requested_limit = limit or get_settings().evidence_package_limit
     selected_hits = _select_hits_for_query(
         retrieval_bundle,
@@ -52,7 +66,7 @@ def package_evidence(
 
     selected_items = [
         EvidenceItem(
-            citation_id=f"E{index:03d}",
+            citation_id=f"E{resolved_package_id[:4]}{index:03d}",
             chunk_id=hit.chunk_id,
             tenant_id=hit.tenant_id,
             namespace_id=hit.namespace_id,

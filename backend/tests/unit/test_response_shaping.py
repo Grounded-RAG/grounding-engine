@@ -362,6 +362,101 @@ def test_verification_status_consistent_with_degraded_reasons(
     )
 
 
+def test_shape_grounded_response_marks_quote_source_provider_when_snippet_present() -> None:
+    """When the provider supplied a snippet, ``quote_source`` stays
+    ``"provider"`` (the default) and the quote matches the snippet.
+    """
+
+    item = _evidence_item(
+        citation_id="E001",
+        chunk_id="chunk-1",
+        text="The full chunk text spans many sentences and is too long to quote verbatim.",
+        score=0.9,
+    )
+    package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[item],
+    )
+    draft = GroundedAnswerDraft(
+        answer_text="The snippet says: 'short summary'. [E001]",
+        cited_evidence_ids=["chunk-1"],
+        citation_snippets={"chunk-1": "short summary"},
+        generator_provider="local-grounded-v1",
+        support_coverage=1.0,
+        source_diversity=1,
+    )
+
+    response = shape_grounded_response(draft=draft, evidence_package=package)
+
+    assert response.citations[0].quote_source == "provider"
+    assert response.citations[0].quote == "short summary"
+
+
+def test_shape_grounded_response_marks_quote_source_fallback_when_snippet_missing() -> None:
+    """When the provider sent no snippet, the response shaping silently
+    fell back to the raw chunk text and set ``quote_source`` to
+    ``"fallback"`` so UIs can show the citation as lower-trust.
+    """
+
+    item = _evidence_item(
+        citation_id="E001",
+        chunk_id="chunk-1",
+        text="Raw chunk text used because no snippet was provided.",
+        score=0.9,
+    )
+    package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[item],
+    )
+    draft = GroundedAnswerDraft(
+        answer_text="Grounded returns cited answers. [E001]",
+        cited_evidence_ids=["chunk-1"],
+        citation_snippets={},  # no snippet at all
+        generator_provider="local-grounded-v1",
+        support_coverage=1.0,
+        source_diversity=1,
+    )
+
+    response = shape_grounded_response(draft=draft, evidence_package=package)
+
+    assert response.citations[0].quote_source == "fallback"
+    assert response.citations[0].quote == item.text.strip()
+
+
+def test_shape_grounded_response_marks_quote_source_fallback_when_snippet_empty_string() -> None:
+    """An empty-string snippet must also be treated as missing — the
+    previous implementation would use ``"" or item.text`` and end up
+    with the falsy side, which the new branching handles explicitly.
+    """
+
+    item = _evidence_item(
+        citation_id="E001",
+        chunk_id="chunk-1",
+        text="Raw chunk text used because the snippet was empty.",
+        score=0.9,
+    )
+    package = EvidencePackage(
+        retrieved_chunk_ids=["chunk-1"],
+        selected_evidence_ids=["chunk-1"],
+        items=[item],
+    )
+    draft = GroundedAnswerDraft(
+        answer_text="Grounded returns cited answers. [E001]",
+        cited_evidence_ids=["chunk-1"],
+        citation_snippets={"chunk-1": "   "},  # whitespace-only
+        generator_provider="local-grounded-v1",
+        support_coverage=1.0,
+        source_diversity=1,
+    )
+
+    response = shape_grounded_response(draft=draft, evidence_package=package)
+
+    assert response.citations[0].quote_source == "fallback"
+    assert response.citations[0].quote == item.text.strip()
+
+
 def test_calculate_confidence_diversity_bonus_uses_095_threshold() -> None:
     """The +0.05 high-diversity bonus must apply when diversity_signal is at
     least 0.95 (not only when it is exactly 1.0). For an integer

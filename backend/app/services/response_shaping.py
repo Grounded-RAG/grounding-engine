@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from app.config import get_settings
@@ -12,6 +13,8 @@ from app.services.trust import (
     provider_metadata,
     support_summary_for_response,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ResponseShapingError(RuntimeError):
@@ -101,16 +104,29 @@ def shape_grounded_response(
     if not cited_items:
         raise ResponseShapingError("Structured responses require at least one citation.")
 
-    citations = [
-        CitationResponse(
-            citation_id=item.citation_id,
-            chunk_id=item.chunk_id,
-            document_id=item.document_id,
-            chunk_index=item.chunk_index,
-            quote=_normalize_quote(draft.citation_snippets.get(item.chunk_id) or item.text),
+    citations: list[CitationResponse] = []
+    for item in cited_items:
+        snippet = draft.citation_snippets.get(item.chunk_id)
+        if snippet and snippet.strip():
+            quote = _normalize_quote(snippet)
+            quote_source = "provider"
+        else:
+            logger.warning(
+                "citation snippet missing for chunk_id=%s; falling back to raw chunk text",
+                item.chunk_id,
+            )
+            quote = _normalize_quote(item.text)
+            quote_source = "fallback"
+        citations.append(
+            CitationResponse(
+                citation_id=item.citation_id,
+                chunk_id=item.chunk_id,
+                document_id=item.document_id,
+                chunk_index=item.chunk_index,
+                quote=quote,
+                quote_source=quote_source,
+            )
         )
-        for item in cited_items
-    ]
     confidence_score = _calculate_confidence(
         cited_items=cited_items,
         draft=draft,
