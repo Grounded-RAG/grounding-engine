@@ -2,6 +2,8 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+EXPOSE 8000
+
 COPY pyproject.toml /app/pyproject.toml
 COPY alembic.ini /app/alembic.ini
 COPY alembic /app/alembic
