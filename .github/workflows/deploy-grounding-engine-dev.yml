@@ -77,7 +77,7 @@ jobs:
           script: |
             set -euo pipefail
 
-            APP_DIR="/app/grounding-engine-dev"
+            APP_DIR="$HOME/grounding-engine-dev"
             mkdir -p "$APP_DIR"
             cd "$APP_DIR"
 
