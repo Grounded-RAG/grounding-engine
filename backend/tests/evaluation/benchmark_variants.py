@@ -242,9 +242,9 @@ class LiveStandardHybridVariant:
             retrieved_chunks=[str(citation.get("quote", "")) for citation in citations],
             citations=citations,
             performance=BenchmarkPerformance(
-                retrieval_ms=int(stage_latencies.get("retrieval_ms", 0)),
-                evidence_packaging_ms=int(stage_latencies.get("evidence_packaging_ms", 0)),
-                answering_ms=int(stage_latencies.get("answering_ms", 0)),
+                retrieval_ms=int(stage_latencies.get("hybrid_retrieval_ms", 0)),
+                evidence_packaging_ms=int(stage_latencies.get("source_attribution_ms", 0)),
+                answering_ms=int(stage_latencies.get("structured_enforcement_ms", 0)),
                 trace_persistence_ms=int(stage_latencies.get("trace_persistence_ms", 0)),
                 total_latency_ms=int(trace.total_latency_ms),
                 prompt_tokens=int(token_usage.get("prompt_tokens", 0)),

@@ -1680,3 +1680,164 @@ async def test_execute_standard_query_records_internal_retrieval_recovery_when_d
     assert result.response.confidence_label == "low"
     assert result.response.degraded_reasons
     assert trace.verifier_result["critical_verifier"]["recovery_paths"]["internal_model_retrieval"]["used"] is True
+
+
+# 11 workflow stages from CRITICAL_TIER_OVERVIEW.md:15-48.
+# These replace the legacy 5-step set (init, conversation_history, check_retrieval, research, generate).
+CRITICAL_TIER_STEP_IDS = (
+    "query_transformation",
+    "semantic_chunking",
+    "namespace_isolation",
+    "hybrid_retrieval",
+    "temporal_ranking",
+    "reranking",
+    "corrective_retrieval_behavior",
+    "internal_retrieval_support",
+    "verification_loop",
+    "structured_enforcement",
+    "source_attribution",
+)
+
+
+@pytest.mark.asyncio()
+async def test_execute_standard_query_emits_critical_tier_step_events(monkeypatch) -> None:
+    """Verified (critical) queries should emit all 11 workflow step events in order."""
+
+    tenant_context = _tenant_context()
+    namespace_id = uuid.uuid4()
+    query_request = QueryRequest(namespace_id=namespace_id, query="Verify the export policy")
+    namespace = type(
+        "NamespaceStub",
+        (),
+        {
+            "min_execution_tier": ExecutionTier.STANDARD,
+            "freshness_profile": FreshnessProfile.BALANCED,
+            "allow_web_fallback": False,
+            "allow_internal_model_retrieval": True,
+        },
+    )()
+    session = FakeAsyncSession(namespace=namespace)
+
+    async def fake_retrieve_hybrid_candidates(*, on_progress=None, **kwargs):
+        del kwargs
+        if on_progress is not None:
+            for step in ("namespace_isolation", "hybrid_retrieval", "temporal_ranking", "reranking"):
+                await on_progress({"type": "step_started", "step": step, "label": step})
+            await on_progress({"type": "step_completed", "step": "reranking", "label": "reranking", "duration_ms": 1})
+            for step in ("reranking", "temporal_ranking", "hybrid_retrieval", "namespace_isolation"):
+                await on_progress({"type": "step_completed", "step": step, "label": step, "duration_ms": 1})
+        return _retrieval_bundle(tenant_context.tenant_id, namespace_id)
+
+    async def fake_generate_answer_from_evidence(*, query_text, evidence_package, **kwargs):
+        del query_text, evidence_package, kwargs
+        return type(
+            "GroundedDraftStub",
+            (),
+            {
+                "answer_text": "Grounded supports tenant-safe exports [E001].",
+                "cited_evidence_ids": ["chunk-1"],
+                "citation_snippets": {"chunk-1": "Grounded supports tenant-safe uploads."},
+                "generator_provider": "local-grounded-v1",
+                "support_coverage": 0.98,
+                "source_diversity": 1,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            },
+        )()
+
+    def fake_package_evidence(retrieval_bundle, *, query_text=None, limit=None, execution_tier=None, package_id=None):
+        del query_text, limit, execution_tier, package_id
+        first_hit = retrieval_bundle.fused_hits[0]
+        return EvidencePackage(
+            retrieved_chunk_ids=[hit.chunk_id for hit in retrieval_bundle.fused_hits],
+            selected_evidence_ids=[first_hit.chunk_id],
+            items=[
+                type(
+                    "EvidenceItemStub",
+                    (),
+                    {
+                        "citation_id": "E001",
+                        "chunk_id": first_hit.chunk_id,
+                        "tenant_id": first_hit.tenant_id,
+                        "namespace_id": first_hit.namespace_id,
+                        "document_id": first_hit.document_id,
+                        "chunk_index": first_hit.chunk_index,
+                        "text": first_hit.text,
+                        "score": first_hit.fused_score,
+                        "sources": first_hit.sources,
+                        "section_title": first_hit.section_title,
+                        "section_slug": first_hit.section_slug,
+                        "chunk_role": first_hit.chunk_role,
+                        "starts_with_heading": first_hit.starts_with_heading,
+                        "is_list_block": first_hit.is_list_block,
+                    },
+                )()
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.services.query.retrieve_hybrid_candidates",
+        fake_retrieve_hybrid_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.query.generate_answer_from_evidence",
+        fake_generate_answer_from_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.package_evidence",
+        fake_package_evidence,
+    )
+    monkeypatch.setattr(
+        "app.services.query.get_settings",
+        lambda: _settings(enterprise_enabled=True, critical_enabled=True),
+    )
+
+    captured_events: list[dict] = []
+
+    async def on_progress(event: dict) -> None:
+        captured_events.append(event)
+
+    await execute_standard_query(
+        session=session,
+        tenant_context=tenant_context,
+        query_request=query_request,
+        selected_mode=UserFacingMode.VERIFIED,
+        on_progress=on_progress,
+    )
+
+    started_steps = [
+        event["step"]
+        for event in captured_events
+        if event.get("type") == "step_started"
+    ]
+    completed_steps = [
+        event["step"]
+        for event in captured_events
+        if event.get("type") == "step_completed"
+    ]
+
+    # All 11 stages should appear in the order they run for a Verified (critical) query.
+    for stage in CRITICAL_TIER_STEP_IDS:
+        assert stage in started_steps, f"Missing step_started for {stage}"
+        assert stage in completed_steps, f"Missing step_completed for {stage}"
+
+    # Step order is stable: query_transformation runs before hybrid_retrieval, etc.
+    # Source attribution comes last because citations are attached to the final
+    # shaped response. Structured enforcement wraps the verification/corrective/internal
+    # sub-paths, so it starts before them and ends after them.
+    critical_tier_order = [
+        "query_transformation",
+        "semantic_chunking",
+        "namespace_isolation",
+        "hybrid_retrieval",
+        "temporal_ranking",
+        "reranking",
+        "structured_enforcement",
+        "verification_loop",
+        "corrective_retrieval_behavior",
+        "internal_retrieval_support",
+        "source_attribution",
+    ]
+    positions = [started_steps.index(stage) for stage in critical_tier_order]
+    assert positions == sorted(positions), (
+        f"Steps out of order: {list(zip(critical_tier_order, positions))}"
+    )
