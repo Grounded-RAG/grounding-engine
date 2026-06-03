@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from app.api.deps import TenantContext
-from app.config import get_settings
-from app.models.enums import ExecutionTier, SubscriptionPlan, UserFacingMode
+from app.models.enums import ExecutionTier, UserFacingMode
 from app.schemas.capabilities import (
     CapabilitiesResponse,
     FeatureCapabilityResponse,
@@ -26,30 +25,11 @@ _MODE_DESCRIPTIONS: dict[UserFacingMode, str] = {
     UserFacingMode.VERIFIED: "Highest-assurance path for sensitive work.",
 }
 
-_PLAN_MODE_ACCESS: dict[SubscriptionPlan, set[UserFacingMode]] = {
-    SubscriptionPlan.FREE: {
-        UserFacingMode.AUTO,
-        UserFacingMode.INSTANT,
-    },
-    SubscriptionPlan.PRO: {
-        UserFacingMode.AUTO,
-        UserFacingMode.INSTANT,
-        UserFacingMode.THINKING,
-    },
-    SubscriptionPlan.BUSINESS: set(UserFacingMode),
-    SubscriptionPlan.ENTERPRISE: set(UserFacingMode),
-}
-
 _MODE_BACKING_TIERS: dict[UserFacingMode, ExecutionTier | None] = {
     UserFacingMode.AUTO: None,
     UserFacingMode.INSTANT: ExecutionTier.STANDARD,
     UserFacingMode.THINKING: ExecutionTier.ENTERPRISE,
     UserFacingMode.VERIFIED: ExecutionTier.CRITICAL,
-}
-
-_BASE_IMPLEMENTED_MODES: set[UserFacingMode] = {
-    UserFacingMode.AUTO,
-    UserFacingMode.INSTANT,
 }
 
 _ORDERED_MODES: tuple[UserFacingMode, ...] = (
@@ -58,12 +38,6 @@ _ORDERED_MODES: tuple[UserFacingMode, ...] = (
     UserFacingMode.THINKING,
     UserFacingMode.VERIFIED,
 )
-
-_TIER_RANK: dict[ExecutionTier, int] = {
-    ExecutionTier.STANDARD: 1,
-    ExecutionTier.ENTERPRISE: 2,
-    ExecutionTier.CRITICAL: 3,
-}
 
 _PRODUCT_FEATURES: tuple[tuple[str, bool, str, str | None], ...] = (
     (
@@ -138,24 +112,7 @@ _PRODUCT_FEATURES: tuple[tuple[str, bool, str, str | None], ...] = (
 def get_current_supported_modes() -> set[UserFacingMode]:
     """Return the currently implemented product-facing modes."""
 
-    supported_modes = set(_BASE_IMPLEMENTED_MODES)
-    if get_settings().enterprise_enabled:
-        supported_modes.add(UserFacingMode.THINKING)
-    if get_settings().critical_enabled:
-        supported_modes.add(UserFacingMode.VERIFIED)
-    return supported_modes
-
-
-def _supports_tier(
-    *,
-    tenant_max_tier: ExecutionTier,
-    required_tier: ExecutionTier | None,
-) -> bool:
-    """Return whether the tenant can reach the mode's backing execution tier."""
-
-    if required_tier is None:
-        return True
-    return _TIER_RANK[tenant_max_tier] >= _TIER_RANK[required_tier]
+    return set(_ORDERED_MODES)
 
 
 def _build_mode_capability(
@@ -163,34 +120,17 @@ def _build_mode_capability(
     mode: UserFacingMode,
     tenant_context: TenantContext,
 ) -> ModeCapabilityResponse:
-    """Build one user-facing mode capability from plan and implementation state."""
+    """Build one user-facing mode capability."""
 
-    plan_modes = _PLAN_MODE_ACCESS[tenant_context.subscription_plan]
     backing_tier = _MODE_BACKING_TIERS[mode]
-
-    if mode not in plan_modes:
-        enabled = False
-        availability_reason = "plan_restricted"
-    elif not _supports_tier(
-        tenant_max_tier=tenant_context.max_execution_tier,
-        required_tier=backing_tier,
-    ):
-        enabled = False
-        availability_reason = "tier_restricted"
-    elif mode not in get_current_supported_modes():
-        enabled = False
-        availability_reason = "coming_soon"
-    else:
-        enabled = True
-        availability_reason = None
 
     return ModeCapabilityResponse(
         mode=mode,
         label=_MODE_LABELS[mode],
-        enabled=enabled,
+        enabled=True,
         backing_tier=backing_tier,
         description=_MODE_DESCRIPTIONS[mode],
-        availability_reason=availability_reason,
+        availability_reason=None,
     )
 
 

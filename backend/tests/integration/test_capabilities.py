@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import TenantContext, get_tenant_context
 from app.main import create_app
-from app.services import capabilities as capabilities_module
 
 
 def test_capabilities_endpoint_returns_mode_and_feature_availability() -> None:
@@ -28,18 +27,8 @@ def test_capabilities_endpoint_returns_mode_and_feature_availability() -> None:
         return tenant_context
 
     app.dependency_overrides[get_tenant_context] = override_tenant_context
-    original_get_settings = capabilities_module.get_settings
-    capabilities_module.get_settings = lambda: type(
-        "SettingsStub",
-        (),
-        {"enterprise_enabled": True, "critical_enabled": True},
-    )()
-
-    try:
-        with TestClient(app) as client:
-            response = client.get("/v1/capabilities")
-    finally:
-        capabilities_module.get_settings = original_get_settings
+    with TestClient(app) as client:
+        response = client.get("/v1/capabilities")
 
     assert response.status_code == 200
     payload = response.json()

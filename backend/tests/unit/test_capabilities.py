@@ -7,7 +7,6 @@ import uuid
 from app.api.deps import TenantContext
 from app.models import ExecutionTier, SubscriptionPlan, UserFacingMode
 from app.services.capabilities import build_capabilities_response
-from app.services import capabilities as capabilities_module
 
 
 def _tenant_context(
@@ -25,8 +24,8 @@ def _tenant_context(
     )
 
 
-def test_capabilities_enable_only_standard_backed_modes_for_free_plan() -> None:
-    """Free tenants should only receive Auto and Instant at this stage."""
+def test_capabilities_enable_all_modes_for_free_plan() -> None:
+    """All user-facing modes should be live for local product access."""
 
     response = build_capabilities_response(
         tenant_context=_tenant_context(
@@ -40,10 +39,10 @@ def test_capabilities_enable_only_standard_backed_modes_for_free_plan() -> None:
     assert response.default_mode is UserFacingMode.AUTO
     assert modes[UserFacingMode.AUTO].enabled is True
     assert modes[UserFacingMode.INSTANT].enabled is True
-    assert modes[UserFacingMode.THINKING].enabled is False
-    assert modes[UserFacingMode.THINKING].availability_reason == "plan_restricted"
-    assert modes[UserFacingMode.VERIFIED].enabled is False
-    assert modes[UserFacingMode.VERIFIED].availability_reason == "plan_restricted"
+    assert modes[UserFacingMode.THINKING].enabled is True
+    assert modes[UserFacingMode.THINKING].availability_reason is None
+    assert modes[UserFacingMode.VERIFIED].enabled is True
+    assert modes[UserFacingMode.VERIFIED].availability_reason is None
 
 
 def test_capabilities_enable_thinking_and_verified_when_critical_is_live() -> None:
@@ -66,8 +65,8 @@ def test_capabilities_enable_thinking_and_verified_when_critical_is_live() -> No
     assert modes[UserFacingMode.VERIFIED].availability_reason is None
 
 
-def test_capabilities_respect_max_execution_tier_before_future_implementation() -> None:
-    """Tenant tier ceilings should still block modes before implementation state."""
+def test_capabilities_keep_all_modes_live_for_standard_tier() -> None:
+    """Tenant tier ceilings should not hide product modes in the local shell."""
 
     response = build_capabilities_response(
         tenant_context=_tenant_context(
@@ -78,8 +77,10 @@ def test_capabilities_respect_max_execution_tier_before_future_implementation() 
 
     modes = {item.mode: item for item in response.modes}
 
-    assert modes[UserFacingMode.THINKING].enabled is False
-    assert modes[UserFacingMode.THINKING].availability_reason == "tier_restricted"
+    assert modes[UserFacingMode.THINKING].enabled is True
+    assert modes[UserFacingMode.THINKING].availability_reason is None
+    assert modes[UserFacingMode.VERIFIED].enabled is True
+    assert modes[UserFacingMode.VERIFIED].availability_reason is None
 
 
 def test_capabilities_include_current_and_future_product_shell_features() -> None:
@@ -109,18 +110,8 @@ def test_capabilities_include_current_and_future_product_shell_features() -> Non
     assert features["api_key_management"].availability_reason is None
 
 
-def test_capabilities_enable_verified_when_critical_is_live(monkeypatch) -> None:
-    """Critical-capable tenants should receive Verified once Critical is enabled."""
-
-    monkeypatch.setattr(
-        capabilities_module,
-        "get_settings",
-        lambda: type(
-            "SettingsStub",
-            (),
-            {"enterprise_enabled": True, "critical_enabled": True},
-        )(),
-    )
+def test_capabilities_enable_verified() -> None:
+    """Verified mode should be live."""
 
     response = build_capabilities_response(
         tenant_context=_tenant_context(
