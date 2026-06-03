@@ -8,6 +8,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from app.config import get_settings
@@ -492,6 +493,7 @@ async def generate_gemini_draft(
     query_text: str,
     evidence_package: EvidencePackage,
     agent_instructions: str = "",
+    on_rate_limit: Callable[[float, int], Awaitable[None]] | None = None,
 ) -> GroundedAnswerDraft:
     """Generate a grounded draft using the Gemini API."""
 
@@ -579,6 +581,8 @@ async def generate_gemini_draft(
                 except Exception:
                     pass
                 logger.warning("gemini_generation_rate_limited", wait_seconds=wait_seconds, attempt=attempt)
+                if on_rate_limit is not None:
+                    await on_rate_limit(wait_seconds, attempt)
                 await asyncio.sleep(wait_seconds)
             except (urllib.error.URLError, TimeoutError) as exc:
                 if attempt >= max_attempts:

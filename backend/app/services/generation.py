@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import re
 
@@ -86,12 +87,14 @@ class GenerationBackend:
         query_text: str,
         evidence_package: EvidencePackage,
         agent_instructions: str = "",
+        on_rate_limit: Callable[[float, int], Awaitable[None]] | None = None,
     ) -> GroundedAnswerDraft:
         if self.implementation == "gemini":
             return await generate_gemini_draft(
                 query_text=query_text,
                 evidence_package=evidence_package,
                 agent_instructions=agent_instructions,
+                on_rate_limit=on_rate_limit,
             )
         if self.implementation == "openai_compatible":
             return await generate_openai_compatible_draft(
@@ -505,6 +508,7 @@ async def generate_answer_from_evidence(
     query_text: str,
     evidence_package: EvidencePackage,
     agent_instructions: str = "",
+    on_rate_limit: Callable[[float, int], Awaitable[None]] | None = None,
 ) -> GroundedAnswerDraft:
     """Generate a grounded answer draft using the current generation backend."""
 
@@ -517,6 +521,7 @@ async def generate_answer_from_evidence(
                 query_text=query_text,
                 evidence_package=evidence_package,
                 agent_instructions=agent_instructions,
+                on_rate_limit=on_rate_limit,
             )
             if backend.implementation != "local":
                 validation_error = _provider_validation_error(

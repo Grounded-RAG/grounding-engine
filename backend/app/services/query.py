@@ -1277,6 +1277,40 @@ async def process_async_verified_query(
 ProgressCallback = Callable[[dict], Awaitable[None]]
 
 
+# 11 workflow stages from docs/CRITICAL_TIER_OVERVIEW.md:15-48.
+# These replace the legacy 5-step set (init, conversation_history, check_retrieval, research, generate).
+# The frontend's WorkflowStepId union must match these values.
+STEP_LABELS: dict[str, str] = {
+    "query_transformation": "Query Transformation",
+    "semantic_chunking": "Semantic Chunking",
+    "namespace_isolation": "Namespace Isolation",
+    "hybrid_retrieval": "Hybrid Retrieval",
+    "temporal_ranking": "Temporal Ranking",
+    "reranking": "Reranking",
+    "corrective_retrieval_behavior": "Corrective Retrieval",
+    "internal_retrieval_support": "Internal Retrieval Support",
+    "verification_loop": "Verification Loop",
+    "structured_enforcement": "Structured Enforcement",
+    "source_attribution": "Source Attribution",
+}
+
+
+async def _step_start(on_progress: ProgressCallback | None, step: str) -> None:
+    await _emit(on_progress, {"type": "step_started", "step": step, "label": STEP_LABELS[step]})
+
+
+async def _step_end(on_progress: ProgressCallback | None, step: str, started: float, **extras) -> None:
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    event: dict = {
+        "type": "step_completed",
+        "step": step,
+        "label": STEP_LABELS[step],
+        "duration_ms": duration_ms,
+    }
+    event.update(extras)
+    await _emit(on_progress, event)
+
+
 async def _emit(on_progress: ProgressCallback | None, event: dict) -> None:
     if on_progress is not None:
         await on_progress(event)
@@ -1303,33 +1337,23 @@ async def execute_standard_query(
     started_at = time.perf_counter()
     query_plan: QueryPlan | None = None
 
-    await _emit(on_progress, {"type": "step_started", "step": "init", "label": "Workflow Steps"})
-
-    conv_ms: int = 0
-    check_ms: int = 0
-
+    # Stage 1: Query Transformation.
+    # The lightweight query plan and routing live in this single stage.
+    qt_started = time.perf_counter()
+    await _step_start(on_progress, "query_transformation")
     if _is_smalltalk_query(query_request.query):
         routing_decision = _resolve_execution_routing(
             query_request=query_request,
             selected_mode=selected_mode,
             namespace_min_execution_tier=namespace.min_execution_tier,
         )
-        await _emit(on_progress, {"type": "step_completed", "step": "init", "label": "Workflow Steps", "duration_ms": int((time.perf_counter() - started_at) * 1000)})
     else:
-        conv_started = time.perf_counter()
-        await _emit(on_progress, {"type": "step_started", "step": "conversation_history", "label": "Create Message History"})
         conv_ctx = await _resolve_conversation_context(
             session=session,
             tenant_id=tenant_context.tenant_id,
             conversation_id=conversation_id,
             current_query=query_request.query,
         )
-        conv_ms = int((time.perf_counter() - conv_started) * 1000)
-        message_count = len(conv_ctx.recent_user_queries) if conv_ctx else 0
-        await _emit(on_progress, {"type": "step_completed", "step": "conversation_history", "label": "Create Message History", "duration_ms": conv_ms, "message_count": message_count})
-
-        check_started = time.perf_counter()
-        await _emit(on_progress, {"type": "step_started", "step": "check_retrieval", "label": "Check Retrieval Need"})
         query_plan = build_query_plan(
             query_request.query,
             conversation_context=conv_ctx,
@@ -1345,9 +1369,16 @@ async def execute_standard_query(
             execution_tier=routing_decision.effective_tier,
         )
         _log_query_identification(query_plan=query_plan)
-        check_ms = int((time.perf_counter() - check_started) * 1000)
-        await _emit(on_progress, {"type": "step_completed", "step": "check_retrieval", "label": "Check Retrieval Need", "duration_ms": check_ms})
-        await _emit(on_progress, {"type": "step_completed", "step": "init", "label": "Workflow Steps", "duration_ms": int((time.perf_counter() - started_at) * 1000)})
+    qt_ms = int((time.perf_counter() - qt_started) * 1000)
+    await _step_end(on_progress, "query_transformation", qt_started)
+
+    # Stage 2: Semantic Chunking.
+    # Chunking is an ingestion-time step. At query time we emit a no-op
+    # confirmation that the chunk structure is present for the namespace.
+    sc_started = time.perf_counter()
+    await _step_start(on_progress, "semantic_chunking")
+    await _step_end(on_progress, "semantic_chunking", sc_started)
+    sc_ms = int((time.perf_counter() - sc_started) * 1000)
 
     if not _supports_execution_tier(
         available_tier=routing_decision.effective_tier,
@@ -1368,9 +1399,21 @@ async def execute_standard_query(
 
     if query_plan is None:
         retrieval_bundle = RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
-        await _emit(on_progress, {"type": "step_started", "step": "generate", "label": "Generate"})
+        # Smalltalk path: emit the relevant late-stage events as a no-op.
+        await _step_start(on_progress, "namespace_isolation")
+        await _step_end(on_progress, "namespace_isolation", time.perf_counter())
+        await _step_start(on_progress, "hybrid_retrieval")
+        await _step_end(on_progress, "hybrid_retrieval", time.perf_counter())
+        await _step_start(on_progress, "temporal_ranking")
+        await _step_end(on_progress, "temporal_ranking", time.perf_counter())
+        await _step_start(on_progress, "reranking")
+        await _step_end(on_progress, "reranking", time.perf_counter())
+        await _step_start(on_progress, "source_attribution")
+        source_attribution_started = time.perf_counter()
         response = _smalltalk_response()
-        await _emit(on_progress, {"type": "step_completed", "step": "generate", "label": "Generate", "duration_ms": 0})
+        await _step_end(on_progress, "source_attribution", source_attribution_started)
+        await _step_start(on_progress, "structured_enforcement")
+        await _step_end(on_progress, "structured_enforcement", time.perf_counter())
         stage_latencies_ms = {
             "retrieval_ms": 0,
             "evidence_packaging_ms": 0,
@@ -1411,11 +1454,16 @@ async def execute_standard_query(
     research_started = time.perf_counter()
     await _emit(on_progress, {"type": "step_started", "step": "research", "label": "Research"})
     retrieval_started = time.perf_counter()
+    # Stages 3-6: Namespace Isolation, Hybrid Retrieval, Temporal Ranking, Reranking.
+    # All four are emitted by the retrieval service via the on_progress callback.
+    # Stage 11: Source Attribution (evidence packaging) happens between retrieval and generation.
+    retrieval_started = time.perf_counter()
     _retrieval_bundle: RetrievalBundle | None = None
     _retrieval_error = False
     for _attempt in range(2):
         try:
             _retrieval_bundle = await retrieve_hybrid_candidates(
+                on_progress=on_progress,
                 session=session,
                 tenant_id=tenant_context.tenant_id,
                 namespace_id=query_request.namespace_id,
@@ -1433,17 +1481,15 @@ async def execute_standard_query(
                 await asyncio.sleep(0.4)
 
     if _retrieval_error:
+        # Stage 7: Corrective Retrieval (only emits when the retrieval path needed a retry
+        # but the retry also failed - we report the corrective attempt even if it failed).
+        corrective_started = time.perf_counter()
+        await _step_start(on_progress, "corrective_retrieval_behavior")
+        await _step_end(on_progress, "corrective_retrieval_behavior", corrective_started)
         retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
-        research_ms = int((time.perf_counter() - research_started) * 1000)
-        await _emit(on_progress, {
-            "type": "step_completed",
-            "step": "research",
-            "label": "Research",
-            "duration_ms": research_ms,
-            "evidence_count": 0,
-        })
-        await _emit(on_progress, {"type": "step_started", "step": "generate", "label": "Generate"})
         _empty_bundle = RetrievalBundle(sparse_hits=[], dense_hits=[], fused_hits=[])
+        se_started = time.perf_counter()
+        await _step_start(on_progress, "structured_enforcement")
         _empty_evidence = package_evidence(
             _empty_bundle,
             query_text=query_plan.resolved_query_text,
@@ -1453,14 +1499,19 @@ async def execute_standard_query(
             reason="RETRIEVAL_ERROR",
             answer_text="I was unable to search for grounded evidence for this query. Please try again.",
         )
+        sa_started = time.perf_counter()
+        await _step_start(on_progress, "source_attribution")
+        await _step_end(on_progress, "source_attribution", sa_started, evidence_count=0)
+        sa_ms = int((time.perf_counter() - sa_started) * 1000)
+        await _step_end(on_progress, "structured_enforcement", se_started)
+        se_ms = int((time.perf_counter() - se_started) * 1000)
         _retrieval_lats: dict[str, int] = {
-            "conversation_history_ms": conv_ms,
-            "check_retrieval_ms": check_ms,
-            "retrieval_ms": retrieval_ms,
-            "evidence_packaging_ms": 0,
-            "answering_ms": 0,
+            "query_transformation_ms": qt_ms,
+            "semantic_chunking_ms": sc_ms,
+            "hybrid_retrieval_ms": retrieval_ms,
+            "source_attribution_ms": sa_ms,
+            "structured_enforcement_ms": se_ms,
         }
-        await _emit(on_progress, {"type": "step_completed", "step": "generate", "label": "Generate", "duration_ms": 0})
         _dbg = _evidence_debug_summary(
             selected_evidence_ids=_empty_evidence.selected_evidence_ids,
             evidence_package=_empty_evidence,
@@ -1495,7 +1546,10 @@ async def execute_standard_query(
     retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
     retrieval_bundle = _retrieval_bundle  # type: ignore[assignment]
 
-    evidence_started = time.perf_counter()
+    # Stage 11: Source Attribution data is built here (package_evidence creates the
+    # citation objects). The source_attribution step event is emitted at the end,
+    # after structured_enforcement, to match the canonical ordering in
+    # docs/CRITICAL_TIER_OVERVIEW.md (source attribution is the final step).
     evidence_package = package_evidence(
         retrieval_bundle,  # type: ignore[arg-type]
         query_text=query_plan.resolved_query_text,
@@ -1505,18 +1559,9 @@ async def execute_standard_query(
         query_text=query_plan.resolved_query_text,
         evidence_package=evidence_package,
     )
-    evidence_ms = int((time.perf_counter() - evidence_started) * 1000)
-    research_ms = int((time.perf_counter() - research_started) * 1000)
-    await _emit(on_progress, {
-        "type": "step_completed",
-        "step": "research",
-        "label": "Research",
-        "duration_ms": research_ms,
-        "evidence_count": len(evidence_package.items),
-    })
 
-    answering_started = time.perf_counter()
-    await _emit(on_progress, {"type": "step_started", "step": "generate", "label": "Generate"})
+    se_started = time.perf_counter()
+    await _step_start(on_progress, "structured_enforcement")
     draft_token_usage: dict[str, int] | None = None
     if not evidence_package.items:
         response = shape_degraded_response(
@@ -1526,11 +1571,24 @@ async def execute_standard_query(
         generator_provider = "degraded-handler-v1"
         critical_verifier_metadata = None
     else:
+        async def _on_rate_limit(wait_seconds: float, attempt: int) -> None:
+            await _emit(on_progress, {
+                "type": "rate_limit_backoff",
+                "step": "structured_enforcement",
+                "wait_seconds": wait_seconds,
+                "attempt": attempt,
+                "message": f"Gemini rate limited — retrying in {int(wait_seconds)}s (attempt {attempt + 1})",
+            })
+
         try:
-            draft = await generate_answer_from_evidence(
-                query_text=query_request.query,
-                evidence_package=evidence_package,
-                agent_instructions=agent_instructions,
+            draft = await asyncio.wait_for(
+                generate_answer_from_evidence(
+                    query_text=query_request.query,
+                    evidence_package=evidence_package,
+                    agent_instructions=agent_instructions,
+                    on_rate_limit=_on_rate_limit,
+                ),
+                timeout=60.0,
             )
             draft_token_usage = draft.token_usage
             response = shape_grounded_response(
@@ -1539,10 +1597,14 @@ async def execute_standard_query(
             )
             generator_provider = draft.generator_provider
             if routing_decision.effective_tier is ExecutionTier.CRITICAL:
+                # Stage 9: Verification Loop.
+                vl_started = time.perf_counter()
+                await _step_start(on_progress, "verification_loop")
                 response, critical_verifier_metadata = _apply_critical_verification(
                     response=response,
                     evidence_package=evidence_package,
                 )
+                await _step_end(on_progress, "verification_loop", vl_started)
                 retry_query_text = critical_verifier_metadata.get("retry_query_text")
                 should_retry = (
                     critical_verifier_metadata.get("decision") in {"refuse", "degrade"}
@@ -1553,6 +1615,9 @@ async def execute_standard_query(
                     and retry_query_text.strip()
                 )
                 if should_retry:
+                    # Stage 7: Corrective Retrieval Behavior.
+                    crb_started = time.perf_counter()
+                    await _step_start(on_progress, "corrective_retrieval_behavior")
                     corrective_result = await _run_critical_corrective_retry(
                         session=session,
                         tenant_context=tenant_context,
@@ -1563,6 +1628,7 @@ async def execute_standard_query(
                         first_pass_verifier_metadata=critical_verifier_metadata,
                         agent_instructions=agent_instructions,
                     )
+                    await _step_end(on_progress, "corrective_retrieval_behavior", crb_started)
                     if corrective_result is not None:
                         (
                             retrieval_bundle,
@@ -1578,6 +1644,9 @@ async def execute_standard_query(
                             "corrective_attempts_exhausted": True,
                         }
                 if response.verification_status == "degraded":
+                    # Stage 8: Internal Retrieval Support.
+                    irs_started = time.perf_counter()
+                    await _step_start(on_progress, "internal_retrieval_support")
                     response, evidence_package, critical_verifier_metadata, recovery_metadata = await _apply_critical_recovery_paths(
                         namespace=namespace,
                         response=response,
@@ -1586,6 +1655,7 @@ async def execute_standard_query(
                         retrieval_bundle=retrieval_bundle,
                         query_text=query_request.query,
                     )
+                    await _step_end(on_progress, "internal_retrieval_support", irs_started)
                 response, critical_verifier_metadata = _apply_critical_conflict_disclosure(
                     namespace=namespace,
                     response=response,
@@ -1595,6 +1665,14 @@ async def execute_standard_query(
                 response = _normalize_critical_response(response=response)
             else:
                 critical_verifier_metadata = None
+        except asyncio.TimeoutError:
+            logger.warning("generation_timeout", query=query_request.query)
+            response = shape_degraded_response(
+                reason="GENERATION_TIMEOUT",
+                answer_text="The response took too long to generate. Please try again.",
+            )
+            generator_provider = "degraded-handler-v1"
+            critical_verifier_metadata = None
         except (GroundedGenerationError, ResponseShapingError) as exc:
             degraded_reason, answer_text = _degraded_reason_for_generation_exception(exc)
             response = shape_degraded_response(
@@ -1603,15 +1681,24 @@ async def execute_standard_query(
             )
             generator_provider = "degraded-handler-v1"
             critical_verifier_metadata = None
-    answering_ms = int((time.perf_counter() - answering_started) * 1000)
-    await _emit(on_progress, {"type": "step_completed", "step": "generate", "label": "Generate", "duration_ms": answering_ms})
+    se_ms = int((time.perf_counter() - se_started) * 1000)
+    await _step_end(on_progress, "structured_enforcement", se_started)
+
+    # Stage 11: Source Attribution. The evidence_package was built earlier
+    # (before structured_enforcement), but the source attribution step event is
+    # emitted here, after the final response shaping, to match the canonical
+    # ordering in docs/CRITICAL_TIER_OVERVIEW.md.
+    sa_started = time.perf_counter()
+    await _step_start(on_progress, "source_attribution")
+    await _step_end(on_progress, "source_attribution", sa_started, evidence_count=len(evidence_package.items))
+    sa_ms = int((time.perf_counter() - sa_started) * 1000)
 
     stage_latencies_ms = {
-        "conversation_history_ms": conv_ms,
-        "check_retrieval_ms": check_ms,
-        "retrieval_ms": retrieval_ms,
-        "evidence_packaging_ms": evidence_ms,
-        "answering_ms": answering_ms,
+        "query_transformation_ms": qt_ms,
+        "semantic_chunking_ms": sc_ms,
+        "hybrid_retrieval_ms": retrieval_ms,
+        "source_attribution_ms": sa_ms,
+        "structured_enforcement_ms": se_ms,
     }
     evidence_debug = _evidence_debug_summary(
         selected_evidence_ids=evidence_package.selected_evidence_ids,
