@@ -419,7 +419,7 @@ def _validate_open_draft(
     """Validate general grounded answers conservatively."""
 
     answer_core = _strip_answer_citations(draft.answer_text)
-    if len(answer_core.split()) > 350:
+    if len(answer_core.split()) > 1500:
         return "open answer was too long"
     answer_terms = _significant_terms(answer_core, noise_terms=_FIELD_ANSWER_NOISE)
     snippet_terms: set[str] = set()

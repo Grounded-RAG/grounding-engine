@@ -56,12 +56,40 @@ async def _embed_one(text: str, *, purpose: EmbeddingPurpose) -> DenseEmbedding:
         ) as response:
             return response.read().decode("utf-8")
 
+    def _should_retry(exc: Exception) -> bool:
+        if isinstance(exc, urllib.error.HTTPError):
+            return exc.code in {408, 409, 429, 500, 502, 503, 504}
+        return isinstance(exc, urllib.error.URLError | TimeoutError)
+
+    async def _embed_with_rate_limit_backoff() -> str:
+        max_attempts = max(settings.provider_max_retries, 4)
+        for attempt in range(max_attempts + 1):
+            try:
+                return await asyncio.to_thread(_perform_request)
+            except urllib.error.HTTPError as exc:
+                if exc.code != 429 or attempt >= max_attempts:
+                    raise
+                # Parse retryDelay from Gemini's response body
+                wait_seconds = 60.0
+                try:
+                    body = exc.read().decode("utf-8", errors="ignore")
+                    payload = json.loads(body)
+                    for detail in payload.get("error", {}).get("details", []):
+                        delay = detail.get("retryDelay", "")
+                        if delay.endswith("s"):
+                            wait_seconds = float(delay[:-1]) + 2.0
+                            break
+                except Exception:
+                    pass
+                await asyncio.sleep(wait_seconds)
+            except Exception as exc:
+                if attempt >= max_attempts or not _should_retry(exc):
+                    raise
+                await asyncio.sleep(settings.provider_retry_backoff_ms / 1000 * (2 ** attempt))
+        raise GeminiEmbeddingError("Gemini embeddings exceeded retry limit.")
+
     try:
-        raw_body = await run_with_retries(
-            lambda: asyncio.to_thread(_perform_request),
-            max_retries=settings.provider_max_retries,
-            backoff_ms=settings.provider_retry_backoff_ms,
-        )
+        raw_body = await _embed_with_rate_limit_backoff()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
         raise GeminiEmbeddingError(

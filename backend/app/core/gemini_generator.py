@@ -205,7 +205,7 @@ def _generation_config_for_mode(answer_mode: str) -> dict[str, object]:
         "temperature": 0.2,
         "topP": 0.8,
         "topK": 20,
-        "maxOutputTokens": 4096,  # Maximum for longer answers
+        "maxOutputTokens": 8192,
     }
 
 
@@ -559,12 +559,35 @@ async def generate_gemini_draft(
         ) as response:
             return response.read().decode("utf-8")
 
+    async def _generate_with_rate_limit_backoff() -> str:
+        max_attempts = max(settings.provider_max_retries, 4)
+        for attempt in range(max_attempts + 1):
+            try:
+                return await asyncio.to_thread(_perform_request)
+            except urllib.error.HTTPError as exc:
+                if exc.code != 429 or attempt >= max_attempts:
+                    raise
+                wait_seconds = 65.0
+                try:
+                    body = exc.read().decode("utf-8", errors="ignore")
+                    payload = json.loads(body)
+                    for detail in payload.get("error", {}).get("details", []):
+                        delay = detail.get("retryDelay", "")
+                        if delay.endswith("s"):
+                            wait_seconds = float(delay[:-1]) + 2.0
+                            break
+                except Exception:
+                    pass
+                logger.warning("gemini_generation_rate_limited", wait_seconds=wait_seconds, attempt=attempt)
+                await asyncio.sleep(wait_seconds)
+            except (urllib.error.URLError, TimeoutError) as exc:
+                if attempt >= max_attempts:
+                    raise
+                await asyncio.sleep(settings.provider_retry_backoff_ms / 1000 * (2 ** attempt))
+        raise GeminiGenerationError("Gemini generation exceeded retry limit.")
+
     try:
-        raw_body = await run_with_retries(
-            lambda: asyncio.to_thread(_perform_request),
-            max_retries=settings.provider_max_retries,
-            backoff_ms=settings.provider_retry_backoff_ms,
-        )
+        raw_body = await _generate_with_rate_limit_backoff()
         logger.debug(
             "gemini_raw_response",
             response_length=len(raw_body),
