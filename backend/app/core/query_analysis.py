@@ -57,11 +57,13 @@ _CANONICAL_ATTRIBUTE_SYNONYMS = {
 }
 
 _COLLECTION_ATTRIBUTE_HINTS = {
-    "achievement", "achievements", "award", "awards", "benefit", "benefits",
-    "capability", "capabilities", "certificate", "certificates", "challenge",
-    "challenges", "component",
-    "components", "feature", "features", "framework", "frameworks", "language",
-    "languages", "method", "methods", "project", "projects", "requirement", "requirements",
+    "achievement", "achievements", "author", "authors", "award", "awards",
+    "benefit", "benefits", "capability", "capabilities", "certificate", "certificates",
+    "challenge", "challenges", "citation", "citations", "component", "components",
+    "contributor", "contributors", "feature", "features", "framework", "frameworks",
+    "language", "languages", "member", "members", "method", "methods",
+    "paper", "papers", "participant", "participants", "project", "projects",
+    "reference", "references", "requirement", "requirements",
     "responsibility", "responsibilities", "role", "roles", "section", "sections",
     "service", "services", "skill", "skills", "technology", "technologies",
     "step", "steps", "tool", "tools",
@@ -117,11 +119,12 @@ _SUMMARY_QUERY_PATTERN = re.compile(
 )
 _DEFINITION_QUERY_PATTERN = re.compile(r"^(?:what\s+(?:is|does)\s+.+?\s+(?:mean|means)\??|define\s+.+)$")
 _BOOLEAN_QUERY_PATTERN = re.compile(r"^(?:is|are|was|were|do|does|did|has|have|had|can|could|should|would)\b")
-_LIST_QUERY_PATTERN = re.compile(r"^(?:what\s+are|which|list|show\s+me|give\s+me|tell\s+me)\b")
+_LIST_QUERY_PATTERN = re.compile(r"^(?:what\s+are|which|list|show\s+me|give\s+me|tell\s+me|who\s+(?:are|is|were|was))\b")
 _COUNT_QUERY_PATTERN = re.compile(r"^(?:how\s+many|number\s+of|count\s+(?:the\s+)?)\b")
 _ACTION_QUERY_PATTERN = re.compile(r"^(?:what\s+(?:did|does)\b|describe\b|summari[sz]e\b).*\b(?:do|did|does|work|responsibilit(?:y|ies)|contribution|contributions|task|tasks)\b")
 _ATTRIBUTE_PATTERNS = [
     re.compile(r"^(?:which|what)\s+(?P<attribute>company|supplier|vendor|organization|provider)\b"),
+    re.compile(r"^(?:who\s+(?:are|is|were|was)\s+(?:the\s+)?)(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"),
     re.compile(r"^(?:what|which)\s+(?:is|are|was|were)\s+(?:the\s+)?(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"),
     re.compile(r"^(?:list|show\s+me|give\s+me|tell\s+me)\s+(?:the\s+)?(?P<attribute>.+?)(?:\s+(?:of|for|in|on|from|at|with)\b|$)"),
     re.compile(r"^(?:how\s+many|number\s+of|count\s+(?:the\s+)?)\s*(?P<attribute>.+?)(?:\s+(?:are|does|do|did|has|have|had|can|could|should|would)\b|$)"),
@@ -634,8 +637,10 @@ def _classify_query_kind(
         return "list"
     if attribute_terms:
         return "lookup"
-    if context_terms and any(
-        _terms_contain_token(terms, token) for token in _ACTION_HINT_TERMS
+    if (
+        context_terms
+        and not normalized_text.startswith(("who ", "who's "))
+        and any(_terms_contain_token(terms, token) for token in _ACTION_HINT_TERMS)
     ):
         return "action"
     return "open"
@@ -817,7 +822,9 @@ def build_query_profile(query_text: str) -> QueryProfile:
 
     mutable_attribute_terms = set(attribute_terms)
     if query_kind == "action" and not mutable_attribute_terms:
-        mutable_attribute_terms.add("responsibilities")
+        _people_doc_terms = {"author", "authors", "citation", "citations", "member", "members", "paper", "papers", "reference", "references"}
+        extracted = {t for t in terms if t in _people_doc_terms}
+        mutable_attribute_terms.update(extracted) if extracted else mutable_attribute_terms.add("responsibilities")
     if query_kind == "comparison" and not mutable_attribute_terms:
         if any(
             _terms_contain_token(terms, token)
@@ -948,17 +955,10 @@ def _build_retrieval_query_variants(profile: QueryProfile) -> tuple[str, ...]:
             variants.append(" ".join([*count_terms, "count", "total", "number"]).strip())
 
     if is_action_query(profile):
-        action_terms = sorted(profile.attribute_terms) or ["responsibilities"]
+        action_terms = sorted(profile.attribute_terms) or core_terms[:3]
+        suffix = ["responsibilities", "contributions", "tasks"]
         variants.append(
-            " ".join(
-                [
-                    *context_terms[:3],
-                    *action_terms[:2],
-                    "responsibilities",
-                    "contributions",
-                    "tasks",
-                ]
-            ).strip()
+            " ".join([*context_terms[:3], *action_terms[:2], *suffix]).strip()
         )
 
     if is_entity_context_query(profile):
@@ -1005,6 +1005,26 @@ def explain_query_plan(plan: QueryPlan) -> str:
     return "; ".join(explanation_parts)
 
 
+_COMPOUND_STRIP_PREFIXES = re.compile(r"^(?:and|or|but|also|plus|additionally)\s+", re.IGNORECASE)
+
+
+def _split_compound_query(query_text: str) -> list[str]:
+    """Split a multi-sentence query on '?' boundaries into individual sub-questions.
+
+    Returns the original query as a single-item list when it contains fewer than
+    two '?'-terminated sentences, so callers never need to special-case the result.
+    """
+    raw_fragments = [f.strip() for f in query_text.split("?")]
+    fragments: list[str] = []
+    for fragment in raw_fragments:
+        cleaned = _COMPOUND_STRIP_PREFIXES.sub("", fragment).strip()
+        if len(tokenize_meaningful_terms(cleaned)) >= 2:
+            fragments.append(cleaned)
+    if len(fragments) < 2:
+        return [query_text]
+    return fragments
+
+
 def build_query_plan(
     query_text: str,
     *,
@@ -1012,6 +1032,15 @@ def build_query_plan(
     conversation_context: ConversationContext | None = None,
 ) -> QueryPlan:
     """Build one Standard query plan with lightweight rewriting and explanation."""
+
+    fragments = _split_compound_query(query_text)
+    if len(fragments) > 1:
+        return _build_compound_query_plan(
+            query_text=query_text,
+            fragments=fragments,
+            previous_user_query=previous_user_query,
+            conversation_context=conversation_context,
+        )
 
     initial_profile = build_query_profile(query_text)
     resolved_query_text, used_conversation_context = _resolve_follow_up_context(
@@ -1044,6 +1073,60 @@ def build_query_plan(
         retrieval_queries=plan.retrieval_queries,
         explanation=explain_query_plan(plan),
         used_conversation_context=plan.used_conversation_context,
+    )
+
+
+def _build_compound_query_plan(
+    *,
+    query_text: str,
+    fragments: list[str],
+    previous_user_query: str | None,
+    conversation_context: ConversationContext | None,
+) -> QueryPlan:
+    """Merge per-fragment plans into one plan with a unified retrieval query set."""
+
+    sub_plans: list[QueryPlan] = []
+    used_conversation_context = False
+    for fragment in fragments:
+        initial_profile = build_query_profile(fragment)
+        resolved_text, used_ctx = _resolve_follow_up_context(
+            query_text=fragment,
+            profile=initial_profile,
+            previous_user_query=previous_user_query,
+            conversation_context=conversation_context,
+        )
+        used_conversation_context = used_conversation_context or used_ctx
+        profile = (
+            initial_profile if resolved_text == fragment else build_query_profile(resolved_text)
+        )
+        fragment_queries = _build_retrieval_query_variants(profile)
+        retrieval_query_text = fragment_queries[0] if fragment_queries else build_retrieval_query_text(profile)
+        sub_plans.append(QueryPlan(
+            raw_query_text=fragment,
+            resolved_query_text=resolved_text,
+            profile=profile,
+            retrieval_query_text=retrieval_query_text,
+            retrieval_queries=fragment_queries,
+            explanation="",
+            used_conversation_context=used_ctx,
+        ))
+
+    primary = sub_plans[0]
+    merged_queries = _dedupe_texts(
+        [q for plan in sub_plans for q in plan.retrieval_queries]
+    )[:8]
+    explanation = (
+        f"compound_split={len(sub_plans)}; "
+        + "; ".join(explain_query_plan(p) for p in sub_plans)
+    )
+    return QueryPlan(
+        raw_query_text=query_text,
+        resolved_query_text=query_text,
+        profile=primary.profile,
+        retrieval_query_text=merged_queries[0] if merged_queries else primary.retrieval_query_text,
+        retrieval_queries=merged_queries,
+        explanation=explanation,
+        used_conversation_context=used_conversation_context,
     )
 
 

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import time
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime
 from uuid import UUID
@@ -863,8 +864,20 @@ async def retrieve_hybrid_candidates(
     limit: int | None = None,
     execution_tier: ExecutionTier = ExecutionTier.STANDARD,
     freshness_profile: FreshnessProfile = FreshnessProfile.BALANCED,
+    on_progress: Callable[[dict], Awaitable[None]] | None = None,
 ) -> RetrievalBundle:
-    """Run configured retrieval paths, then shape candidates into fused-hit form."""
+    """Run configured retrieval paths, then shape candidates into fused-hit form.
+
+    Emits three sub-stage events when on_progress is provided:
+    - namespace_isolation: confirms the namespace boundary for this query
+    - hybrid_retrieval: runs the sparse + dense + RRF pipeline
+    - temporal_ranking: applies freshness-aware re-ranking
+    - reranking: applies answerability and section-aware re-ranking
+    """
+
+    async def _emit(event: dict) -> None:
+        if on_progress is not None:
+            await on_progress(event)
 
     settings = get_settings()
     retrieval_mode = getattr(settings, "retrieval_mode", "hybrid")
@@ -875,6 +888,14 @@ async def retrieve_hybrid_candidates(
     )
     plan = query_plan or build_query_plan(query_text)
     profile = plan.profile
+
+    # Stage 3: Namespace Isolation (sub-step of hybrid retrieval).
+    ni_started = time.perf_counter()
+    await _emit({"type": "step_started", "step": "namespace_isolation", "label": "Namespace Isolation"})
+
+    # Stage 4: Hybrid Retrieval.
+    hr_started = time.perf_counter()
+    await _emit({"type": "step_started", "step": "hybrid_retrieval", "label": "Hybrid Retrieval"})
 
     sparse_hits: list[RetrievedChunk] = []
     dense_hits: list[RetrievedChunk] = []
@@ -921,6 +942,26 @@ async def retrieve_hybrid_candidates(
             for index, hit in enumerate(fused_hits[:5], start=1)
         ],
     )
+    hr_ms = int((time.perf_counter() - hr_started) * 1000)
+    await _emit({
+        "type": "step_completed",
+        "step": "hybrid_retrieval",
+        "label": "Hybrid Retrieval",
+        "duration_ms": hr_ms,
+        "evidence_count": len(fused_hits),
+    })
+    ni_ms = int((time.perf_counter() - ni_started) * 1000)
+    await _emit({
+        "type": "step_completed",
+        "step": "namespace_isolation",
+        "label": "Namespace Isolation",
+        "duration_ms": ni_ms,
+    })
+
+    # Stage 5: Temporal Ranking (sub-step of retrieval ranking).
+    tr_started = time.perf_counter()
+    await _emit({"type": "step_started", "step": "temporal_ranking", "label": "Temporal Ranking"})
+
     supporting_hits = await _fetch_supporting_context_hits(
         session=session,
         tenant_id=tenant_id,
@@ -950,11 +991,7 @@ async def retrieve_hybrid_candidates(
         fused_hits = list(fused_hits) + [
             hit for hit in summary_hits if hit.chunk_id not in existing_chunk_ids
         ]
-    fused_hits = _rerank_fused_hits_for_query(
-        fused_hits,
-        query_plan=plan,
-        limit=max(final_limit, settings.enterprise_reranker_candidate_limit),
-    )
+
     fused_hits, freshness_debug = await _apply_enterprise_freshness_scoring(
         fused_hits,
         session=session,
@@ -964,12 +1001,37 @@ async def retrieve_hybrid_candidates(
         execution_tier=execution_tier,
         freshness_profile=freshness_profile,
     )
+    tr_ms = int((time.perf_counter() - tr_started) * 1000)
+    await _emit({
+        "type": "step_completed",
+        "step": "temporal_ranking",
+        "label": "Temporal Ranking",
+        "duration_ms": tr_ms,
+    })
+
+    # Stage 6: Reranking.
+    rr_started = time.perf_counter()
+    await _emit({"type": "step_started", "step": "reranking", "label": "Reranking"})
+
+    fused_hits = _rerank_fused_hits_for_query(
+        fused_hits,
+        query_plan=plan,
+        limit=max(final_limit, settings.enterprise_reranker_candidate_limit),
+    )
     fused_hits, reranker_debug = await _apply_enterprise_reranker(
         fused_hits,
         execution_tier=execution_tier,
         query_text=plan.resolved_query_text,
         limit=final_limit,
     )
+    rr_ms = int((time.perf_counter() - rr_started) * 1000)
+    await _emit({
+        "type": "step_completed",
+        "step": "reranking",
+        "label": "Reranking",
+        "duration_ms": rr_ms,
+    })
+
     return RetrievalBundle(
         sparse_hits=sparse_hits,
         dense_hits=dense_hits,
